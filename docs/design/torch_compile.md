@@ -253,11 +253,11 @@ The piecewise cudagraph also has fine-grained memory management. The purpose is 
 
 The cudagraphs are captured and managed by the compiler backend, and replayed when the batch size has corresponding cudagraph captured. The caller of the model (model runner) only needs to make sure it manages the input buffers correctly. All of the intermediate buffers are managed automatically by the compiler backend.
 
-By default, vLLM will try to determine a set of sizes to capture cudagraph. You can also override it using the config `cudagraph_capture_sizes`:
+By default, vLLM will try to determine a set of sizes to capture cudagraph. You can also override them, in requests for decode graphs and in tokens for prefill graphs (see [CUDA Graphs](cuda_graphs.md#capture-sizes)):
 
 ```bash
 vllm serve meta-llama/Llama-3.2-1B \
-  --compilation-config '{"cudagraph_capture_sizes": [1, 2, 4, 8]}'
+  --compilation-config '{"decode_cudagraph_capture_sizes": [1, 2, 4, 8], "prefill_cudagraph_capture_sizes": [256, 512]}'
 ```
 
 Then it will only capture cudagraph for the specified sizes. It can be useful to have fine-grained control over the cudagraph capture.

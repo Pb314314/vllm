@@ -61,8 +61,10 @@ You can adjust `compilation_config` to achieve a better balance between inferenc
         model="meta-llama/Llama-3.1-8B-Instruct",
         compilation_config=CompilationConfig(
             mode=CompilationMode.VLLM_COMPILE,
-            # By default, it goes up to max_num_seqs
-            cudagraph_capture_sizes=[1, 2, 4, 8, 16],
+            # Decode graphs, in requests
+            decode_cudagraph_capture_sizes=[1, 2, 4, 8, 16],
+            # Graphs for batches with a prefill, in tokens
+            prefill_cudagraph_capture_sizes=[16],
         ),
     )
     ```

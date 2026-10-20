@@ -11,7 +11,10 @@ from vllm.forward_context import BatchDescriptor, set_forward_context
 from vllm.logger import init_logger
 from vllm.triton_utils import tl, triton
 from vllm.v1.worker.gpu.attn_utils import build_slot_mappings_by_layer
-from vllm.v1.worker.gpu.cudagraph_utils import BatchExecutionDescriptor
+from vllm.v1.worker.gpu.cudagraph_utils import (
+    BatchExecutionDescriptor,
+    get_target_decode_query_lens,
+)
 from vllm.v1.worker.gpu.dp_utils import DPSyncState, dispatch_cg_and_sync_dp
 from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
 from vllm.v1.worker.gpu.spec_decode.speculator import DraftModelSpeculator
@@ -87,12 +90,16 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
         super()._configure_decode_metadata_update()
 
     def init_cudagraph_manager(self, cudagraph_mode: CUDAGraphMode) -> None:
-        # Initialize cudagraph manager for draft prefill (draft position 0).
+        # Draft prefill (draft position 0) runs the target's batch shape, so it
+        # captures the target's decode query lengths.
         self.prefill_cudagraph_manager = SpeculatorCudaGraphManager(
             self.vllm_config,
             self.device,
             cudagraph_mode,
-            self.num_speculative_steps + 1,
+            get_target_decode_query_lens(
+                self.vllm_config, self.num_speculative_steps + 1
+            ),
+            name="drafter_prefill",
         )
 
         # PIECEWISE cudagraphs are not supported for draft decodes.
@@ -103,7 +110,11 @@ class TargetDependentARSpeculator(DraftModelSpeculator):
 
         # Initialize cudagraph manager for draft decodes (draft positions > 0).
         self.decode_cudagraph_manager = SpeculatorCudaGraphManager(
-            self.vllm_config, self.device, cudagraph_mode, decode_query_len=1
+            self.vllm_config,
+            self.device,
+            cudagraph_mode,
+            decode_query_lens=[1],
+            name="drafter_decode",
         )
 
     def capture(self) -> None:

@@ -3,7 +3,7 @@
 
 import enum
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -21,7 +21,7 @@ from vllm.config.utils import (
 from vllm.logger import init_logger
 from vllm.platforms import current_platform
 from vllm.utils.import_utils import resolve_obj_by_qualname
-from vllm.utils.math_utils import round_up
+from vllm.utils.math_utils import cdiv, round_up
 from vllm.utils.torch_utils import is_torch_equal_or_newer
 
 if TYPE_CHECKING:
@@ -48,6 +48,22 @@ class CompilationMode(enum.IntEnum):
     VLLM_COMPILE = 3
     """Custom vLLM Inductor-based backend with caching, piecewise compilation,
     shape specialization, and custom passes."""
+
+
+def legacy_decode_capture_sizes(
+    token_sizes: Iterable[int], query_len: int
+) -> list[int]:
+    """Decode request counts implied by legacy shared token sizes.
+
+    A token size `s` used to capture a decode graph of `round_up(s, query_len)`
+    tokens, i.e. `ceil(s / query_len)` requests, unless that exceeded the
+    largest size.
+    """
+    token_sizes = set(token_sizes)
+    if not token_sizes:
+        return []
+    max_reqs = max(token_sizes) // query_len
+    return sorted({n for s in token_sizes if (n := cdiv(s, query_len)) <= max_reqs})
 
 
 class CUDAGraphMode(enum.Enum):
@@ -404,6 +420,14 @@ class CompilationConfig:
         [vllm.config.CompilationConfig.cudagraph_capture_sizes]
         - [`max_cudagraph_capture_size`]
         [vllm.config.CompilationConfig.max_cudagraph_capture_size]
+        - [`decode_cudagraph_capture_sizes`]
+        [vllm.config.CompilationConfig.decode_cudagraph_capture_sizes]
+        - [`max_decode_cudagraph_capture_size`]
+        [vllm.config.CompilationConfig.max_decode_cudagraph_capture_size]
+        - [`prefill_cudagraph_capture_sizes`]
+        [vllm.config.CompilationConfig.prefill_cudagraph_capture_sizes]
+        - [`max_prefill_cudagraph_capture_size`]
+        [vllm.config.CompilationConfig.max_prefill_cudagraph_capture_size]
         - [`cudagraph_num_of_warmups`]
         [vllm.config.CompilationConfig.cudagraph_num_of_warmups]
         - [`cudagraph_copy_inputs`]
@@ -649,9 +673,37 @@ class CompilationConfig:
     Only after that, the execution will be recorded, and the recorded
     cudagraph will be used for subsequent runs."""
     cudagraph_capture_sizes: list[int] = None  # type: ignore[assignment]
-    """Sizes to capture cudagraph.
-    - None (default): capture sizes are inferred from vllm config.
-    - list[int]: capture sizes are specified as given."""
+    """Legacy token sizes shared by decode and prefill graphs. Prefer
+    `decode_cudagraph_capture_sizes` and `prefill_cudagraph_capture_sizes`.
+
+    - None (default): inferred from the vllm config.
+    - list[int]: used as the prefill sizes, and as decode sizes of
+      `ceil(size / (1 + num_speculative_tokens))` requests.
+
+    After config resolution this always holds every token count a graph may be
+    captured at, so code sizing static buffers can read its maximum."""
+    decode_cudagraph_capture_sizes: list[int] | None = None
+    """Request counts to capture decode CUDA graphs for.
+
+    A decode batch has no prefill: every request runs one decode or
+    verification step. Each runner turns a request count into its own token
+    count, e.g. `n * (1 + num_speculative_tokens)` for the target model and `n`
+    for an EAGLE draft decode, so every runner covers the same request counts.
+
+    - None (default): inferred from `max_num_seqs`.
+    - []: capture no decode graphs, e.g. for a prefill instance."""
+    max_decode_cudagraph_capture_size: int | None = None
+    """Largest request count of the default decode sizes. Ignored when
+    `decode_cudagraph_capture_sizes` is set. Defaults to `max_num_seqs`, capped
+    at 512 (1024 on data center Blackwell GPUs)."""
+    prefill_cudagraph_capture_sizes: list[int] | None = None
+    """Token counts to capture graphs for batches containing a prefill.
+
+    - None (default): inferred from the vllm config.
+    - []: capture no prefill graphs, e.g. for a decode instance."""
+    max_prefill_cudagraph_capture_size: int | None = None
+    """Largest token count of the default prefill sizes. Ignored when
+    `prefill_cudagraph_capture_sizes` is set."""
     cudagraph_copy_inputs: bool = False
     """Whether to copy input tensors for
     cudagraph. If the caller can guarantee that the same input buffers
@@ -693,21 +745,16 @@ class CompilationConfig:
     """Custom inductor passes, see PassConfig for more details"""
 
     max_cudagraph_capture_size: int = None  # type: ignore[assignment]
-    """The maximum cudagraph capture size.
+    """Legacy maximum token count shared by decode and prefill graphs. Prefer
+    `max_decode_cudagraph_capture_size` and `max_prefill_cudagraph_capture_size`.
 
-    If cudagraph_capture_sizes is specified, this will be set to the largest
-    size in that list (or checked for consistency if specified). If
-    cudagraph_capture_sizes is not specified, the list of sizes is generated
-    automatically following the pattern:
+    When set, it caps the default prefill sizes at this many tokens and the
+    default decode sizes at `max_cudagraph_capture_size // (1 +
+    num_speculative_tokens)` requests. Default sizes follow the pattern:
 
-        [1, 2, 4] + list(range(8, 256, 8)) + list(
-        range(256, max_cudagraph_capture_size + 1, 16))
+        [1, 2, 4] + list(range(8, 256, 8)) + list(range(256, max + 1, 16))
 
-    If not specified, max_cudagraph_capture_size is capped at 512 by default,
-    or 1024 on data center Blackwell GPUs. This avoids OOM in tight memory
-    scenarios with small max_num_seqs, and limits capture of large graphs that
-    increase startup time and memory usage. Uniform decode sizes are appended
-    only within this default ceiling.
+    After config resolution this is the largest token count of any graph.
     """
 
     dynamic_shapes_config: DynamicShapesConfig = field(
@@ -717,6 +764,10 @@ class CompilationConfig:
 
     local_cache_dir: str = field(default=None, init=False)  # type: ignore
     """local cache dir for each rank"""
+
+    cudagraph_sizes_resolved: bool = field(default=False, init=False)
+    """Whether the capture sizes were resolved, after which the decode and
+    prefill sizes are the inputs and the legacy shared sizes are outputs."""
 
     fast_moe_cold_start: bool | None = None
     """Optimization for fast MOE cold start.
@@ -803,6 +854,7 @@ class CompilationConfig:
             "debug_dump_path",
             "cache_dir",
             "local_cache_dir",
+            "cudagraph_sizes_resolved",
             "traced_files",
             "compilation_time",
             "encoder_compilation_time",
@@ -1158,6 +1210,21 @@ class CompilationConfig:
         self.cudagraph_capture_sizes.sort()
         if self.cudagraph_capture_sizes:
             assert self.cudagraph_capture_sizes[-1] == self.max_cudagraph_capture_size
+        for sizes in (
+            self.decode_cudagraph_capture_sizes,
+            self.prefill_cudagraph_capture_sizes,
+        ):
+            if sizes is not None:
+                sizes.sort()
+
+    def clear_cudagraph_sizes(self) -> None:
+        """Drop every capture size, for when no CUDA graph will be captured."""
+        self.max_cudagraph_capture_size = 0
+        self.cudagraph_capture_sizes = []
+        self.max_decode_cudagraph_capture_size = 0
+        self.decode_cudagraph_capture_sizes = []
+        self.max_prefill_cudagraph_capture_size = 0
+        self.prefill_cudagraph_capture_sizes = []
 
     def set_splitting_ops_for_v1(
         self, all2all_backend: str, data_parallel_size: int = 1

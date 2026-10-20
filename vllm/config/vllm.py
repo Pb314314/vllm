@@ -26,11 +26,17 @@ from vllm.transformers_utils.runai_utils import is_runai_obj_uri
 from vllm.triton_utils import HAS_TRITON
 from vllm.utils import random_uuid
 from vllm.utils.hashing import safe_hash
+from vllm.utils.math_utils import cdiv
 
 from .attention import AttentionConfig, HiSparseConfig
 from .aux_output import AuxOutputConfig
 from .cache import CacheConfig
-from .compilation import CompilationConfig, CompilationMode, CUDAGraphMode
+from .compilation import (
+    CompilationConfig,
+    CompilationMode,
+    CUDAGraphMode,
+    legacy_decode_capture_sizes,
+)
 from .device import DeviceConfig
 from .diffusion import DiffusionConfig
 from .ec_manager_config import EncoderCacheManagerConfig
@@ -100,6 +106,54 @@ DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES = frozenset(
         "Qwen4ExpMTP",
     }
 )
+
+
+def _cudagraph_size_grid(max_size: int, interactivity: bool = False) -> list[int]:
+    """Default capture sizes up to `max_size`: dense at small sizes, then
+    strided by 8 below 256 and by 16 above."""
+    if interactivity:
+        # Fine-grained graphs at small sizes for minimal padding overhead.
+        sizes = list(range(1, min(max_size, 32) + 1))
+    else:
+        sizes = [s for s in (1, 2, 4) if s <= max_size]
+    sizes += range(8, min(max_size + 1, 256), 8)
+    sizes += range(256, max_size + 1, 16)
+    return sorted(set(sizes))
+
+
+def _decode_cudagraph_size_grid(
+    token_budget: int,
+    query_lens: list[int],
+    max_num_reqs: int,
+    interactivity: bool = False,
+) -> list[int]:
+    """Default decode request counts: for each query length, the request counts
+    whose token counts follow `_cudagraph_size_grid(token_budget)`, so
+    padding stays bounded in tokens rather than in requests."""
+    token_grid = _cudagraph_size_grid(token_budget, interactivity)
+    sizes: set[int] = set()
+    for q in query_lens:
+        limit = min(max_num_reqs, token_budget // q)
+        sizes.update(n for s in token_grid if (n := cdiv(s, q)) <= limit)
+        if limit > 0:
+            sizes.add(limit)
+    return sorted(sizes)
+
+
+def _filter_cudagraph_sizes(
+    sizes: list[int], limit: int, name: str, unit: str
+) -> list[int]:
+    """Deduplicated, sorted `sizes` within [1, limit], logging any dropped."""
+    kept = sorted({s for s in sizes if 1 <= s <= limit})
+    if len(kept) < len(set(sizes)):
+        logger.info(
+            "Dropping %s %s outside [1, %d] %s; no batch can reach them.",
+            name,
+            sorted(set(sizes) - set(kept)),
+            limit,
+            unit,
+        )
+    return kept
 
 
 @lru_cache
@@ -1094,8 +1148,7 @@ class VllmConfig:
             )
             compilation_config.cudagraph_mode = fallback_mode
             if fallback_mode == CUDAGraphMode.NONE:
-                compilation_config.max_cudagraph_capture_size = 0
-                compilation_config.cudagraph_capture_sizes = []
+                compilation_config.clear_cudagraph_sizes()
 
     def _post_init_kv_transfer_config(self) -> None:
         """Update KVTransferConfig based on top-level configs in VllmConfig.
@@ -1973,8 +2026,7 @@ class VllmConfig:
                 logger.info_once("Cudagraph is disabled under eager mode")
                 self.compilation_config.cudagraph_mode = CUDAGraphMode.NONE
                 # override related settings when enforce eager
-                self.compilation_config.max_cudagraph_capture_size = 0
-                self.compilation_config.cudagraph_capture_sizes = []
+                self.compilation_config.clear_cudagraph_sizes()
             else:
                 self.compilation_config.cudagraph_num_of_warmups = 1
 
@@ -2363,265 +2415,196 @@ class VllmConfig:
                     )
                     self.scheduler_config.max_num_active_seqs = max_draft_seqs
 
-    def _set_cudagraph_sizes(self):
-        """VLLM defines the default candidate list of batch sizes for CUDA graph
-        capture as:
-
-        ```python
-        default_max_graph_size = 1024 if is_data_center_blackwell else 512
-        decode_query_len = self.uniform_decode_query_len
-        max_graph_size = min(
-            max_num_seqs * decode_query_len * 2, default_max_graph_size
-        )
-        # 1, 2, 4, then multiples of 8 up to 256 and then multiples of 16
-        # up to max_graph_size
-        cudagraph_capture_sizes = [1, 2, 4] + list(range(8, 256, 8)) + list(
-            range(256, max_graph_size + 1, 16))
-
-        `max_num_batched_tokens` is also appended to the list if it fits
-        within `max_cudagraph_capture_size`, so the max batch size is captured
-        even when off-stride. Uniform decode sizes are appended when they fit
-        within the platform's default capture ceiling, since they need not land
-        on an 8- or 16-token stride.
-
-        In the end, `vllm_config.compilation_config.cudagraph_capture_sizes`
-        will be the final sizes to capture cudagraph (in ascending order).
-
-        These sizes are used to capture and reuse CUDA graphs for
-        performance-critical paths (e.g., decoding). Capturing enables
-        significantly faster kernel dispatch by avoiding Python overhead. The
-        list is then filtered based on `max_num_batched_tokens` (e.g., 8192 on
-        most GPUs), which controls the total allowed number of tokens in a
-        batch. Since each sequence may have a variable number of tokens, the
-        maximum usable batch size will depend on actual sequence lengths.
-
-        Example:
-            With `max_num_batched_tokens = 8192`, and typical sequences
-            averaging ~32 tokens, most practical batch sizes fall below 256.
-            However, the system will still allow capture sizes up to the
-            platform default if shape and memory permit.
-
-        Note:
-            If users explicitly specify cudagraph capture sizes in the
-            compilation config, those will override this default logic.
-            At runtime:
-
-            - If batch size <= one of the `cudagraph_capture_sizes`, the closest
-            padded CUDA graph will be used.
-            - If batch size > largest `cudagraph_capture_sizes`, cudagraph will
-            not be used.
-
-        """
+    @property
+    def decode_cudagraph_query_lens(self) -> list[int]:
+        """Per-request query lengths of the target model's uniform decode
+        batches: one per Dynamic SD schedule entry, else just
+        `uniform_decode_query_len`."""
+        speculative_config = self.speculative_config
         if (
-            self.model_config is not None
-            and not self.model_config.enforce_eager
-            and self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
+            speculative_config is not None
+            and speculative_config.uses_dynamic_speculative_decoding()
         ):
-            # determine the initial max_cudagraph_capture_size
-            max_cudagraph_capture_size = (
-                self.compilation_config.max_cudagraph_capture_size
-            )
-            # Decode sizes to cover, in tokens. Populated only when the default
-            # is computed here, so an explicit capture range is left exactly as
-            # configured.
-            uniform_decode_sizes: list[int] = []
-            if max_cudagraph_capture_size is None:
-                from vllm.platforms import current_platform
+            from vllm.v1.spec_decode.dynamic.utils import get_dynamic_sd_query_lens
 
-                default_max_graph_size = (
-                    1024 if current_platform.is_device_capability_family(100) else 512
+            try:
+                return get_dynamic_sd_query_lens(
+                    speculative_config.num_speculative_tokens_per_batch_size,
+                    vllm_max_batch_size=self.scheduler_config.max_num_seqs,
+                    vllm_num_speculative_tokens=self.num_speculative_tokens,
                 )
-                decode_query_len = self.uniform_decode_query_len
-                max_num_seqs = self.scheduler_config.max_num_seqs
-                max_cudagraph_capture_size = min(
-                    max_num_seqs * decode_query_len * 2, default_max_graph_size
+            except ValueError:
+                # Validation lives elsewhere; keep the single static width.
+                pass
+        return [self.uniform_decode_query_len]
+
+    def _set_cudagraph_sizes(self):
+        """Resolve the CUDA graph capture sizes.
+
+        Decode graphs are sized in requests and prefill graphs in tokens (see
+        `CompilationConfig.decode_cudagraph_capture_sizes`). Every runner turns
+        a decode request count into its own token count, so the target and its
+        drafters cover the same batches.
+
+        Defaults, with `grid(m) = [1, 2, 4] + range(8, 256, 8) + range(256, m + 1,
+        16)` and a platform ceiling of 512 (1024 on data center Blackwell):
+
+        - prefill: `grid` up to `min(max_num_seqs * uniform_decode_query_len * 2,
+          ceiling, max_num_batched_tokens)` tokens, plus `max_num_batched_tokens`
+          when it fits.
+        - decode: for each target decode query length `q`, the request counts
+          `ceil(s / q)` for `s` in `grid(ceiling)`, up to `min(max_num_seqs,
+          ceiling // q)` requests plus that maximum. Neighboring decode graphs
+          are then as far apart in tokens as prefill graphs whatever `q` is,
+          which bounds the padding per step, and no default decode graph
+          exceeds the ceiling, which bounds graph memory.
+
+        The legacy `cudagraph_capture_sizes` / `max_cudagraph_capture_size` are
+        translated into both, as their old shared token semantics implied.
+        Afterwards they hold the union of every token count a target graph may
+        be captured at, for code that sizes static buffers by them.
+        """
+        compilation_config = self.compilation_config
+        if (
+            self.model_config is None
+            or self.model_config.enforce_eager
+            or compilation_config.cudagraph_mode == CUDAGraphMode.NONE
+        ):
+            compilation_config.clear_cudagraph_sizes()
+            compilation_config.post_init_cudagraph_sizes()
+            return
+
+        from vllm.platforms import current_platform
+
+        ceiling = 1024 if current_platform.is_device_capability_family(100) else 512
+        max_num_seqs = self.scheduler_config.max_num_seqs
+        max_num_tokens = self.scheduler_config.max_num_batched_tokens
+        query_len = self.uniform_decode_query_len
+        decode_query_lens = self.decode_cudagraph_query_lens
+        interactivity = self.performance_mode == "interactivity"
+
+        legacy_sizes: list[int] | None = compilation_config.cudagraph_capture_sizes
+        legacy_max: int | None = compilation_config.max_cudagraph_capture_size
+        if compilation_config.cudagraph_sizes_resolved:
+            # Re-run (e.g. dataclasses.replace): the legacy fields are outputs.
+            legacy_sizes = legacy_max = None
+        decode_sizes = compilation_config.decode_cudagraph_capture_sizes
+        max_decode = compilation_config.max_decode_cudagraph_capture_size
+        prefill_sizes = compilation_config.prefill_cudagraph_capture_sizes
+        max_prefill = compilation_config.max_prefill_cudagraph_capture_size
+
+        if legacy_sizes is not None or legacy_max is not None:
+            if any(
+                x is not None
+                for x in (decode_sizes, max_decode, prefill_sizes, max_prefill)
+            ):
+                raise ValueError(
+                    "cudagraph_capture_sizes and max_cudagraph_capture_size "
+                    "cannot be combined with the decode_/prefill_ capture size "
+                    "options; use only the latter."
                 )
-                if decode_query_len > 1:
-                    # A uniform decode batch is decode_query_len tokens per
-                    # request, so the widest one is far outside this ceiling.
-                    # Coverage comes from appending the decode sizes rather than
-                    # extending the token-strided grid. Extending that grid to
-                    # the widest decode size produces 581 sizes at
-                    # max_num_seqs=512 and 16 draft tokens, versus 100 with the
-                    # request-count grid.
-                    #
-                    # The grid would not buy decode coverage anyway. Dispatch
-                    # requires an exact multiple of decode_query_len, so a
-                    # token-strided entry is only usable when it happens to be
-                    # one; at query length 17 a captured 560 rounds to 561 and
-                    # is rejected. Scaling a request-count grid keeps every
-                    # entry usable and the count comparable to the non-
-                    # speculative case.
-                    def request_counts(max_reqs: int) -> list[int]:
-                        # At most the platform default number of requests,
-                        # mirroring the one-token-per-request decode ceiling.
-                        max_reqs = min(max_reqs, default_max_graph_size)
-                        counts = [n for n in (1, 2, 4) if n <= max_reqs]
-                        counts += list(range(8, min(max_reqs + 1, 256), 8))
-                        counts += list(range(256, max_reqs + 1, 16))
-                        return sorted(set(counts + [max_reqs]))
-
-                    # Dynamic speculative decoding picks the draft width from
-                    # the batch size, so a decode step is only uniform within a
-                    # tier and each tier needs its own sizes. Scaling by the
-                    # widest one alone leaves the narrower tiers short: the
-                    # manager rounds a capture size up to a multiple of the
-                    # tier's query length and drops it once the implied request
-                    # count exceeds max_num_seqs, so at query length 3 sizes
-                    # built from 17 stop covering at 227 of 256 requests.
-                    decode_tiers = [(decode_query_len, max_num_seqs)]
-                    speculative_config = self.speculative_config
-                    if (
-                        speculative_config is not None
-                        and speculative_config.uses_dynamic_speculative_decoding()
-                    ):
-                        from vllm.v1.spec_decode.dynamic.utils import (
-                            build_dynamic_sd_schedule_lookup,
-                        )
-
-                        schedule = (
-                            speculative_config.num_speculative_tokens_per_batch_size
-                        )
-                        assert schedule is not None
-                        # Read the tiers off the dense lookup the scheduler
-                        # runs on, so the clamp against num_speculative_tokens
-                        # and the carry-forward through gaps and the tail
-                        # cannot drift from it. Validation lives elsewhere; an
-                        # invalid schedule keeps the single-tier default.
-                        try:
-                            dense_schedule = build_dynamic_sd_schedule_lookup(
-                                schedule,
-                                vllm_max_batch_size=max_num_seqs,
-                                vllm_num_speculative_tokens=self.num_speculative_tokens,
-                            )
-                        except ValueError:
-                            pass
-                        else:
-                            # Ascending batch size, so the last write per
-                            # query length is the widest batch running at it.
-                            widest_batch: dict[int, int] = {}
-                            for batch_size, num_spec in enumerate(
-                                dense_schedule[1:], start=1
-                            ):
-                                widest_batch[num_spec + 1] = batch_size
-                            decode_tiers = list(widest_batch.items())
-
-                    uniform_decode_sizes = sorted(
-                        {
-                            n * query_len
-                            for query_len, tier_max_reqs in decode_tiers
-                            for n in request_counts(tier_max_reqs)
-                            if n * query_len <= max_cudagraph_capture_size
-                        }
-                    )
-                elif max_num_seqs <= max_cudagraph_capture_size:
-                    uniform_decode_sizes = [max_num_seqs]
-            max_num_tokens = self.scheduler_config.max_num_batched_tokens
-            max_cudagraph_capture_size = min(max_num_tokens, max_cudagraph_capture_size)
-
-            assert max_cudagraph_capture_size >= 1, (
-                "Maximum cudagraph size should be greater than or equal to 1 "
-                "when using cuda graph."
-            )
-
-            # determine the cudagraph_capture_sizes
-            if self.compilation_config.cudagraph_capture_sizes is not None:
-                assert len(self.compilation_config.cudagraph_capture_sizes) > 0, (
+            if legacy_max is not None and legacy_max < 1 and legacy_sizes is None:
+                raise ValueError(
+                    "max_cudagraph_capture_size should be >= 1 when using cuda graph."
+                )
+            if legacy_sizes is not None:
+                assert len(legacy_sizes) > 0, (
                     "cudagraph_capture_sizes should contain at least one element "
                     "when using cuda graph."
                 )
-                # de-duplicate the sizes provided by the config
-                dedup_sizes = list(set(self.compilation_config.cudagraph_capture_sizes))
-                cudagraph_capture_sizes = [
-                    i for i in dedup_sizes if i <= max_num_tokens
-                ]
-                # sort to make sure the sizes are in ascending order
-                cudagraph_capture_sizes.sort()
-            else:
-                if self.performance_mode == "interactivity":
-                    # Fine-grained CUDA graphs at small batch sizes
-                    # for minimal padding overhead
-                    interactivity_max = min(max_cudagraph_capture_size, 32)
-                    cudagraph_capture_sizes = list(range(1, interactivity_max + 1))
-                else:
-                    cudagraph_capture_sizes = [
-                        i for i in [1, 2, 4] if i <= max_cudagraph_capture_size
-                    ]
-                if max_cudagraph_capture_size >= 8:
-                    # Step size 8 for small batch sizes, up to 256(not included)
-                    cudagraph_capture_sizes += list(
-                        range(8, min(max_cudagraph_capture_size + 1, 256), 8)
-                    )
-                if max_cudagraph_capture_size >= 256:
-                    # Step size 16 for larger batch sizes
-                    cudagraph_capture_sizes += list(
-                        range(256, max_cudagraph_capture_size + 1, 16)
-                    )
-                # ensure max_num_tokens is captured if within max capture size
-                if (
-                    max_num_tokens <= max_cudagraph_capture_size
-                    and max_num_tokens not in cudagraph_capture_sizes
-                ):
-                    cudagraph_capture_sizes.append(max_num_tokens)
-                # Preserve the platform's default capture ceiling. Larger
-                # uniform decode batches fall back to eager execution unless
-                # users explicitly configure wider capture sizes.
-                cudagraph_capture_sizes += [
-                    size for size in uniform_decode_sizes if size <= max_num_tokens
-                ]
-                # de-duplicate and sort the sizes
-                cudagraph_capture_sizes = sorted(set(cudagraph_capture_sizes))
-
-            # user-specific compilation_config.max_cudagraph_capture_size get
-            # truncated to valid_max_size when they are inconsistent.
-            valid_max_size = (
-                cudagraph_capture_sizes[-1] if cudagraph_capture_sizes else 0
-            )
-            if (
-                self.compilation_config.max_cudagraph_capture_size is not None
-                and self.compilation_config.max_cudagraph_capture_size != valid_max_size
-            ):
-                # raise error only when both two flags are user-specified
-                # and they are inconsistent with each other
-                if self.compilation_config.cudagraph_capture_sizes is not None:
+                if legacy_max is not None and legacy_max != max(legacy_sizes):
                     raise ValueError(
-                        "customized max_cudagraph_capture_size"
-                        f"(={self.compilation_config.max_cudagraph_capture_size}) "
+                        f"customized max_cudagraph_capture_size(={legacy_max}) "
                         "should be consistent with the max value of "
-                        f"cudagraph_capture_sizes(={valid_max_size})"
+                        f"cudagraph_capture_sizes(={max(legacy_sizes)})"
                     )
-
-                logger.warning(
-                    "Truncating max_cudagraph_capture_size to %d",
-                    valid_max_size,
+                legacy_max = max(legacy_sizes)
+                decode_sizes = sorted(
+                    {
+                        n
+                        for q in decode_query_lens
+                        for n in legacy_decode_capture_sizes(legacy_sizes, q)
+                    }
                 )
-            # always set the final max_cudagraph_capture_size
-            self.compilation_config.max_cudagraph_capture_size = valid_max_size
-
-            if self.compilation_config.cudagraph_capture_sizes is not None and len(
-                cudagraph_capture_sizes
-            ) < len(self.compilation_config.cudagraph_capture_sizes):
-                # If users have specified capture sizes, we only need to
-                # compare the lens before and after modification since the modified
-                # list is only the subset of the original list.
-                logger.warning(
-                    (
-                        "cudagraph_capture_sizes specified in compilation_config"
-                        " %s is overridden by config %s"
-                    ),
-                    self.compilation_config.cudagraph_capture_sizes,
-                    cudagraph_capture_sizes,
-                )
-            # always write back the final sizes
-            self.compilation_config.cudagraph_capture_sizes = cudagraph_capture_sizes
-
+            prefill_sizes = legacy_sizes
+            max_prefill = legacy_max
+            decode_token_budget: int | None = legacy_max
         else:
-            # no cudagraph in use
-            self.compilation_config.max_cudagraph_capture_size = 0
-            self.compilation_config.cudagraph_capture_sizes = []
+            decode_token_budget = None
 
-        # complete the remaining process.
-        self.compilation_config.post_init_cudagraph_sizes()
+        if prefill_sizes is None:
+            if max_prefill is None:
+                max_prefill = min(max_num_seqs * query_len * 2, ceiling)
+            max_prefill = min(max_prefill, max_num_tokens)
+            prefill_sizes = _cudagraph_size_grid(max_prefill, interactivity)
+            if max_num_tokens <= max_prefill:
+                prefill_sizes.append(max_num_tokens)
+        prefill_sizes = _filter_cudagraph_sizes(
+            prefill_sizes, max_num_tokens, "prefill_cudagraph_capture_sizes", "tokens"
+        )
+
+        if decode_sizes is None:
+            if max_decode is not None:
+                decode_token_budget = max_decode * decode_query_lens[-1]
+            elif decode_token_budget is None:
+                # Graph memory grows with tokens, not requests: wide decodes
+                # (e.g. 128 requests x 17 tokens) OOMed at startup on H200. By
+                # default, keep every target decode graph within the ceiling.
+                decode_token_budget = ceiling
+            decode_sizes = _decode_cudagraph_size_grid(
+                decode_token_budget,
+                decode_query_lens,
+                min(max_decode or max_num_seqs, max_num_seqs),
+                interactivity,
+            )
+        elif decode_token_budget is None:
+            # Explicit request counts are captured as given.
+            decode_token_budget = max_num_tokens
+        decode_sizes = _filter_cudagraph_sizes(
+            decode_sizes, max_num_seqs, "decode_cudagraph_capture_sizes", "requests"
+        )
+
+        all_token_sizes = set(prefill_sizes)
+        all_token_sizes.update(
+            n * q
+            for n in decode_sizes
+            for q in decode_query_lens
+            if n * q <= decode_token_budget
+        )
+        speculative_config = self.speculative_config
+        if (
+            speculative_config is not None
+            and speculative_config.enable_adaptive_verification
+        ):
+            # Varlen decode graphs also capture a zero-draft batch per size.
+            all_token_sizes.update(decode_sizes)
+        token_sizes = sorted(s for s in all_token_sizes if s <= max_num_tokens)
+
+        if legacy_sizes is not None:
+            logger.info(
+                "Legacy cudagraph_capture_sizes %s (tokens) resolved to "
+                "prefill_cudagraph_capture_sizes=%s (tokens) and "
+                "decode_cudagraph_capture_sizes=%s (requests at %d tokens each).",
+                sorted(set(legacy_sizes)),
+                prefill_sizes,
+                decode_sizes,
+                query_len,
+            )
+
+        compilation_config.prefill_cudagraph_capture_sizes = prefill_sizes
+        compilation_config.max_prefill_cudagraph_capture_size = (
+            prefill_sizes[-1] if prefill_sizes else 0
+        )
+        compilation_config.decode_cudagraph_capture_sizes = decode_sizes
+        compilation_config.max_decode_cudagraph_capture_size = (
+            decode_sizes[-1] if decode_sizes else 0
+        )
+        compilation_config.cudagraph_capture_sizes = token_sizes
+        compilation_config.max_cudagraph_capture_size = (
+            token_sizes[-1] if token_sizes else 0
+        )
+        compilation_config.cudagraph_sizes_resolved = True
+        compilation_config.post_init_cudagraph_sizes()
 
     def _set_compile_ranges(self):
         """Set the compile ranges for the compilation config."""
@@ -3252,8 +3235,7 @@ class VllmConfig:
             compilation_config.cudagraph_mode.name,
         )
         compilation_config.cudagraph_mode = CUDAGraphMode.NONE
-        compilation_config.max_cudagraph_capture_size = 0
-        compilation_config.cudagraph_capture_sizes = []
+        compilation_config.clear_cudagraph_sizes()
 
     def _validate_v2_model_runner(self) -> None:
         """Check for features not yet supported by the V2 model runner."""

@@ -914,7 +914,7 @@ def _make_cudagraph_manager(capture_sizes: list[int]) -> CudaGraphManager:
             vllm_config,
             torch.device("cuda:0"),
             CUDAGraphMode.FULL,
-            decode_query_len=1,
+            decode_query_lens=[1],
             ubatch_runner=cast(UBatchRunner, object()),
         )
     manager._graphs_captured = True

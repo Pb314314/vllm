@@ -53,8 +53,10 @@ def _create_vllm_config_for_dsd(
     vllm_config.compilation_config = compilation_config
     vllm_config.scheduler_config = SchedulerConfig.default_factory(
         max_num_seqs=max_num_seqs,
+        max_num_batched_tokens=max(max_capture_tokens, 2048),
     )
     vllm_config.parallel_config = ParallelConfig()
+    vllm_config.cache_config = SimpleNamespace(use_kda_recoverssm=False)
     # num_speculative_tokens is the max K (num_speculative_steps). The manager
     # recovers num_new_sampled_tokens_per_step as
     # decode_query_len - num_speculative_tokens; with decode_query_len =
@@ -110,7 +112,9 @@ def test_dynamic_sd_full_cudagraph_covers_all_uniform_decode_shapes(monkeypatch)
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_len=max_decode_query_len,
+        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
+            vllm_config, max_decode_query_len
+        ),
     )
 
     # dispatch() only uses the precomputed candidate table after graphs are
@@ -171,7 +175,9 @@ def test_dynamic_sd_cudagraphs_use_clamped_query_length(monkeypatch):
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_len=4,
+        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
+            vllm_config, 4
+        ),
     )
 
     full_query_lens = {
@@ -206,7 +212,9 @@ def test_dynamic_sd_non_uniform_batch_falls_back_to_piecewise(monkeypatch):
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_len=max_spec_tokens + 1,
+        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
+            vllm_config, max_spec_tokens + 1
+        ),
     )
     manager._graphs_captured = True
 
@@ -251,7 +259,9 @@ def test_prompt_chunks_shaped_like_spec_decode_miss_the_full_graph(monkeypatch):
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_len=decode_query_len,
+        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
+            vllm_config, decode_query_len
+        ),
     )
     manager._graphs_captured = True
 
@@ -323,7 +333,9 @@ def test_basic_sd_does_not_capture_shorter_full_decode_shapes(monkeypatch):
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_len=max_decode_query_len,
+        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
+            vllm_config, max_decode_query_len
+        ),
     )
     manager._graphs_captured = True
 
@@ -390,7 +402,9 @@ def test_dynamic_sd_only_captures_scheduled_query_lengths(monkeypatch):
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_len=max_decode_query_len,
+        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
+            vllm_config, max_decode_query_len
+        ),
     )
     manager._graphs_captured = True
 

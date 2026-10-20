@@ -12,6 +12,7 @@ from vllm.logger import init_logger
 from vllm.triton_utils import tl, triton
 from vllm.v1.attention.backends.utils import PAD_SLOT_ID
 from vllm.v1.worker.gpu.attn_utils import build_slot_mappings_by_layer
+from vllm.v1.worker.gpu.cudagraph_utils import get_target_decode_query_lens
 from vllm.v1.worker.gpu.dp_utils import DPSyncState, dispatch_cg_and_sync_dp
 from vllm.v1.worker.gpu.input_batch import InputBatch, InputBuffers
 from vllm.v1.worker.gpu.spec_decode.eagle.utils import load_eagle_model
@@ -103,11 +104,15 @@ class MultiModuleMTPSpeculator(DraftModelSpeculator):
                 if cudagraph_mode.has_full_cudagraphs()
                 else CUDAGraphMode.NONE
             )
+        # The MTP modules run the target's batch shape.
         self.cudagraph_manager = SpeculatorCudaGraphManager(
             self.vllm_config,
             self.device,
             cudagraph_mode,
-            self.num_speculative_steps + 1,
+            get_target_decode_query_lens(
+                self.vllm_config, self.num_speculative_steps + 1
+            ),
+            name="drafter",
         )
 
     def capture(self) -> None:

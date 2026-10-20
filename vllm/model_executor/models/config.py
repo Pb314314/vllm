@@ -543,13 +543,19 @@ class GptOssForCausalLMConfig(VerifyAndUpdateConfig):
         # NOTE(woosuk): This will increase the number of CUDA graphs
         # from 67 to 83.
         compilation_config = vllm_config.compilation_config
-        # Only override when the user has not set either of
-        # cudagraph_capture_sizes or max_cudagraph_capture_size.
-        if (
-            compilation_config.cudagraph_capture_sizes is None
-            and compilation_config.max_cudagraph_capture_size is None
+        # Only override when the user has set no capture size.
+        if all(
+            size is None
+            for size in (
+                compilation_config.cudagraph_capture_sizes,
+                compilation_config.max_cudagraph_capture_size,
+                compilation_config.decode_cudagraph_capture_sizes,
+                compilation_config.max_decode_cudagraph_capture_size,
+                compilation_config.prefill_cudagraph_capture_sizes,
+                compilation_config.max_prefill_cudagraph_capture_size,
+            )
         ):
-            compilation_config.max_cudagraph_capture_size = 1024
+            compilation_config.max_prefill_cudagraph_capture_size = 1024
             logger.info(
                 "Overriding max cuda graph capture size to %d for performance.", 1024
             )

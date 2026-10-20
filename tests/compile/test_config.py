@@ -567,12 +567,16 @@ def _mock_config_for_cudagraph_sizes(
             num_speculative_tokens=num_speculative_tokens,
             num_speculative_tokens_per_batch_size=schedule,
             uses_dynamic_speculative_decoding=lambda: schedule is not None,
+            enable_adaptive_verification=False,
         )
         if num_speculative_tokens
         else None
     )
     config.num_speculative_tokens = VllmConfig.num_speculative_tokens.fget(config)
     config.uniform_decode_query_len = VllmConfig.uniform_decode_query_len.fget(config)
+    config.decode_cudagraph_query_lens = VllmConfig.decode_cudagraph_query_lens.fget(
+        config
+    )
     return config
 
 
@@ -691,11 +695,14 @@ def test_default_cudagraph_capture_sizes_keep_all_sizes_bounded():
     token_grid += list(range(8, min(token_grid_max + 1, 256), 8))
     token_grid += list(range(256, token_grid_max + 1, 16))
 
-    max_request_count = min(max_num_seqs, default_max_graph_size)
-    request_counts = [count for count in [1, 2, 4] if count <= max_request_count]
-    request_counts += list(range(8, min(max_request_count + 1, 256), 8))
-    request_counts += list(range(256, max_request_count + 1, 16))
-    request_counts.append(max_request_count)
+    # Decode request counts follow the token grid, so neighbouring decode
+    # graphs are as far apart in tokens as prefill graphs.
+    max_request_count = default_max_graph_size // decode_query_len
+    request_counts = sorted(
+        {-(-size // decode_query_len) for size in token_grid} | {max_request_count}
+    )
+    request_counts = [n for n in request_counts if n <= max_request_count]
+    assert compilation_config.decode_cudagraph_capture_sizes == request_counts
     expected_sizes = sorted(
         set(
             token_grid
@@ -969,6 +976,108 @@ def test_default_cudagraph_capture_size_still_clamped_by_token_budget():
         == compilation_config.cudagraph_capture_sizes[-1]
     )
     assert 544 not in compilation_config.cudagraph_capture_sizes
+
+
+def _resolve_cudagraph_sizes(
+    num_speculative_tokens: int = 0, max_num_seqs: int = 64, **sizes
+) -> CompilationConfig:
+    compilation_config = CompilationConfig(
+        cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE, **sizes
+    )
+    config = _mock_config_for_cudagraph_sizes(
+        max_num_seqs=max_num_seqs,
+        num_speculative_tokens=num_speculative_tokens,
+        max_num_batched_tokens=8192,
+        compilation_config=compilation_config,
+    )
+    with patch.object(
+        current_platform, "is_device_capability_family", return_value=False
+    ):
+        VllmConfig._set_cudagraph_sizes(config)
+    return compilation_config
+
+
+def test_legacy_capture_sizes_translate_to_request_counts():
+    """A legacy token size s meant a decode graph of round_up(s, 1 + K) tokens
+    unless that passed the largest size, so it becomes ceil(s / (1 + K))
+    requests (16 -> 18 tokens is dropped, as before). The list stays the
+    prefill sizes, and the shared list then holds both."""
+    compilation_config = _resolve_cudagraph_sizes(
+        num_speculative_tokens=2, cudagraph_capture_sizes=[1, 4, 8, 16]
+    )
+
+    assert compilation_config.prefill_cudagraph_capture_sizes == [1, 4, 8, 16]
+    assert compilation_config.decode_cudagraph_capture_sizes == [1, 2, 3]
+    assert compilation_config.cudagraph_capture_sizes == [1, 3, 4, 6, 8, 9, 16]
+
+
+def test_legacy_and_split_capture_sizes_are_exclusive():
+    with pytest.raises(ValueError, match="cannot be combined"):
+        _resolve_cudagraph_sizes(
+            cudagraph_capture_sizes=[1, 2], decode_cudagraph_capture_sizes=[1]
+        )
+
+
+def test_prefill_instance_captures_only_prefill_sizes():
+    compilation_config = _resolve_cudagraph_sizes(
+        num_speculative_tokens=3,
+        decode_cudagraph_capture_sizes=[],
+        prefill_cudagraph_capture_sizes=[2048, 4096, 8192],
+    )
+
+    assert compilation_config.cudagraph_capture_sizes == [2048, 4096, 8192]
+    assert compilation_config.max_decode_cudagraph_capture_size == 0
+
+
+def test_decode_instance_captures_only_decode_sizes():
+    """Explicit request counts are captured as given, even past the default
+    token ceiling: 64 requests x 4 tokens."""
+    compilation_config = _resolve_cudagraph_sizes(
+        num_speculative_tokens=3,
+        decode_cudagraph_capture_sizes=[1, 8, 64],
+        prefill_cudagraph_capture_sizes=[],
+    )
+
+    assert compilation_config.cudagraph_capture_sizes == [4, 32, 256]
+    assert compilation_config.max_cudagraph_capture_size == 256
+    assert compilation_config.max_prefill_cudagraph_capture_size == 0
+
+
+def test_max_decode_size_is_a_request_count():
+    compilation_config = _resolve_cudagraph_sizes(
+        num_speculative_tokens=7,
+        max_num_seqs=256,
+        max_decode_cudagraph_capture_size=200,
+    )
+
+    assert compilation_config.decode_cudagraph_capture_sizes[-1] == 200
+    assert 200 * 8 in compilation_config.cudagraph_capture_sizes
+
+
+def test_cudagraph_size_resolution_is_idempotent():
+    """dataclasses.replace(vllm_config) re-runs __post_init__ on resolved
+    sizes, which must neither change them nor read the legacy outputs back
+    as conflicting inputs."""
+    compilation_config = _resolve_cudagraph_sizes(num_speculative_tokens=3)
+    resolved = copy.deepcopy(compilation_config)
+    config = _mock_config_for_cudagraph_sizes(
+        max_num_seqs=64,
+        num_speculative_tokens=3,
+        max_num_batched_tokens=8192,
+        compilation_config=compilation_config,
+    )
+
+    with patch.object(
+        current_platform, "is_device_capability_family", return_value=False
+    ):
+        VllmConfig._set_cudagraph_sizes(config)
+
+    for name in (
+        "cudagraph_capture_sizes",
+        "decode_cudagraph_capture_sizes",
+        "prefill_cudagraph_capture_sizes",
+    ):
+        assert getattr(compilation_config, name) == getattr(resolved, name)
 
 
 @pytest.mark.skipif(

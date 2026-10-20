@@ -163,7 +163,8 @@ class DFlashSpeculator(DraftModelSpeculator):
             self.vllm_config,
             self.device,
             cudagraph_mode,
-            decode_query_len=self.num_query_per_req,
+            decode_query_lens=[self.num_query_per_req],
+            name="drafter",
         )
 
     def capture(self) -> None:

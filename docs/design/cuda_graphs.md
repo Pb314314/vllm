@@ -196,6 +196,28 @@ Now the CLI is directly using the uppercase string of cudagraph_mode for compila
 vllm serve --model meta-llama/Llama-3.1-8B-Instruct --compilation-config '{"cudagraph_mode": "FULL_AND_PIECEWISE"}'
 ```
 
+### Capture sizes
+
+Decode graphs and prefill graphs are sized separately, in the unit that bounds each:
+
+| Option | Unit | Graphs |
+| --- | --- | --- |
+| `decode_cudagraph_capture_sizes` / `max_decode_cudagraph_capture_size` | requests | Batches without a prefill, where every request runs one decode or verification step |
+| `prefill_cudagraph_capture_sizes` / `max_prefill_cudagraph_capture_size` | tokens | Batches containing a prefill (mixed batches included) |
+
+Every runner turns a decode request count into its own token count: with `num_speculative_tokens=3`, the decode size `16` is a 64-token graph for the target model (16 requests verifying 3 drafts each), a 16-token graph for an EAGLE draft step, and a 48-token graph for a DSpark drafter. Since every runner covers the same request counts, a batch the target runs on a graph also has a graph in its drafter. With Dynamic SD, each scheduled query length gets its own decode graphs.
+
+By default, decode request counts are spaced so that neighboring decode graphs of the target are as far apart in tokens as prefill graphs, and no default graph exceeds 512 tokens (1024 on data center Blackwell). Explicit sizes are captured as given. An empty list disables that kind of graph, e.g. for disaggregated serving:
+
+```bash
+# Prefill instance: large prefill graphs, no decode graphs.
+vllm serve <model> --compilation-config '{"decode_cudagraph_capture_sizes": [], "max_prefill_cudagraph_capture_size": 8192}'
+# Decode instance: decode graphs only.
+vllm serve <model> --compilation-config '{"cudagraph_mode": "FULL_DECODE_ONLY", "prefill_cudagraph_capture_sizes": []}'
+```
+
+The legacy `cudagraph_capture_sizes` and `max_cudagraph_capture_size` still work: their token sizes become the prefill sizes, and each size `s` becomes a decode size of `ceil(s / (1 + num_speculative_tokens))` requests, matching what they used to capture. At startup, each runner logs how many requests its FULL decode graphs cover, and the first batch to miss its graph for each reason is logged.
+
 ### Python examples
 
 ```python

@@ -106,6 +106,7 @@ from vllm.v1.worker.gpu.cp_utils import prepare_dcp_local_seq_lens
 from vllm.v1.worker.gpu.cudagraph_utils import (
     BatchExecutionDescriptor,
     ModelCudaGraphManager,
+    get_target_decode_query_lens,
     has_compiled_submodule,
     make_cudagraph_stats,
 )
@@ -757,10 +758,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.vllm_config,
             self.device,
             cudagraph_mode,
-            decode_query_len=self.decode_query_len,
+            decode_query_lens=get_target_decode_query_lens(
+                self.vllm_config, self.decode_query_len
+            ),
             lora_capture_cases=self.lora_capture_cases,
             varlen_decode=self.adaptive_verification is not None,
             ubatch_runner=self.ubatch_runner,
+            name="target",
         )
         if self.cache_config.kv_sharing_fast_prefill and self.pcp_manager is None:
             self.fast_prefill = FastPrefillHelper(
@@ -1125,6 +1129,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                                 self._dummy_run(**batch)
                         self.adaptive_verification.set_initial_cost_curves(timings)
                     self.kv_connector.reset_capture_state()
+                    # Startup dummy runs probe shapes past the graphs on purpose.
+                    self.cudagraph_manager.reset_fallback_stats()
 
             end_free_gpu_memory = torch.accelerator.get_memory_info()[0]
 

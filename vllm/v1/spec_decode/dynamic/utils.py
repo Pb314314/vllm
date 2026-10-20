@@ -146,3 +146,19 @@ def build_dynamic_sd_schedule_lookup(
         )
 
     return dense_schedule
+
+
+def get_dynamic_sd_query_lens(
+    num_speculative_tokens_per_batch_size: object,
+    vllm_max_batch_size: int,
+    vllm_num_speculative_tokens: int,
+    num_new_sampled_tokens_per_step: int = 1,
+) -> list[int]:
+    """Every per-request query length a Dynamic SD verification step can have,
+    ascending: one per K in the schedule, plus the sampled tokens."""
+    dense_schedule = build_dynamic_sd_schedule_lookup(
+        num_speculative_tokens_per_batch_size,
+        vllm_max_batch_size=vllm_max_batch_size,
+        vllm_num_speculative_tokens=vllm_num_speculative_tokens,
+    )
+    return sorted({k + num_new_sampled_tokens_per_step for k in dense_schedule[1:]})
