@@ -35,7 +35,9 @@ from .compilation import (
     CompilationConfig,
     CompilationMode,
     CUDAGraphMode,
+    cudagraph_size_grid,
     legacy_decode_capture_sizes,
+    varlen_decode_capture_sizes,
 )
 from .device import DeviceConfig
 from .diffusion import DiffusionConfig
@@ -108,19 +110,6 @@ DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES = frozenset(
 )
 
 
-def _cudagraph_size_grid(max_size: int, interactivity: bool = False) -> list[int]:
-    """Default capture sizes up to `max_size`: dense at small sizes, then
-    strided by 8 below 256 and by 16 above."""
-    if interactivity:
-        # Fine-grained graphs at small sizes for minimal padding overhead.
-        sizes = list(range(1, min(max_size, 32) + 1))
-    else:
-        sizes = [s for s in (1, 2, 4) if s <= max_size]
-    sizes += range(8, min(max_size + 1, 256), 8)
-    sizes += range(256, max_size + 1, 16)
-    return sorted(set(sizes))
-
-
 def _decode_cudagraph_size_grid(
     token_budget: int,
     query_lens: list[int],
@@ -128,9 +117,9 @@ def _decode_cudagraph_size_grid(
     interactivity: bool = False,
 ) -> list[int]:
     """Default decode request counts: for each query length, the request counts
-    whose token counts follow `_cudagraph_size_grid(token_budget)`, so
+    whose token counts follow `cudagraph_size_grid(token_budget)`, so
     padding stays bounded in tokens rather than in requests."""
-    token_grid = _cudagraph_size_grid(token_budget, interactivity)
+    token_grid = cudagraph_size_grid(token_budget, interactivity)
     sizes: set[int] = set()
     for q in query_lens:
         limit = min(max_num_reqs, token_budget // q)
@@ -2473,6 +2462,10 @@ class VllmConfig:
             compilation_config.clear_cudagraph_sizes()
             compilation_config.post_init_cudagraph_sizes()
             return
+        if compilation_config.cudagraph_sizes_resolved:
+            # Re-run (e.g. dataclasses.replace): the sizes are final, and the
+            # legacy fields now hold outputs rather than inputs.
+            return
 
         from vllm.platforms import current_platform
 
@@ -2485,9 +2478,6 @@ class VllmConfig:
 
         legacy_sizes: list[int] | None = compilation_config.cudagraph_capture_sizes
         legacy_max: int | None = compilation_config.max_cudagraph_capture_size
-        if compilation_config.cudagraph_sizes_resolved:
-            # Re-run (e.g. dataclasses.replace): the legacy fields are outputs.
-            legacy_sizes = legacy_max = None
         decode_sizes = compilation_config.decode_cudagraph_capture_sizes
         max_decode = compilation_config.max_decode_cudagraph_capture_size
         prefill_sizes = compilation_config.prefill_cudagraph_capture_sizes
@@ -2536,7 +2526,7 @@ class VllmConfig:
             if max_prefill is None:
                 max_prefill = min(max_num_seqs * query_len * 2, ceiling)
             max_prefill = min(max_prefill, max_num_tokens)
-            prefill_sizes = _cudagraph_size_grid(max_prefill, interactivity)
+            prefill_sizes = cudagraph_size_grid(max_prefill, interactivity)
             if max_num_tokens <= max_prefill:
                 prefill_sizes.append(max_num_tokens)
         prefill_sizes = _filter_cudagraph_sizes(
@@ -2573,11 +2563,17 @@ class VllmConfig:
         )
         speculative_config = self.speculative_config
         if (
-            speculative_config is not None
+            decode_sizes
+            and speculative_config is not None
             and speculative_config.enable_adaptive_verification
         ):
-            # Varlen decode graphs also capture a zero-draft batch per size.
-            all_token_sizes.update(decode_sizes)
+            all_token_sizes.update(
+                s
+                for s in varlen_decode_capture_sizes(
+                    decode_sizes[-1], decode_query_lens[-1]
+                )
+                if s <= decode_token_budget
+            )
         token_sizes = sorted(s for s in all_token_sizes if s <= max_num_tokens)
 
         if legacy_sizes is not None:

@@ -25,7 +25,11 @@ from vllm.compilation.cudagraph_pool import (
 )
 from vllm.compilation.wrapper import TorchCompileWithNoGuardsWrapper
 from vllm.config import VllmConfig, set_current_vllm_config
-from vllm.config.compilation import CUDAGraphMode, legacy_decode_capture_sizes
+from vllm.config.compilation import (
+    CUDAGraphMode,
+    legacy_decode_capture_sizes,
+    varlen_decode_capture_sizes,
+)
 from vllm.distributed.parallel_state import (
     get_pp_group,
     graph_capture,
@@ -182,7 +186,7 @@ class CudaGraphManager:
     Batches with a prefill use token-keyed graphs from
     `prefill_cudagraph_capture_sizes`. Varlen decode graphs (adaptive
     verification) are token-keyed too, since their token count varies per
-    request; their sizes come from the decode request counts.
+    request; they follow the token grid up to the widest decode batch.
     """
 
     def __init__(
@@ -354,12 +358,10 @@ class CudaGraphManager:
                     if n * q <= max_num_tokens
                 )
             elif self.varlen_decode:
-                # 1..decode_query_len tokens per request, so the token count is
-                # what varies. Capture both ends of each request count: no
-                # drafts kept, and every draft verified. The request bound is
-                # free since a batch never has more requests than tokens.
-                for num_tokens in sorted(
-                    {t for n in decode_sizes for t in (n, n * self.decode_query_len)}
+                # The request bound is free: a batch never has more requests
+                # than tokens.
+                for num_tokens in varlen_decode_capture_sizes(
+                    decode_sizes[-1], self.decode_query_len
                 ):
                     if num_tokens > max_num_tokens or not fits(num_tokens):
                         continue
@@ -646,6 +648,7 @@ class CudaGraphManager:
         num_active_loras: int,
         max_query_len: int | None = None,
         num_ubatches: int = 1,
+        count_fallback: bool = True,
     ) -> BatchExecutionDescriptor:
         """Pick the graph for a batch, or an eager descriptor if none fits.
 
@@ -655,6 +658,7 @@ class CudaGraphManager:
         request count needed is derived from it as well, and every DP rank
         lands on the same graph. Any other batch, or a decode batch above the
         largest decode graph, takes the smallest token-keyed graph it fits.
+        Pass `count_fallback=False` when only probing for a padded size.
         """
         effective_loras = self._resolve_effective_loras(num_active_loras)
         if self._graphs_captured and num_tokens > 0:
@@ -676,7 +680,11 @@ class CudaGraphManager:
                     max_query_len,
                     num_ubatches,
                 ):
-                    if uniform_token_count is not None and self._decode_descs:
+                    if (
+                        count_fallback
+                        and uniform_token_count is not None
+                        and self._decode_descs
+                    ):
                         self._record_fallback(
                             "decode_graph_missing",
                             num_reqs,
@@ -685,13 +693,16 @@ class CudaGraphManager:
                             desc.cg_mode,
                         )
                     return desc
-            self._record_fallback(
-                self._eager_reason(num_tokens, uniform_token_count, effective_loras),
-                num_reqs,
-                num_tokens,
-                uniform_token_count,
-                CUDAGraphMode.NONE,
-            )
+            if count_fallback:
+                self._record_fallback(
+                    self._eager_reason(
+                        num_tokens, uniform_token_count, effective_loras
+                    ),
+                    num_reqs,
+                    num_tokens,
+                    uniform_token_count,
+                    CUDAGraphMode.NONE,
+                )
         return BatchExecutionDescriptor(
             cg_mode=CUDAGraphMode.NONE,
             num_tokens=num_tokens,

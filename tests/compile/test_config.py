@@ -1054,18 +1054,27 @@ def test_max_decode_size_is_a_request_count():
     assert 200 * 8 in compilation_config.cudagraph_capture_sizes
 
 
-def test_cudagraph_size_resolution_is_idempotent():
+@pytest.mark.parametrize("schedule", [None, [(1, 8, 3), (9, 256, 1)]])
+def test_cudagraph_size_resolution_is_idempotent(schedule):
     """dataclasses.replace(vllm_config) re-runs __post_init__ on resolved
     sizes, which must neither change them nor read the legacy outputs back
-    as conflicting inputs."""
-    compilation_config = _resolve_cudagraph_sizes(num_speculative_tokens=3)
-    resolved = copy.deepcopy(compilation_config)
+    as conflicting inputs. With Dynamic SD the wide query length is capped
+    below the default request counts, and must stay capped."""
+    compilation_config = CompilationConfig(
+        cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE
+    )
     config = _mock_config_for_cudagraph_sizes(
-        max_num_seqs=64,
+        max_num_seqs=256,
         num_speculative_tokens=3,
         max_num_batched_tokens=8192,
         compilation_config=compilation_config,
+        num_speculative_tokens_per_batch_size=schedule,
     )
+    with patch.object(
+        current_platform, "is_device_capability_family", return_value=False
+    ):
+        VllmConfig._set_cudagraph_sizes(config)
+    resolved = copy.deepcopy(compilation_config)
 
     with patch.object(
         current_platform, "is_device_capability_family", return_value=False

@@ -796,16 +796,20 @@ def test_piecewise_mode_captures_exact_decode_token_counts(monkeypatch):
     ) == [3, 8, 9]
 
 
-def test_varlen_decode_sizes_cover_both_ends_of_each_request_count(monkeypatch):
+def test_varlen_decode_graphs_follow_the_token_grid_up_to_the_widest_decode(
+    monkeypatch,
+):
     """Adaptive verification keeps 0..K drafts per request, so varlen graphs
-    are token-keyed: per request count n, one with no drafts (n tokens) and
-    one verifying every draft (n * (1 + K) tokens)."""
-    manager = _make_split_manager(monkeypatch, [1, 2, 4], [64], [4], varlen_decode=True)
+    are token-keyed: they follow the token grid up to the widest decode batch
+    (8 requests x 4 tokens), independent of the prefill sizes."""
+    manager = _make_split_manager(
+        monkeypatch, [1, 2, 4, 8], [], [4], varlen_decode=True
+    )
 
     full_tokens = sorted(
         d.num_tokens for d in manager._capture_descs[CUDAGraphMode.FULL]
     )
-    assert full_tokens == [1, 2, 4, 8, 16]
+    assert full_tokens == [1, 2, 4, 8, 16, 24, 32]
     desc = manager.dispatch(
         num_reqs=3,
         num_tokens=7,

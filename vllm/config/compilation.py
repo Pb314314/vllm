@@ -50,6 +50,29 @@ class CompilationMode(enum.IntEnum):
     shape specialization, and custom passes."""
 
 
+def cudagraph_size_grid(max_size: int, interactivity: bool = False) -> list[int]:
+    """Default capture sizes up to `max_size`: dense at small sizes, then
+    strided by 8 below 256 and by 16 above."""
+    if interactivity:
+        # Fine-grained graphs at small sizes for minimal padding overhead.
+        sizes = list(range(1, min(max_size, 32) + 1))
+    else:
+        sizes = [s for s in (1, 2, 4) if s <= max_size]
+    sizes += range(8, min(max_size + 1, 256), 8)
+    sizes += range(256, max_size + 1, 16)
+    return sorted(set(sizes))
+
+
+def varlen_decode_capture_sizes(max_num_reqs: int, max_query_len: int) -> list[int]:
+    """Token counts of varlen decode graphs (adaptive verification).
+
+    Their requests take 1..max_query_len tokens each, so the token count is
+    what varies and they follow the token grid, up to the widest decode batch.
+    """
+    max_tokens = max_num_reqs * max_query_len
+    return sorted(set(cudagraph_size_grid(max_tokens)) | {max_tokens})
+
+
 def legacy_decode_capture_sizes(
     token_sizes: Iterable[int], query_len: int
 ) -> list[int]:

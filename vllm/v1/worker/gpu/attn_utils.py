@@ -126,6 +126,7 @@ class FastPrefillHelper:
             num_tokens=num_logits,
             uniform_token_count=None,
             num_active_loras=num_active_loras,
+            count_fallback=False,
         )
         num_logits_padded = min(desc.num_tokens, self.max_num_tokens)
         return FastPrefillBatchMetadata(
