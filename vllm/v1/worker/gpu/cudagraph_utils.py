@@ -561,10 +561,11 @@ class CudaGraphManager:
             if self.ubatch_runner is not None:
                 # Join parked threads on failure to avoid blocking later captures.
                 stack.callback(self.ubatch_runner.abort_pending_run)
-            # Capture in order: PIECEWISE first, then FULL. PIECEWISE has larger
-            # activations so FULL activations should fit in already allocated
-            # buffers in the graph pool.
-            for mode in [CUDAGraphMode.PIECEWISE, CUDAGraphMode.FULL]:
+            # Capture the mode with the widest graph first, so the other mode's
+            # activations fit in buffers already allocated in the shared pool.
+            # Decode and prefill sizes are independent, so either can be wider;
+            # on a tie PIECEWISE goes first, as its activations are larger.
+            for mode in self._capture_order():
                 if mode not in self._capture_descs:
                     continue
 
@@ -633,6 +634,17 @@ class CudaGraphManager:
                         compilation_counter.num_cudagraph_captured += 1
 
         self._graphs_captured = True
+
+    def _capture_order(self) -> list[CUDAGraphMode]:
+        def widest(mode: CUDAGraphMode) -> int:
+            return max(
+                (d.num_tokens for d in self._capture_descs.get(mode, [])), default=0
+            )
+
+        return sorted(
+            (CUDAGraphMode.PIECEWISE, CUDAGraphMode.FULL),
+            key=lambda mode: (-widest(mode), mode != CUDAGraphMode.PIECEWISE),
+        )
 
     def captured_token_counts(self) -> list[int]:
         """Sorted token counts with a captured graph, ignoring LoRA variants."""
@@ -838,6 +850,17 @@ class ModelCudaGraphManager(CudaGraphManager):
                 "Set VLLM_USE_BREAKABLE_CUDAGRAPH=1 or cudagraph_mode=NONE/FULL."
             )
 
+        # Graphs write their outputs into these buffers, so they are allocated
+        # once for the widest graph: the first output stored (a warmup of the
+        # widest PIECEWISE graph) can be narrower than the widest FULL graph.
+        max_tokens = max(
+            (d.num_tokens for descs in self._capture_descs.values() for d in descs),
+            default=0,
+        )
+
+        def persistent_like(x: torch.Tensor) -> torch.Tensor:
+            return x.new_empty((max(max_tokens, x.shape[0]), *x.shape[1:]))
+
         def store_capture_output(num_tokens: int, model_output: Any) -> None:
             """Copy outputs to persistent buffers, allocating on first use."""
             if self.is_last_pp_rank:
@@ -848,11 +871,11 @@ class ModelCudaGraphManager(CudaGraphManager):
                     hidden_states = model_output
                     aux_hidden_states = []
                 if self.hidden_states is None:
-                    self.hidden_states = torch.empty_like(hidden_states)
+                    self.hidden_states = persistent_like(hidden_states)
                 self.hidden_states[:num_tokens] = hidden_states
                 if self.use_aux_hidden_state_outputs and not self.aux_hidden_states:
                     self.aux_hidden_states = [
-                        torch.empty_like(x) for x in aux_hidden_states
+                        persistent_like(x) for x in aux_hidden_states
                     ]
                 for i, aux in enumerate(aux_hidden_states):
                     self.aux_hidden_states[i][:num_tokens] = aux
@@ -861,8 +884,11 @@ class ModelCudaGraphManager(CudaGraphManager):
                 assert isinstance(model_output, IntermediateTensors)
                 intermediate_tensors = model_output
                 if self.intermediate_tensors is None:
-                    self.intermediate_tensors = IntermediateTensors.empty_like(
-                        intermediate_tensors
+                    self.intermediate_tensors = IntermediateTensors(
+                        {
+                            k: persistent_like(v)
+                            for k, v in intermediate_tensors.tensors.items()
+                        }
                     )
                 for k, v in intermediate_tensors.tensors.items():
                     self.intermediate_tensors[k][:num_tokens] = v
