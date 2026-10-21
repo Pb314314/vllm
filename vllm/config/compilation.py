@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import bisect
 import enum
 from collections import Counter
 from collections.abc import Callable, Iterable
@@ -87,6 +88,13 @@ def legacy_decode_capture_sizes(
         return []
     max_reqs = max(token_sizes) // query_len
     return sorted({n for s in token_sizes if (n := cdiv(s, query_len)) <= max_reqs})
+
+
+def reachable_decode_capture_sizes(sizes: Iterable[int], max_reqs: int) -> list[int]:
+    """The sorted decode request counts a batch of at most `max_reqs` requests
+    can be padded to: those below it and the smallest at or above it."""
+    sizes = sorted(set(sizes))
+    return sizes[: bisect.bisect_left(sizes, max_reqs) + 1]
 
 
 class CUDAGraphMode(enum.Enum):

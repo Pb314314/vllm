@@ -90,7 +90,8 @@ def test_dynamic_sd_full_cudagraph_covers_all_uniform_decode_shapes(monkeypatch)
 
     This validates the MRv2 CudaGraphManager path directly: once candidate
     shapes have been built, dispatch() should pick a FULL graph for every
-    uniform decode batch shape produced by DSD up to max_num_seqs.
+    uniform decode batch shape DSD can produce, i.e. up to the largest batch
+    size the schedule assigns each query length, and capture no wider ones.
     """
     max_num_seqs = 512
     max_spec_tokens = 7
@@ -108,21 +109,32 @@ def test_dynamic_sd_full_cudagraph_covers_all_uniform_decode_shapes(monkeypatch)
         max_num_seqs=max_num_seqs,
         max_spec_tokens=max_spec_tokens,
     )
+    decode_max_reqs = gpu_cudagraph_utils.get_target_decode_query_lens(
+        vllm_config, max_decode_query_len
+    )
+    # The default schedule gives K = b - 1 to batch size b, then K = 7 onward.
+    assert decode_max_reqs == {q: q for q in range(1, max_decode_query_len)} | {
+        max_decode_query_len: max_num_seqs
+    }
     manager = gpu_cudagraph_utils.CudaGraphManager(
         vllm_config=vllm_config,
         device=torch.device("cpu"),
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        decode_query_lens=gpu_cudagraph_utils.get_target_decode_query_lens(
-            vllm_config, max_decode_query_len
-        ),
+        decode_query_lens=decode_max_reqs,
     )
+    full_descs = manager._capture_descs[CUDAGraphMode.FULL]
+    assert all(
+        desc.num_reqs <= decode_max_reqs[desc.uniform_token_count]
+        for desc in full_descs
+    )
+    assert len(full_descs) == sum(decode_max_reqs.values())
 
     # dispatch() only uses the precomputed candidate table after graphs are
     # considered captured. The actual graph objects are irrelevant here.
     manager._graphs_captured = True
 
-    for num_reqs in range(1, max_num_seqs + 1):
-        for max_query_len in range(1, max_decode_query_len + 1):
+    for max_query_len, max_reqs in decode_max_reqs.items():
+        for num_reqs in range(1, max_reqs + 1):
             # Uniform decode means every request contributes the same number of
             # tokens, so the total token count is exactly num_reqs * query_len.
             num_tokens = num_reqs * max_query_len
@@ -371,9 +383,10 @@ def test_dynamic_sd_only_captures_scheduled_query_lengths(monkeypatch):
 
     With a partial schedule of ``(1, 31, 4)`` and ``(32, 128, 3)``, only the
     scheduled speculative-token counts (K = 4 and K = 3) become decode query
-    lengths (K + 1 = 5 and 4). Uniform batches at those query lengths should get
-    FULL graphs, while every other query length (e.g. the lower values 1, 2, 3)
-    must fall back to the mixed-batch PIECEWISE graph.
+    lengths (K + 1 = 5 and 4). Uniform batches at those query lengths, up to
+    their tier's largest batch, should get FULL graphs, while every other shape
+    (e.g. the lower query lengths 1, 2, 3) must fall back to the mixed-batch
+    PIECEWISE graph.
     """
     max_num_seqs = 128
     max_spec_tokens = 7
@@ -383,7 +396,10 @@ def test_dynamic_sd_only_captures_scheduled_query_lengths(monkeypatch):
     # scheduled in non-overlapping tiers, so FULL decode graphs should exist
     # for query lengths K + 1, i.e. exactly {5, 4}.
     num_spec_per_batch_size = [(1, 31, 4), (32, 128, 3)]
-    scheduled_query_lens = {entry[2] + 1 for entry in num_spec_per_batch_size}
+    # Query length -> the largest batch size scheduled with it.
+    scheduled_query_lens = {
+        entry[2] + 1: entry[1] for entry in num_spec_per_batch_size
+    }
 
     monkeypatch.setattr(
         gpu_cudagraph_utils,
@@ -426,15 +442,16 @@ def test_dynamic_sd_only_captures_scheduled_query_lengths(monkeypatch):
                 num_active_loras=0,
             )
 
-            if max_query_len in scheduled_query_lens:
-                # Scheduled query lengths get a dedicated FULL decode graph.
+            if num_reqs <= scheduled_query_lens.get(max_query_len, 0):
+                # Scheduled shapes get a dedicated FULL decode graph.
                 assert desc.cg_mode == CUDAGraphMode.FULL
                 assert desc.uniform_token_count == max_query_len
                 assert desc.num_tokens == num_tokens
                 assert desc.num_reqs == num_reqs
             else:
                 # Unscheduled query lengths (including the lower values 1 and 2)
-                # have no FULL candidate and must fall back to PIECEWISE.
+                # and wider batches than their tier have no FULL candidate and
+                # must fall back to PIECEWISE.
                 assert desc.cg_mode == CUDAGraphMode.PIECEWISE
                 assert desc.uniform_token_count is None
                 assert desc.num_tokens == num_tokens

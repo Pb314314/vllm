@@ -3,7 +3,7 @@
 import gc
 import itertools
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from itertools import groupby, product
@@ -28,6 +28,7 @@ from vllm.config import VllmConfig, set_current_vllm_config
 from vllm.config.compilation import (
     CUDAGraphMode,
     legacy_decode_capture_sizes,
+    reachable_decode_capture_sizes,
     varlen_decode_capture_sizes,
 )
 from vllm.distributed.parallel_state import (
@@ -153,13 +154,14 @@ def has_compiled_submodule(model: nn.Module) -> bool:
 
 def get_target_decode_query_lens(
     vllm_config: VllmConfig, decode_query_len: int
-) -> list[int]:
+) -> list[int] | dict[int, int]:
     """Per-request query lengths of the target model's uniform decode batches.
 
     Dynamic SD verifies a different number of drafts per batch size, so it has
-    one query length per schedule entry; otherwise there is only
-    `decode_query_len`. Runners that run the target's batch shape (EAGLE-style
-    drafter prefill, multi-module MTP) use the same lengths.
+    one query length per schedule entry, each mapped to the most requests its
+    batches can have; otherwise there is only `decode_query_len`. Runners that
+    run the target's batch shape (EAGLE-style drafter prefill, multi-module
+    MTP) use the same lengths.
     """
     speculative_config = vllm_config.speculative_config
     num_new_tokens = decode_query_len - vllm_config.num_speculative_tokens
@@ -183,6 +185,8 @@ class CudaGraphManager:
     Decode graphs are keyed by request count: for each size `n` in
     `decode_cudagraph_capture_sizes` and each of the runner's
     `decode_query_lens` `q`, one graph runs `n` requests of exactly `q` tokens.
+    `decode_query_lens` may map each `q` to the most requests its batches can
+    have (Dynamic SD), which drops the graphs no batch can be padded to.
     Batches with a prefill use token-keyed graphs from
     `prefill_cudagraph_capture_sizes`. Varlen decode graphs (adaptive
     verification) are token-keyed too, since their token count varies per
@@ -194,7 +198,7 @@ class CudaGraphManager:
         vllm_config: VllmConfig,
         device: torch.device,
         cudagraph_mode: CUDAGraphMode,
-        decode_query_lens: Sequence[int],
+        decode_query_lens: Sequence[int] | Mapping[int, int],
         lora_capture_cases: list[int] | None = None,
         varlen_decode: bool = False,
         ubatch_runner: "UBatchRunner | None" = None,
@@ -206,7 +210,14 @@ class CudaGraphManager:
         self.compilation_config = vllm_config.compilation_config
         assert self.compilation_config is not None
         self.cudagraph_mode = cudagraph_mode
-        self.decode_query_lens = tuple(sorted(set(decode_query_lens)))
+        if not isinstance(decode_query_lens, Mapping):
+            decode_query_lens = dict.fromkeys(decode_query_lens, self.max_num_reqs)
+        # Uniform decode query length -> the most requests a batch of it has.
+        self.decode_max_reqs = {
+            q: min(max_reqs, self.max_num_reqs)
+            for q, max_reqs in sorted(decode_query_lens.items())
+        }
+        self.decode_query_lens = tuple(self.decode_max_reqs)
         assert self.decode_query_lens and self.decode_query_lens[0] >= 1, (
             f"invalid decode query lengths {decode_query_lens}"
         )
@@ -353,8 +364,8 @@ class CudaGraphManager:
                 # graphs, so add their exact token counts.
                 mixed_sizes.update(
                     n * q
-                    for n in decode_sizes
-                    for q in self.decode_query_lens
+                    for q, max_reqs in self.decode_max_reqs.items()
+                    for n in reachable_decode_capture_sizes(decode_sizes, max_reqs)
                     if n * q <= max_num_tokens
                 )
             elif self.varlen_decode:
@@ -376,27 +387,29 @@ class CudaGraphManager:
                             )
                         )
             else:
-                for q, n, num_active_loras in product(
-                    self.decode_query_lens, decode_sizes, self.lora_capture_cases
-                ):
-                    # The scheduler never builds a batch past either limit.
-                    if (
-                        n > self.max_num_reqs
-                        or n * q > max_num_tokens
-                        or not fits(n * q)
+                for q, max_reqs in self.decode_max_reqs.items():
+                    for n, num_active_loras in product(
+                        reachable_decode_capture_sizes(decode_sizes, max_reqs),
+                        self.lora_capture_cases,
                     ):
-                        continue
-                    desc = BatchExecutionDescriptor(
-                        cg_mode=decode_mode,
-                        num_tokens=n * q,
-                        num_reqs=n,
-                        uniform_token_count=q,
-                        num_active_loras=num_active_loras,
-                    )
-                    decode_descs.append(desc)
-                    ubatch_desc = self._maybe_ubatch_twin(desc)
-                    if ubatch_desc is not None:
-                        decode_descs.append(ubatch_desc)
+                        # The scheduler never builds a batch past either limit.
+                        if (
+                            n > self.max_num_reqs
+                            or n * q > max_num_tokens
+                            or not fits(n * q)
+                        ):
+                            continue
+                        desc = BatchExecutionDescriptor(
+                            cg_mode=decode_mode,
+                            num_tokens=n * q,
+                            num_reqs=n,
+                            uniform_token_count=q,
+                            num_active_loras=num_active_loras,
+                        )
+                        decode_descs.append(desc)
+                        ubatch_desc = self._maybe_ubatch_twin(desc)
+                        if ubatch_desc is not None:
+                            decode_descs.append(ubatch_desc)
 
         oversized: set[int] = set()
         if mixed_mode:
@@ -799,7 +812,7 @@ class ModelCudaGraphManager(CudaGraphManager):
         vllm_config: VllmConfig,
         device: torch.device,
         cudagraph_mode: CUDAGraphMode,
-        decode_query_lens: Sequence[int],
+        decode_query_lens: Sequence[int] | Mapping[int, int],
         lora_capture_cases: list[int] | None = None,
         varlen_decode: bool = False,
         ubatch_runner: "UBatchRunner | None" = None,

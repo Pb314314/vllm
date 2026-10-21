@@ -148,17 +148,41 @@ def build_dynamic_sd_schedule_lookup(
     return dense_schedule
 
 
-def get_dynamic_sd_query_lens(
+def get_dynamic_sd_max_batch_sizes(
     num_speculative_tokens_per_batch_size: object,
     vllm_max_batch_size: int,
     vllm_num_speculative_tokens: int,
-    num_new_sampled_tokens_per_step: int = 1,
-) -> list[int]:
-    """Every per-request query length a Dynamic SD verification step can have,
-    ascending: one per K in the schedule, plus the sampled tokens."""
+) -> dict[int, int]:
+    """K -> the largest batch size the schedule assigns it, ascending in K."""
     dense_schedule = build_dynamic_sd_schedule_lookup(
         num_speculative_tokens_per_batch_size,
         vllm_max_batch_size=vllm_max_batch_size,
         vllm_num_speculative_tokens=vllm_num_speculative_tokens,
     )
-    return sorted({k + num_new_sampled_tokens_per_step for k in dense_schedule[1:]})
+    max_batch_sizes = {k: b for b, k in enumerate(dense_schedule) if b > 0}
+    return dict(sorted(max_batch_sizes.items()))
+
+
+def get_dynamic_sd_query_lens(
+    num_speculative_tokens_per_batch_size: object,
+    vllm_max_batch_size: int,
+    vllm_num_speculative_tokens: int,
+    num_new_sampled_tokens_per_step: int = 1,
+) -> dict[int, int]:
+    """Every per-request query length a Dynamic SD verification step can have,
+    ascending, mapped to the most requests a uniform batch of it can have.
+
+    Drafts proposed for a batch of `b` requests have `K = schedule[b]`, and the
+    step verifying them runs a subset of those requests (newly scheduled ones
+    have a prefill), so a uniform batch of `K + 1` tokens per request has at
+    most the largest `b` with that K. It can have fewer than the K's smallest
+    batch size, when requests finish in between.
+    """
+    return {
+        k + num_new_sampled_tokens_per_step: b
+        for k, b in get_dynamic_sd_max_batch_sizes(
+            num_speculative_tokens_per_batch_size,
+            vllm_max_batch_size,
+            vllm_num_speculative_tokens,
+        ).items()
+    }

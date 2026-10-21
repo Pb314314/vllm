@@ -5,9 +5,9 @@ from dataclasses import dataclass, replace
 
 import torch
 
-from vllm.config.compilation import CUDAGraphMode
+from vllm.config.compilation import CUDAGraphMode, reachable_decode_capture_sizes
 from vllm.v1.kv_cache_interface import KVCacheConfig
-from vllm.v1.spec_decode.dynamic.utils import build_dynamic_sd_schedule_lookup
+from vllm.v1.spec_decode.dynamic.utils import get_dynamic_sd_max_batch_sizes
 from vllm.v1.worker.gpu.block_table import BlockTables
 from vllm.v1.worker.gpu.cudagraph_utils import (
     BatchExecutionDescriptor,
@@ -60,16 +60,29 @@ class SpeculatorCudaGraphManager(CudaGraphManager):
         if specialize_spec_tokens:
             speculative_config = self.vllm_config.speculative_config
             assert speculative_config is not None
-            dense_schedule = build_dynamic_sd_schedule_lookup(
-                speculative_config.num_speculative_tokens_per_batch_size,
-                vllm_max_batch_size=self.max_num_reqs,
-                vllm_num_speculative_tokens=self.vllm_config.num_speculative_tokens,
-            )
+            sizes = {
+                desc.num_reqs or 0
+                for descs in self._capture_descs.values()
+                for desc in descs
+            }
+            # A draft step for b requests proposes K = schedule[b] tokens, so
+            # each K only needs the graphs that batches up to its largest b
+            # are padded to.
+            max_reqs_per_k = {
+                k: max(reachable_decode_capture_sizes(sizes, max_batch_size), default=0)
+                for k, max_batch_size in get_dynamic_sd_max_batch_sizes(
+                    speculative_config.num_speculative_tokens_per_batch_size,
+                    vllm_max_batch_size=self.max_num_reqs,
+                    vllm_num_speculative_tokens=self.vllm_config.num_speculative_tokens,
+                ).items()
+                if k > 1
+            }
             self._capture_descs = {
                 mode: [
                     SpeculatorBatchDescriptor(**vars(desc), num_speculative_tokens=k)
                     for desc in descs
-                    for k in sorted(set(dense_schedule) - {0, 1}, reverse=True)
+                    for k, max_reqs in sorted(max_reqs_per_k.items(), reverse=True)
+                    if (desc.num_reqs or 0) <= max_reqs
                 ]
                 for mode, descs in self._capture_descs.items()
             }

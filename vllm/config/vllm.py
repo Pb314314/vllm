@@ -37,6 +37,7 @@ from .compilation import (
     CUDAGraphMode,
     cudagraph_size_grid,
     legacy_decode_capture_sizes,
+    reachable_decode_capture_sizes,
     varlen_decode_capture_sizes,
 )
 from .device import DeviceConfig
@@ -112,7 +113,7 @@ DEFAULT_BREAKABLE_CUDAGRAPH_ARCHITECTURES = frozenset(
 
 def _decode_cudagraph_size_grid(
     token_budget: int,
-    query_lens: list[int],
+    query_lens: dict[int, int],
     max_num_reqs: int,
     interactivity: bool = False,
 ) -> list[int]:
@@ -121,8 +122,8 @@ def _decode_cudagraph_size_grid(
     padding stays bounded in tokens rather than in requests."""
     token_grid = cudagraph_size_grid(token_budget, interactivity)
     sizes: set[int] = set()
-    for q in query_lens:
-        limit = min(max_num_reqs, token_budget // q)
+    for q, max_reqs in query_lens.items():
+        limit = min(max_num_reqs, max_reqs, token_budget // q)
         sizes.update(n for s in token_grid if (n := cdiv(s, q)) <= limit)
         if limit > 0:
             sizes.add(limit)
@@ -2405,10 +2406,11 @@ class VllmConfig:
                     self.scheduler_config.max_num_active_seqs = max_draft_seqs
 
     @property
-    def decode_cudagraph_query_lens(self) -> list[int]:
+    def decode_cudagraph_query_lens(self) -> dict[int, int]:
         """Per-request query lengths of the target model's uniform decode
-        batches: one per Dynamic SD schedule entry, else just
-        `uniform_decode_query_len`."""
+        batches, ascending, mapped to the most requests such a batch can have:
+        one per Dynamic SD schedule entry, else just `uniform_decode_query_len`
+        up to `max_num_seqs`."""
         speculative_config = self.speculative_config
         if (
             speculative_config is not None
@@ -2425,7 +2427,7 @@ class VllmConfig:
             except ValueError:
                 # Validation lives elsewhere; keep the single static width.
                 pass
-        return [self.uniform_decode_query_len]
+        return {self.uniform_decode_query_len: self.scheduler_config.max_num_seqs}
 
     def _set_cudagraph_sizes(self):
         """Resolve the CUDA graph capture sizes.
@@ -2535,7 +2537,10 @@ class VllmConfig:
 
         if decode_sizes is None:
             if max_decode is not None:
-                decode_token_budget = max_decode * decode_query_lens[-1]
+                decode_token_budget = max(
+                    min(max_decode, max_reqs) * q
+                    for q, max_reqs in decode_query_lens.items()
+                )
             elif decode_token_budget is None:
                 # Graph memory grows with tokens, not requests: wide decodes
                 # (e.g. 128 requests x 17 tokens) OOMed at startup on H200. By
@@ -2557,8 +2562,8 @@ class VllmConfig:
         all_token_sizes = set(prefill_sizes)
         all_token_sizes.update(
             n * q
-            for n in decode_sizes
-            for q in decode_query_lens
+            for q, max_reqs in decode_query_lens.items()
+            for n in reachable_decode_capture_sizes(decode_sizes, max_reqs)
             if n * q <= decode_token_budget
         )
         speculative_config = self.speculative_config
@@ -2570,7 +2575,7 @@ class VllmConfig:
             all_token_sizes.update(
                 s
                 for s in varlen_decode_capture_sizes(
-                    decode_sizes[-1], decode_query_lens[-1]
+                    decode_sizes[-1], max(decode_query_lens)
                 )
                 if s <= decode_token_budget
             )
