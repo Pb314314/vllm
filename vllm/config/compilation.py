@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import bisect
 import enum
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -48,6 +49,34 @@ class CompilationMode(enum.IntEnum):
     VLLM_COMPILE = 3
     """Custom vLLM Inductor-based backend with caching, piecewise compilation,
     shape specialization, and custom passes."""
+
+
+def decode_cudagraph_shapes(
+    sizes: Iterable[int], query_lens: Mapping[int, int], max_tokens: int
+) -> list[tuple[int, int]]:
+    """The uniform decode graphs a runner captures for decode request counts.
+
+    A batch is padded to the smallest size that holds it, so a size above a
+    query length's limit becomes the widest graph within it, and any larger
+    size is unreachable.
+
+    Args:
+        sizes: Decode request counts.
+        query_lens: Each query length mapped to the most requests its batches
+            have.
+        max_tokens: The most tokens a graph may have.
+
+    Returns:
+        The graphs as `(num_reqs, query_len)`, by query length, then requests.
+
+    """
+    sizes = sorted(set(sizes))
+    shapes: set[tuple[int, int]] = set()
+    for q, max_reqs in query_lens.items():
+        limit = min(max_reqs, max_tokens // q)
+        reachable = sizes[: bisect.bisect_left(sizes, limit) + 1]
+        shapes.update((min(n, limit), q) for n in reachable if limit >= 1)
+    return sorted(shapes, key=lambda shape: (shape[1], shape[0]))
 
 
 class CUDAGraphMode(enum.Enum):
@@ -404,6 +433,10 @@ class CompilationConfig:
         [vllm.config.CompilationConfig.cudagraph_capture_sizes]
         - [`max_cudagraph_capture_size`]
         [vllm.config.CompilationConfig.max_cudagraph_capture_size]
+        - [`prefill_cudagraph_capture_sizes`]
+        [vllm.config.CompilationConfig.prefill_cudagraph_capture_sizes]
+        - [`decode_cudagraph_capture_sizes`]
+        [vllm.config.CompilationConfig.decode_cudagraph_capture_sizes]
         - [`cudagraph_num_of_warmups`]
         [vllm.config.CompilationConfig.cudagraph_num_of_warmups]
         - [`cudagraph_copy_inputs`]
@@ -649,9 +682,29 @@ class CompilationConfig:
     Only after that, the execution will be recorded, and the recorded
     cudagraph will be used for subsequent runs."""
     cudagraph_capture_sizes: list[int] = None  # type: ignore[assignment]
-    """Sizes to capture cudagraph.
+    """Token sizes for both decode and prefill graphs. Prefer
+    `prefill_cudagraph_capture_sizes` and `decode_cudagraph_capture_sizes`.
     - None (default): capture sizes are inferred from vllm config.
-    - list[int]: capture sizes are specified as given."""
+    - list[int]: the default of both: prefill graphs of these token counts, and
+      decode graphs of `ceil(size / q)` requests at each query length `q`.
+
+    After config resolution it also holds the token counts of the target's and
+    one-token draft decode graphs."""
+    prefill_cudagraph_capture_sizes: list[int] | None = None
+    """Token counts to capture CUDA graphs for batches with a prefill, and for
+    all batches when `cudagraph_mode` is `FULL` or `PIECEWISE`, e.g. `[]` for
+    a decode instance. Adaptive verification's varlen decode batches use them
+    too. None (default): `cudagraph_capture_sizes`."""
+    decode_cudagraph_capture_sizes: list[int] | None = None
+    """Request counts to capture uniform decode CUDA graphs for, e.g. `[]` for
+    a prefill instance. Each runner captures a count `n` at each of its query
+    lengths `q`, i.e. `n * q` tokens: `q = 1 + num_speculative_tokens` for the
+    target model and `q = 1` for EAGLE draft decodes. If neither
+    `cudagraph_capture_sizes` nor `max_cudagraph_capture_size` is set, the
+    latter grows to fit these graphs; a count above the most requests a runner
+    fits in it becomes that many. None (default): `ceil(size / q)` for each of
+    `cudagraph_capture_sizes` and `q` of the target model or 1, and
+    `max_num_seqs`."""
     cudagraph_copy_inputs: bool = False
     """Whether to copy input tensors for
     cudagraph. If the caller can guarantee that the same input buffers

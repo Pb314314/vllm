@@ -262,6 +262,13 @@ vllm serve meta-llama/Llama-3.2-1B \
 
 Then it will only capture cudagraph for the specified sizes. It can be useful to have fine-grained control over the cudagraph capture.
 
+With model runner V2, `prefill_cudagraph_capture_sizes` (in tokens) and `decode_cudagraph_capture_sizes` (in requests) set the graphs for batches with a prefill and for uniform decode batches separately; each defaults to what `cudagraph_capture_sizes` gives it. For example, a prefill instance of a disaggregated deployment can skip decode graphs:
+
+```bash
+vllm serve meta-llama/Llama-3.2-1B \
+  --compilation-config '{"decode_cudagraph_capture_sizes": []}'
+```
+
 ### Full Cudagraph capture
 
 It is possible to include attention as part of the cudagraph if using an attention backend that is cudagraph compatible. This can improve performance in some cases such as decode speed for smaller models or MOEs. See [CUDA Graphs](cuda_graphs.md) for more details.

@@ -22,10 +22,13 @@ from vllm.config import (
     SpeculativeConfig,
     VllmConfig,
 )
-from vllm.config.compilation import CompilationMode, PassConfig
+from vllm.config.compilation import (
+    CompilationMode,
+    PassConfig,
+    decode_cudagraph_shapes,
+)
 from vllm.engine.arg_utils import EngineArgs
 from vllm.platforms import current_platform
-from vllm.utils.math_utils import cdiv
 from vllm.utils.torch_utils import (
     _is_torch_equal_or_newer,
     is_torch_equal,
@@ -573,7 +576,114 @@ def _mock_config_for_cudagraph_sizes(
     )
     config.num_speculative_tokens = VllmConfig.num_speculative_tokens.fget(config)
     config.uniform_decode_query_len = VllmConfig.uniform_decode_query_len.fget(config)
+    config.get_decode_cudagraph_query_lens = (
+        lambda decode_query_len: VllmConfig.get_decode_cudagraph_query_lens(
+            config, decode_query_len
+        )
+    )
+    config._split_cudagraph_capture_sizes = (
+        lambda default_bound: VllmConfig._split_cudagraph_capture_sizes(
+            config, default_bound
+        )
+    )
     return config
+
+
+def test_default_decode_and_prefill_capture_sizes_split_the_shared_sizes():
+    """By default prefill graphs keep the shared token sizes, and decode graphs
+    take the request counts each runner rounded them up to: one token per
+    request (draft decode) and K + 1 (target)."""
+    compilation_config = CompilationConfig(
+        cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE
+    )
+    config = _mock_config_for_cudagraph_sizes(
+        max_num_seqs=8,
+        num_speculative_tokens=3,
+        max_num_batched_tokens=64,
+        compilation_config=compilation_config,
+    )
+
+    VllmConfig._set_cudagraph_sizes(config)
+
+    shared = [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64]
+    resolved = (
+        compilation_config.prefill_cudagraph_capture_sizes,
+        compilation_config.decode_cudagraph_capture_sizes,
+        compilation_config.cudagraph_capture_sizes,
+        compilation_config.max_cudagraph_capture_size,
+    )
+    assert resolved == (shared, [1, 2, 4, 6, 8], sorted({*shared, 6}), 64)
+
+    # Resolving again (e.g. dataclasses.replace) must not change anything.
+    VllmConfig._set_cudagraph_sizes(config)
+    assert resolved == (
+        compilation_config.prefill_cudagraph_capture_sizes,
+        compilation_config.decode_cudagraph_capture_sizes,
+        compilation_config.cudagraph_capture_sizes,
+        compilation_config.max_cudagraph_capture_size,
+    )
+
+
+def test_decode_and_prefill_capture_sizes_extend_the_shared_sizes():
+    """Explicit decode (requests) and prefill (tokens) sizes are kept within the
+    batch limits, and the shared sizes gain the token count of every graph the
+    runners capture: one token per request (draft decode) and K + 1."""
+    compilation_config = CompilationConfig(
+        cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+        prefill_cudagraph_capture_sizes=[16, 48, 128],
+        decode_cudagraph_capture_sizes=[0, 1, 2, 5, 9],
+    )
+    config = _mock_config_for_cudagraph_sizes(
+        max_num_seqs=8,
+        num_speculative_tokens=3,
+        max_num_batched_tokens=64,
+        compilation_config=compilation_config,
+    )
+
+    VllmConfig._set_cudagraph_sizes(config)
+    resolved = (
+        compilation_config.prefill_cudagraph_capture_sizes,
+        compilation_config.decode_cudagraph_capture_sizes,
+        compilation_config.cudagraph_capture_sizes,
+        compilation_config.max_cudagraph_capture_size,
+    )
+    shared = [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64]
+    assert resolved == ([16, 48], [1, 2, 5], sorted({*shared, 5, 20}), 64)
+
+    # Resolving again (e.g. dataclasses.replace) must not change anything.
+    VllmConfig._set_cudagraph_sizes(config)
+    assert resolved == (
+        compilation_config.prefill_cudagraph_capture_sizes,
+        compilation_config.decode_cudagraph_capture_sizes,
+        compilation_config.cudagraph_capture_sizes,
+        compilation_config.max_cudagraph_capture_size,
+    )
+
+
+@pytest.mark.parametrize("max_cudagraph_capture_size", [None, 512])
+def test_decode_capture_sizes_widen_only_a_default_token_bound(
+    max_cudagraph_capture_size,
+):
+    """256 decode requests of K + 1 = 8 tokens need 2048-token graphs, above
+    every platform's default bound: a default bound grows to fit them, a set
+    one caps them."""
+    compilation_config = CompilationConfig(
+        cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+        decode_cudagraph_capture_sizes=[1, 128, 256],
+        max_cudagraph_capture_size=max_cudagraph_capture_size,
+    )
+    config = _mock_config_for_cudagraph_sizes(
+        max_num_seqs=256,
+        num_speculative_tokens=7,
+        max_num_batched_tokens=4096,
+        compilation_config=compilation_config,
+    )
+    bound = max_cudagraph_capture_size or 2048
+
+    for _ in range(2):  # Resolving again (e.g. dataclasses.replace) keeps it.
+        VllmConfig._set_cudagraph_sizes(config)
+        assert compilation_config.max_cudagraph_capture_size == bound
+        assert compilation_config.cudagraph_capture_sizes[-1] == bound
 
 
 @pytest.mark.parametrize("max_num_seqs", [100, 101])
@@ -707,7 +817,7 @@ def test_default_cudagraph_capture_sizes_keep_all_sizes_bounded():
         )
     )
 
-    assert compilation_config.cudagraph_capture_sizes == expected_sizes
+    assert compilation_config.prefill_cudagraph_capture_sizes == expected_sizes
     assert all(
         size <= default_max_graph_size
         for size in compilation_config.cudagraph_capture_sizes
@@ -849,19 +959,14 @@ def test_default_cudagraph_capture_size_caps_tokens():
     )
 
 
-def _widest_covered_request_count(capture_sizes, query_len, max_num_seqs):
-    """Widest request count `CudaGraphManager` can build a decode graph for.
-
-    Mirrors `_init_candidates`: a capture size is rounded up to a multiple of
-    the tier's query length, then dropped once the implied request count runs
-    past `max_num_seqs`.
-    """
-    reachable = [
-        cdiv(size, query_len)
-        for size in capture_sizes
-        if cdiv(size, query_len) <= max_num_seqs
-    ]
-    return max(reachable, default=0)
+def _widest_covered_request_count(compilation_config, query_len, max_num_seqs):
+    """Widest request count a runner of `query_len` captures a decode graph for."""
+    shapes = decode_cudagraph_shapes(
+        compilation_config.decode_cudagraph_capture_sizes,
+        {query_len: max_num_seqs},
+        compilation_config.max_cudagraph_capture_size,
+    )
+    return max((n for n, _ in shapes), default=0)
 
 
 def test_default_cudagraph_capture_sizes_cover_every_dynamic_decode_width():
@@ -887,10 +992,9 @@ def test_default_cudagraph_capture_sizes_cover_every_dynamic_decode_width():
 
     VllmConfig._set_cudagraph_sizes(config)
 
-    sizes = compilation_config.cudagraph_capture_sizes
     # The wide tier only ever runs to a batch of 16, the narrow one to 128.
-    assert _widest_covered_request_count(sizes, 17, 128) >= 16
-    assert _widest_covered_request_count(sizes, 3, 128) == 128
+    assert _widest_covered_request_count(compilation_config, 17, 128) >= 16
+    assert _widest_covered_request_count(compilation_config, 3, 128) == 128
 
 
 def test_dynamic_decode_capture_clamps_configured_width():
@@ -907,9 +1011,8 @@ def test_dynamic_decode_capture_clamps_configured_width():
 
     VllmConfig._set_cudagraph_sizes(config)
 
-    sizes = compilation_config.cudagraph_capture_sizes
-    assert _widest_covered_request_count(sizes, 4, 16) == 16
-    assert 6 not in sizes
+    assert _widest_covered_request_count(compilation_config, 4, 16) == 16
+    assert config.get_decode_cudagraph_query_lens(4) == {4: 16}
 
 
 def test_dynamic_decode_capture_covers_schedule_gap_and_tail():
