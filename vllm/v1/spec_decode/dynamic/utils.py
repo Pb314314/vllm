@@ -146,3 +146,18 @@ def build_dynamic_sd_schedule_lookup(
         )
 
     return dense_schedule
+
+
+def get_dynamic_sd_max_batch_sizes(
+    num_speculative_tokens_per_batch_size: object,
+    vllm_max_batch_size: int,
+    vllm_num_speculative_tokens: int,
+) -> dict[int, int]:
+    """Map each number of draft tokens K in the schedule to the largest batch
+    size it drafts K tokens for."""
+    dense_schedule = build_dynamic_sd_schedule_lookup(
+        num_speculative_tokens_per_batch_size,
+        vllm_max_batch_size=vllm_max_batch_size,
+        vllm_num_speculative_tokens=vllm_num_speculative_tokens,
+    )
+    return {k: b for b, k in enumerate(dense_schedule) if b > 0}

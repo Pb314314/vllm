@@ -548,14 +548,32 @@ class GptOssForCausalLMConfig(VerifyAndUpdateConfig):
         # Increase the max capture size from 512 to 1024 for performance.
         # NOTE(woosuk): This will increase the number of CUDA graphs
         # from 67 to 83.
+        from vllm.platforms import current_platform
+
         compilation_config = vllm_config.compilation_config
-        # Only override when the user has not set either of
-        # cudagraph_capture_sizes or max_cudagraph_capture_size.
-        if (
-            compilation_config.cudagraph_capture_sizes is None
-            and compilation_config.max_cudagraph_capture_size is None
+        use_v2_model_runner = vllm_config.use_v2_model_runner
+        # Only override when the user has not set any capture size, and not on
+        # SM100 with model runner V2, whose defaults are already wider.
+        if all(
+            getattr(compilation_config, name) is None
+            for name in (
+                "cudagraph_capture_sizes",
+                "max_cudagraph_capture_size",
+                "mixed_cudagraph_capture_sizes",
+                "max_mixed_cudagraph_capture_size",
+                "uniform_decode_cudagraph_capture_sizes",
+                "max_uniform_decode_cudagraph_capture_size",
+            )
+        ) and not (
+            use_v2_model_runner and current_platform.is_device_capability_family(100)
         ):
-            compilation_config.max_cudagraph_capture_size = 1024
+            if use_v2_model_runner:
+                compilation_config.max_mixed_cudagraph_capture_size = 1024
+                compilation_config.max_uniform_decode_cudagraph_capture_size = (
+                    1024 // vllm_config.uniform_decode_query_len
+                )
+            else:
+                compilation_config.max_cudagraph_capture_size = 1024
             logger.info(
                 "Overriding max cuda graph capture size to %d for performance.", 1024
             )

@@ -26,11 +26,17 @@ from vllm.transformers_utils.runai_utils import is_runai_obj_uri
 from vllm.triton_utils import HAS_TRITON
 from vllm.utils import random_uuid
 from vllm.utils.hashing import safe_hash
+from vllm.utils.math_utils import cdiv
 
 from .attention import AttentionConfig, HiSparseConfig
 from .aux_output import AuxOutputConfig
 from .cache import CacheConfig
-from .compilation import CompilationConfig, CompilationMode, CUDAGraphMode
+from .compilation import (
+    CompilationConfig,
+    CompilationMode,
+    CUDAGraphMode,
+    uniform_decode_cudagraph_shapes,
+)
 from .device import DeviceConfig
 from .diffusion import DiffusionConfig
 from .ec_manager_config import EncoderCacheManagerConfig
@@ -342,6 +348,32 @@ OPTIMIZATION_LEVEL_TO_CONFIG = {
     OptimizationLevel.O2: OPTIMIZATION_LEVEL_02,
     OptimizationLevel.O3: OPTIMIZATION_LEVEL_03,
 }
+
+
+def _mixed_cudagraph_ladder(max_size: int, dense_head: bool) -> list[int]:
+    """Token counts up to `max_size`: 1, 2, 4 (or every count up to 32 when
+    `dense_head`), then every 8 up to 256, 16 up to 1024, 256 up to 4096 and
+    512 beyond."""
+    head = range(1, 33) if dense_head else (1, 2, 4)
+    ladder = {
+        *head,
+        *range(8, 256, 8),
+        *range(256, 1024, 16),
+        *range(1024, 4096, 256),
+        *range(4096, max_size, 512),
+    }
+    return sorted({s for s in ladder if s < max_size} | {max_size}) if max_size else []
+
+
+def _uniform_decode_cudagraph_ladder(max_reqs: int) -> list[int]:
+    """Request counts up to `max_reqs`: every count up to 32, then a step that
+    doubles each time the count doubles (2 up to 64, 4 up to 128, ...)."""
+    ladder = list(range(1, 33))
+    low, step = 32, 2
+    while low < max_reqs:
+        ladder += range(low + step, 2 * low + 1, step)
+        low, step = 2 * low, 2 * step
+    return sorted({n for n in ladder if n < max_reqs} | {max_reqs}) if max_reqs else []
 
 
 @config(config=ConfigDict(arbitrary_types_allowed=True))
@@ -693,6 +725,41 @@ class VllmConfig:
         the failure this property exists to prevent.
         """
         return 1 + self.num_speculative_tokens
+
+    def get_decode_cudagraph_query_lens(self, decode_query_len: int) -> dict[int, int]:
+        """Query lengths of a target-shaped runner's uniform decode batches.
+
+        Dynamic speculative decoding drafts as many tokens as its schedule gives
+        the batch size, and the step verifying them runs a subset of those
+        requests, so each query length has at most the largest batch size that
+        drafts its number of speculative tokens.
+
+        Args:
+            decode_query_len: The runner's widest decode query length.
+
+        Returns:
+            Each query length mapped to the most requests its batches have.
+
+        """
+        max_num_seqs = self.scheduler_config.max_num_seqs
+        speculative_config = self.speculative_config
+        num_new_sampled_tokens = decode_query_len - self.num_speculative_tokens
+        if (
+            speculative_config is None
+            or not speculative_config.uses_dynamic_speculative_decoding()
+            or num_new_sampled_tokens <= 0
+        ):
+            return {decode_query_len: max_num_seqs}
+        from vllm.v1.spec_decode.dynamic.utils import get_dynamic_sd_max_batch_sizes
+
+        return {
+            k + num_new_sampled_tokens: max_batch_size
+            for k, max_batch_size in get_dynamic_sd_max_batch_sizes(
+                speculative_config.num_speculative_tokens_per_batch_size,
+                vllm_max_batch_size=max_num_seqs,
+                vllm_num_speculative_tokens=self.num_speculative_tokens,
+            ).items()
+        }
 
     @property
     def use_cumem_cudagraph_pool(self) -> bool:
@@ -2432,6 +2499,10 @@ class VllmConfig:
             max_cudagraph_capture_size = (
                 self.compilation_config.max_cudagraph_capture_size
             )
+            legacy_sizes = (
+                max_cudagraph_capture_size is not None
+                or self.compilation_config.cudagraph_capture_sizes is not None
+            )
             # Decode sizes to cover, in tokens. Populated only when the default
             # is computed here, so an explicit capture range is left exactly as
             # configured.
@@ -2625,6 +2696,7 @@ class VllmConfig:
                 )
             # always write back the final sizes
             self.compilation_config.cudagraph_capture_sizes = cudagraph_capture_sizes
+            self._split_cudagraph_capture_sizes(legacy_sizes)
 
         else:
             # no cudagraph in use
@@ -2633,6 +2705,144 @@ class VllmConfig:
 
         # complete the remaining process.
         self.compilation_config.post_init_cudagraph_sizes()
+
+    def _split_cudagraph_capture_sizes(self, legacy_sizes: bool) -> None:
+        """Resolve the mixed (token) and uniform decode (request) capture sizes,
+        each from its own sizes, cap or default and never from the other's, and
+        record every graph's token count in `cudagraph_capture_sizes` and
+        `max_cudagraph_capture_size`.
+
+        Args:
+            legacy_sizes: The deprecated `cudagraph_capture_sizes` or
+                `max_cudagraph_capture_size` was set before resolution.
+
+        """
+        compilation_config = self.compilation_config
+        mixed_sizes = compilation_config.mixed_cudagraph_capture_sizes
+        max_mixed_size = compilation_config.max_mixed_cudagraph_capture_size
+        decode_sizes = compilation_config.uniform_decode_cudagraph_capture_sizes
+        max_decode_size = compilation_config.max_uniform_decode_cudagraph_capture_size
+        uses_split_sizes = any(
+            x is not None
+            for x in (mixed_sizes, max_mixed_size, decode_sizes, max_decode_size)
+        )
+        if not self.use_v2_model_runner:
+            if uses_split_sizes:
+                raise ValueError(
+                    "mixed_cudagraph_capture_sizes, "
+                    "uniform_decode_cudagraph_capture_sizes and their max_* caps "
+                    "need model runner V2."
+                )
+            return
+        if legacy_sizes and not uses_split_sizes:
+            logger.warning_once(
+                "cudagraph_capture_sizes and max_cudagraph_capture_size are "
+                "deprecated with model runner V2. Set the token counts of mixed "
+                "graphs with mixed_cudagraph_capture_sizes or "
+                "max_mixed_cudagraph_capture_size, and the request counts of "
+                "uniform decode graphs with uniform_decode_cudagraph_capture_sizes "
+                "or max_uniform_decode_cudagraph_capture_size."
+            )
+        from vllm.platforms import current_platform
+
+        shared_sizes = compilation_config.cudagraph_capture_sizes
+        shared_max = compilation_config.max_cudagraph_capture_size
+        max_num_seqs = self.scheduler_config.max_num_seqs
+        max_num_tokens = self.scheduler_config.max_num_batched_tokens
+        decode_query_len = self.uniform_decode_query_len
+        try:
+            target_query_lens = self.get_decode_cudagraph_query_lens(decode_query_len)
+        except ValueError:
+            # Validation lives elsewhere; keep the single static width.
+            target_query_lens = {decode_query_len: max_num_seqs}
+        # The deprecated fields, and the defaults off SM100, come from the shared
+        # sizes resolved above.
+        from_shared_sizes = (
+            legacy_sizes and not uses_split_sizes
+        ) or not current_platform.is_device_capability_family(100)
+
+        def explicit(sizes: list[int], limit: int, cap: int | None, name: str):
+            kept = sorted({s for s in sizes if 1 <= s <= limit})
+            if len(kept) < len(set(sizes)):
+                logger.warning(
+                    "Dropping %s from %s: outside [1, %d].",
+                    sorted(set(sizes) - set(kept)),
+                    name,
+                    limit,
+                )
+            if cap is not None and kept and kept[-1] > cap:
+                raise ValueError(
+                    f"{name} holds {kept[-1]}, above "
+                    f"max_{name.removesuffix('s')}={cap}."
+                )
+            return kept
+
+        if mixed_sizes is not None:
+            mixed_sizes = explicit(
+                mixed_sizes,
+                max_num_tokens,
+                max_mixed_size,
+                "mixed_cudagraph_capture_sizes",
+            )
+        elif max_mixed_size is not None or not from_shared_sizes:
+            mixed_sizes = _mixed_cudagraph_ladder(
+                min(8192 if max_mixed_size is None else max_mixed_size, max_num_tokens),
+                dense_head=self.performance_mode == "interactivity",
+            )
+        else:
+            mixed_sizes = list(shared_sizes)
+
+        if decode_sizes is not None:
+            decode_sizes = explicit(
+                decode_sizes,
+                max_num_seqs,
+                max_decode_size,
+                "uniform_decode_cudagraph_capture_sizes",
+            )
+        elif max_decode_size is not None or not from_shared_sizes:
+            decode_sizes = _uniform_decode_cudagraph_ladder(
+                max_num_seqs
+                if max_decode_size is None
+                else min(max_decode_size, max_num_seqs)
+            )
+        else:
+            # The request counts each target query length rounds the shared sizes
+            # up to within the shared bound.
+            decode_sizes = sorted(
+                {
+                    min(cdiv(s, q), max_num_seqs)
+                    for s in shared_sizes
+                    for q in target_query_lens
+                    if cdiv(s, q) * q <= shared_max
+                }
+            )
+
+        # The target's query lengths, and one token per request (draft decodes).
+        query_lens = {**target_query_lens, 1: max_num_seqs}
+        token_sizes = set(mixed_sizes)
+        token_sizes.update(
+            n * q
+            for n, q in uniform_decode_cudagraph_shapes(
+                decode_sizes, query_lens, max_num_tokens
+            )
+        )
+        if legacy_sizes and uses_split_sizes and shared_sizes != sorted(token_sizes):
+            # Matching is fine: it is what a resolved config holds.
+            raise ValueError(
+                "The deprecated cudagraph_capture_sizes and "
+                "max_cudagraph_capture_size cannot be combined with the mixed and "
+                "uniform decode capture sizes; set only the latter."
+            )
+        compilation_config.mixed_cudagraph_capture_sizes = mixed_sizes
+        compilation_config.max_mixed_cudagraph_capture_size = max(
+            mixed_sizes, default=0
+        )
+        compilation_config.uniform_decode_cudagraph_capture_sizes = decode_sizes
+        compilation_config.max_uniform_decode_cudagraph_capture_size = max(
+            decode_sizes, default=0
+        )
+        compilation_config.cudagraph_capture_sizes = sorted(token_sizes)
+        compilation_config.max_cudagraph_capture_size = max(token_sizes, default=0)
 
     def _set_compile_ranges(self):
         """Set the compile ranges for the compilation config."""

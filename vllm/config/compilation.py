@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import bisect
 import enum
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import field, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
@@ -48,6 +49,34 @@ class CompilationMode(enum.IntEnum):
     VLLM_COMPILE = 3
     """Custom vLLM Inductor-based backend with caching, piecewise compilation,
     shape specialization, and custom passes."""
+
+
+def uniform_decode_cudagraph_shapes(
+    sizes: Iterable[int], query_lens: Mapping[int, int], max_tokens: int
+) -> list[tuple[int, int]]:
+    """The uniform decode graphs a runner captures for its request counts.
+
+    A batch is padded to the smallest size that holds it, so a size above a
+    query length's limit becomes the widest graph within it, and any larger
+    size is unreachable.
+
+    Args:
+        sizes: Uniform decode request counts.
+        query_lens: Each query length mapped to the most requests its batches
+            have.
+        max_tokens: The most tokens a graph may have.
+
+    Returns:
+        The graphs as `(num_reqs, query_len)`, by query length, then requests.
+
+    """
+    sizes = sorted(set(sizes))
+    shapes: set[tuple[int, int]] = set()
+    for q, max_reqs in query_lens.items():
+        limit = min(max_reqs, max_tokens // q)
+        reachable = sizes[: bisect.bisect_left(sizes, limit) + 1]
+        shapes.update((min(n, limit), q) for n in reachable if limit >= 1)
+    return sorted(shapes, key=lambda shape: (shape[1], shape[0]))
 
 
 class CUDAGraphMode(enum.Enum):
@@ -404,6 +433,14 @@ class CompilationConfig:
         [vllm.config.CompilationConfig.cudagraph_capture_sizes]
         - [`max_cudagraph_capture_size`]
         [vllm.config.CompilationConfig.max_cudagraph_capture_size]
+        - [`mixed_cudagraph_capture_sizes`]
+        [vllm.config.CompilationConfig.mixed_cudagraph_capture_sizes]
+        - [`max_mixed_cudagraph_capture_size`]
+        [vllm.config.CompilationConfig.max_mixed_cudagraph_capture_size]
+        - [`uniform_decode_cudagraph_capture_sizes`]
+        [vllm.config.CompilationConfig.uniform_decode_cudagraph_capture_sizes]
+        - [`max_uniform_decode_cudagraph_capture_size`]
+        [vllm.config.CompilationConfig.max_uniform_decode_cudagraph_capture_size]
         - [`cudagraph_num_of_warmups`]
         [vllm.config.CompilationConfig.cudagraph_num_of_warmups]
         - [`cudagraph_copy_inputs`]
@@ -651,7 +688,46 @@ class CompilationConfig:
     cudagraph_capture_sizes: list[int] = None  # type: ignore[assignment]
     """Sizes to capture cudagraph.
     - None (default): capture sizes are inferred from vllm config.
-    - list[int]: capture sizes are specified as given."""
+    - list[int]: capture sizes are specified as given.
+
+    Deprecated with model runner V2, which takes
+    `mixed_cudagraph_capture_sizes` (tokens) and
+    `uniform_decode_cudagraph_capture_sizes` (requests) instead. There, these
+    token counts set the mixed sizes and, rounded up to whole requests of the
+    target model's query length, the uniform decode sizes. After config
+    resolution it holds the token count of every captured graph."""
+    mixed_cudagraph_capture_sizes: list[int] | None = None
+    """Token counts of the CUDA graphs for batches that are not uniform decode
+    batches: prefill and mixed prefill-decode batches, and also decode-only
+    batches whose requests have different query lengths. With adaptive
+    verification that covers every decode batch of the target model, which
+    takes FULL graphs of the sizes up to `max_num_seqs * (1 +
+    num_speculative_tokens)`. When `cudagraph_mode` is FULL or PIECEWISE, all
+    batches use these graphs. `[]` captures none, and sizes above
+    `max_num_batched_tokens` are dropped. None (default): a ladder up to
+    `max_mixed_cudagraph_capture_size`."""
+    max_mixed_cudagraph_capture_size: int | None = Field(default=None, ge=0)
+    """Largest token count of a mixed CUDA graph. None (default): 8192 on SM100
+    GPUs, otherwise the platform's default `max_cudagraph_capture_size`; at most
+    `max_num_batched_tokens`. More and wider graphs take memory from the KV
+    cache and lengthen startup."""
+    uniform_decode_cudagraph_capture_sizes: list[int] | None = None
+    """Request counts of the FULL CUDA graphs for uniform decode batches, whose
+    requests all have the same query length `q`: `1 + num_speculative_tokens`
+    for the target model, 1 for draft decodes. A runner captures `n` requests as
+    `n * q` tokens, for each `n` up to the most requests its batches have and
+    `max_num_batched_tokens // q`. With adaptive verification the target
+    model's decode batches take mixed graphs instead, so these sizes only apply
+    to draft decodes. `[]` captures none. None (default): a ladder up to
+    `max_uniform_decode_cudagraph_capture_size`."""
+    max_uniform_decode_cudagraph_capture_size: int | None = Field(default=None, ge=0)
+    """Largest request count of a uniform decode CUDA graph. None (default):
+    `max_num_seqs` on SM100 GPUs, otherwise the most requests that the
+    platform's default `max_cudagraph_capture_size` holds at the target model's
+    query lengths. Graphs no wider than the widest mixed graph mostly reuse its
+    memory in the shared graph pool. Wider graphs, and FULL graphs of models
+    with large per-token buffers (e.g. DeepSeek's indexer at a long
+    `max_model_len`), take memory from the KV cache."""
     cudagraph_copy_inputs: bool = False
     """Whether to copy input tensors for
     cudagraph. If the caller can guarantee that the same input buffers
@@ -708,6 +784,11 @@ class CompilationConfig:
     scenarios with small max_num_seqs, and limits capture of large graphs that
     increase startup time and memory usage. Uniform decode sizes are appended
     only within this default ceiling.
+
+    Deprecated with model runner V2, which takes
+    `max_mixed_cudagraph_capture_size` (tokens) and
+    `max_uniform_decode_cudagraph_capture_size` (requests) instead. After config
+    resolution it holds the token count of the widest captured graph.
     """
 
     dynamic_shapes_config: DynamicShapesConfig = field(
@@ -1496,10 +1577,8 @@ class CompilationConfig:
         # MRV1 adjusts cudagraph sizes to be a multiple of uniform_decode_query_len
         # to avoid: https://github.com/vllm-project/vllm/issues/28207 and temp-fix:
         # https://github.com/vllm-project/vllm/issues/28207#issuecomment-3504004536
-        # Will be removed in the near future when we have separate cudagraph capture
-        # sizes for decode and mixed prefill-decode.
-        # MRV2 handles cudagraph capture sizing in cudagraph_utils.py
-        # and doesn't need below: https://github.com/vllm-project/vllm/pull/45953
+        # MRV2 takes separate uniform decode and mixed capture sizes and doesn't
+        # need below: https://github.com/vllm-project/vllm/pull/45953
         if (
             not use_v2_model_runner
             and cudagraph_mode.decode_mode() == CUDAGraphMode.FULL
