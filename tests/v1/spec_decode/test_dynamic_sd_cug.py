@@ -81,14 +81,15 @@ def _create_vllm_config_for_dsd(
     else:
         speculative_config.num_speculative_tokens_per_batch_size = None
     vllm_config.speculative_config = speculative_config
-    # Resolve the decode and prefill sizes from the shared ones.
+    # Resolve both kinds of sizes from the deprecated shared ones.
     vllm_config.uniform_decode_query_len = max_decode_query_len
     vllm_config.get_decode_cudagraph_query_lens = (
         lambda decode_query_len: VllmConfig.get_decode_cudagraph_query_lens(
             vllm_config, decode_query_len
         )
     )
-    VllmConfig._split_cudagraph_capture_sizes(vllm_config, default_bound=False)
+    VllmConfig._split_cudagraph_capture_sizes(vllm_config, legacy_sizes=True)
+    compilation_config.post_init_cudagraph_sizes()
 
     return vllm_config
 

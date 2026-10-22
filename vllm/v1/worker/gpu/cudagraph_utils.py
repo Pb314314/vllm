@@ -25,7 +25,7 @@ from vllm.compilation.cudagraph_pool import (
 )
 from vllm.compilation.wrapper import TorchCompileWithNoGuardsWrapper
 from vllm.config import VllmConfig, set_current_vllm_config
-from vllm.config.compilation import CUDAGraphMode, decode_cudagraph_shapes
+from vllm.config.compilation import CUDAGraphMode, uniform_decode_cudagraph_shapes
 from vllm.distributed.parallel_state import (
     get_pp_group,
     graph_capture,
@@ -150,11 +150,13 @@ class CudaGraphManager:
     """Captures and dispatches the CUDA graphs of one runner.
 
     A uniform decode graph runs `n` requests of `q` tokens each, for each of the
-    runner's `decode_query_lens` `q` and each request count `n` of
-    `decode_cudagraph_capture_sizes`, up to the most requests `decode_query_lens`
-    maps `q` to. Other batches take token-keyed graphs of
-    `prefill_cudagraph_capture_sizes`, as do all batches when one routine runs
-    every batch (`cudagraph_mode` FULL or PIECEWISE).
+    runner's `decode_query_lens` `q` and each `n` of
+    `uniform_decode_cudagraph_capture_sizes` up to the most requests `q` maps to.
+    Every other batch takes a token-keyed graph of
+    `mixed_cudagraph_capture_sizes`: batches with a prefill, decode batches of
+    mixed query lengths (including every decode batch with `varlen_decode`), and
+    all batches when one routine runs every batch (`cudagraph_mode` FULL or
+    PIECEWISE).
     """
 
     def __init__(
@@ -277,32 +279,27 @@ class CudaGraphManager:
 
     def _init_candidates(self) -> None:
         """Build the descriptors to capture and the dispatch tables."""
-        if not self.cudagraph_mode:
+        if self.cudagraph_mode == CUDAGraphMode.NONE:
             return
 
         compilation_config = self.compilation_config
-        prefill_sizes = sorted(compilation_config.prefill_cudagraph_capture_sizes or [])
-        decode_sizes = compilation_config.decode_cudagraph_capture_sizes or []
-        max_decode_tokens = (
-            self.max_num_reqs * self.vllm_config.uniform_decode_query_len
-        )
+        mixed_sizes = sorted(compilation_config.mixed_cudagraph_capture_sizes or [])
+        decode_sizes = compilation_config.uniform_decode_cudagraph_capture_sizes or []
+        max_decode_tokens = self.max_num_reqs * self.decode_query_len
         decode_mode = self.cudagraph_mode.decode_mode()
         mixed_mode = self.cudagraph_mode.mixed_mode()
         separate_decode_routine = self.cudagraph_mode.separate_routine()
-        max_num_tokens = min(
-            self.vllm_config.scheduler_config.max_num_batched_tokens,
-            compilation_config.max_cudagraph_capture_size,
-        )
+        max_num_tokens = self.vllm_config.scheduler_config.max_num_batched_tokens
 
         decode_descs: list[BatchExecutionDescriptor] = []
         token_keyed_descs: list[BatchExecutionDescriptor] = []
         # With one routine for every batch, decode batches take token-keyed graphs.
-        capture_decode = separate_decode_routine and bool(decode_mode)
+        capture_decode = separate_decode_routine and decode_mode != CUDAGraphMode.NONE
         if capture_decode and self.varlen_decode:
             # Varlen decode graphs take any mix of 1..decode_query_len tokens per
             # request, worst case 1 token per request (or max_num_reqs)
             for num_tokens, num_active_loras in product(
-                prefill_sizes, self.lora_capture_cases
+                mixed_sizes, self.lora_capture_cases
             ):
                 if num_tokens <= max_decode_tokens:
                     token_keyed_descs.append(
@@ -315,7 +312,7 @@ class CudaGraphManager:
                         )
                     )
         elif capture_decode:
-            decode_shapes = decode_cudagraph_shapes(
+            decode_shapes = uniform_decode_cudagraph_shapes(
                 decode_sizes, self.decode_max_reqs, max_num_tokens
             )
             for (n, q), num_active_loras in product(
@@ -334,7 +331,7 @@ class CudaGraphManager:
                     decode_descs.append(ubatch_desc)
 
         for num_tokens, num_active_loras in product(
-            prefill_sizes, self.lora_capture_cases
+            mixed_sizes, self.lora_capture_cases
         ):
             # recoverSSM cannot capture a dummy query wider than its workspace.
             if mixed_mode and (
@@ -452,8 +449,8 @@ class CudaGraphManager:
             if self.ubatch_runner is not None:
                 # Join parked threads on failure to avoid blocking later captures.
                 stack.callback(self.ubatch_runner.abort_pending_run)
-            # Capture in order: PIECEWISE first, then FULL. PIECEWISE has larger
-            # activations so FULL activations should fit in already allocated
+            # Capture in order: PIECEWISE first, then FULL. FULL graphs no wider
+            # than the widest PIECEWISE graph fit in its already allocated
             # buffers in the graph pool.
             for mode in [CUDAGraphMode.PIECEWISE, CUDAGraphMode.FULL]:
                 if mode not in self._capture_descs:
@@ -550,17 +547,15 @@ class CudaGraphManager:
         """
         effective_loras = self._resolve_effective_loras(num_active_loras)
         if self._graphs_captured and num_tokens > 0:
+            candidates = self._candidates.get((num_tokens, effective_loras), [])
             if uniform_token_count is not None:
                 decode_descs = self._decode_descs.get(
-                    (uniform_token_count, effective_loras, num_ubatches)
+                    (uniform_token_count, effective_loras, num_ubatches), []
                 )
                 n = cdiv(num_tokens, uniform_token_count)
-                if decode_descs is not None and n < len(decode_descs):
-                    desc = decode_descs[n]
-                    assert desc.num_reqs is not None
-                    if desc.num_reqs >= num_reqs:
-                        return desc
-            for desc in self._candidates.get((num_tokens, effective_loras), ()):
+                if n < len(decode_descs):
+                    candidates = [decode_descs[n], *candidates]
+            for desc in candidates:
                 if _is_compatible(
                     desc,
                     num_reqs,

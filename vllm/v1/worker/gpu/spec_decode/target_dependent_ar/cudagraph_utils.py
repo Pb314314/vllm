@@ -68,8 +68,9 @@ class SpeculatorCudaGraphManager(CudaGraphManager):
                     for desc in descs
                 }
             )
-            # A draft step for b requests proposes K = schedule[b] tokens, so each
-            # K only needs the graphs that batches up to its largest b pad to.
+            # A draft step proposes as many tokens as the schedule gives its batch
+            # size, so each token count only needs the graphs that batches up to
+            # its largest batch size pad to.
             max_reqs_per_k = {
                 k: num_reqs[min(bisect.bisect_left(num_reqs, b), len(num_reqs) - 1)]
                 for k, b in get_dynamic_sd_max_batch_sizes(

@@ -319,13 +319,19 @@ def _create_decode_vllm_config(
     use_kda_recoverssm: bool = False,
     decode_sizes: list[int] | None = None,
 ) -> MagicMock:
-    compilation_config = CompilationConfig(
-        cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
-        cudagraph_capture_sizes=capture_sizes,
-        decode_cudagraph_capture_sizes=decode_sizes,
-    )
-    compilation_config.max_cudagraph_capture_size = capture_sizes[-1]
-    compilation_config.post_init_cudagraph_sizes()
+    if decode_sizes is None:
+        # The deprecated shared sizes set both kinds of graphs.
+        compilation_config = CompilationConfig(
+            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+            cudagraph_capture_sizes=capture_sizes,
+        )
+        compilation_config.max_cudagraph_capture_size = capture_sizes[-1]
+    else:
+        compilation_config = CompilationConfig(
+            cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE,
+            mixed_cudagraph_capture_sizes=capture_sizes,
+            uniform_decode_cudagraph_capture_sizes=decode_sizes,
+        )
 
     vllm_config = MagicMock(spec=VllmConfig)
     vllm_config.compilation_config = compilation_config
@@ -342,20 +348,20 @@ def _create_decode_vllm_config(
         speculative_config.uses_dynamic_speculative_decoding.return_value = True
         speculative_config.num_speculative_tokens_per_batch_size = dynamic_spec_schedule
         vllm_config.speculative_config = speculative_config
-    _split_capture_sizes(vllm_config)
+    _split_capture_sizes(vllm_config, legacy_sizes=decode_sizes is None)
     return vllm_config
 
 
-def _split_capture_sizes(vllm_config: MagicMock) -> None:
-    """Resolve the decode and prefill sizes from the shared ones, as config
-    resolution does."""
+def _split_capture_sizes(vllm_config: MagicMock, legacy_sizes: bool) -> None:
+    """Resolve the mixed and uniform decode sizes, as config resolution does."""
     vllm_config.uniform_decode_query_len = vllm_config.num_speculative_tokens + 1
     vllm_config.get_decode_cudagraph_query_lens = (
         lambda decode_query_len: VllmConfig.get_decode_cudagraph_query_lens(
             vllm_config, decode_query_len
         )
     )
-    VllmConfig._split_cudagraph_capture_sizes(vllm_config, default_bound=False)
+    VllmConfig._split_cudagraph_capture_sizes(vllm_config, legacy_sizes)
+    vllm_config.compilation_config.post_init_cudagraph_sizes()
 
 
 def _make_spec_decode_manager(
@@ -402,8 +408,8 @@ def _make_spec_decode_manager(
 
 @pytest.mark.parametrize("decode_query_len", [1, 3])
 def test_decode_capture_sizes_are_request_counts(monkeypatch, decode_query_len):
-    """Each runner captures the decode sizes at its own query length, and the
-    prefill sizes alone back mixed batches; `[]` captures none of a kind."""
+    """Each runner captures the uniform decode sizes at its own query length,
+    and the mixed sizes alone back other batches; `[]` captures none of a kind."""
     monkeypatch.setattr(
         gpu_cudagraph_utils,
         "get_pp_group",
@@ -413,12 +419,13 @@ def test_decode_capture_sizes_are_request_counts(monkeypatch, decode_query_len):
         gpu_cudagraph_utils.current_platform, "get_global_graph_pool", lambda: None
     )
 
-    def capture_plan(decode_sizes, prefill_sizes):
+    def capture_plan(decode_sizes, mixed_sizes):
         vllm_config = _create_decode_vllm_config(
             [1, 2, 4, 8, 16, 24], num_speculative_tokens=2
         )
-        vllm_config.compilation_config.decode_cudagraph_capture_sizes = decode_sizes
-        vllm_config.compilation_config.prefill_cudagraph_capture_sizes = prefill_sizes
+        compilation_config = vllm_config.compilation_config
+        compilation_config.uniform_decode_cudagraph_capture_sizes = decode_sizes
+        compilation_config.mixed_cudagraph_capture_sizes = mixed_sizes
         manager = gpu_cudagraph_utils.CudaGraphManager(
             vllm_config=vllm_config,
             device=torch.device("cpu"),
@@ -444,8 +451,8 @@ def test_decode_capture_sizes_are_request_counts(monkeypatch, decode_query_len):
 
 def test_decode_graph_must_hold_every_request(monkeypatch):
     """A decode batch with more requests than its tokens imply (prefill context
-    parallel shards the tokens) takes no decode graph too small for it, so DP
-    ranks with different request counts still pad to the same token count."""
+    parallel shards the tokens) takes no decode graph too small for it, and
+    falls back to a token-keyed graph."""
     manager = _make_spec_decode_manager(
         monkeypatch, decode_query_len=1, capture_sizes=[1, 2, 4, 8, 16], max_num_seqs=16
     )

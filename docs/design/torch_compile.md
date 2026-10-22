@@ -262,11 +262,16 @@ vllm serve meta-llama/Llama-3.2-1B \
 
 Then it will only capture cudagraph for the specified sizes. It can be useful to have fine-grained control over the cudagraph capture.
 
-With model runner V2, `prefill_cudagraph_capture_sizes` (in tokens) and `decode_cudagraph_capture_sizes` (in requests) set the graphs for batches with a prefill and for uniform decode batches separately; each defaults to what `cudagraph_capture_sizes` gives it. For example, a prefill instance of a disaggregated deployment can skip decode graphs:
+With model runner V2, `cudagraph_capture_sizes` and `max_cudagraph_capture_size` are deprecated. Two independent pairs set the graphs instead, and setting one never changes the other:
+
+- `uniform_decode_cudagraph_capture_sizes` and `max_uniform_decode_cudagraph_capture_size`, in **requests**: FULL graphs for uniform decode batches, whose requests all have the same query length (1, or 1 + `num_speculative_tokens`). A graph of `n` requests at query length `q` holds `n * q` tokens.
+- `mixed_cudagraph_capture_sizes` and `max_mixed_cudagraph_capture_size`, in **tokens**: graphs for every other batch, including decode-only batches whose requests have different query lengths. With adaptive verification, every decode batch of the target model takes these graphs, so they need to reach `max_num_seqs * (1 + num_speculative_tokens)` tokens to cover all of them.
+
+Set either a list or a cap; a cap generates a default ladder of sizes up to it. Larger caps and longer lists capture more and wider graphs, which take memory from the KV cache and lengthen startup. Uniform decode graphs no wider than the widest mixed graph mostly reuse its memory in the shared graph pool. For example, a prefill instance of a disaggregated deployment can skip uniform decode graphs:
 
 ```bash
 vllm serve meta-llama/Llama-3.2-1B \
-  --compilation-config '{"decode_cudagraph_capture_sizes": []}'
+  --compilation-config '{"uniform_decode_cudagraph_capture_sizes": []}'
 ```
 
 ### Full Cudagraph capture

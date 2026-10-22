@@ -46,8 +46,8 @@ class DecoderReplayCudaGraphManager(CudaGraphManager):
             )
         compilation.cudagraph_capture_sizes = sizes
         compilation.max_cudagraph_capture_size = max(sizes)
-        compilation.prefill_cudagraph_capture_sizes = sizes
-        compilation.decode_cudagraph_capture_sizes = []
+        compilation.mixed_cudagraph_capture_sizes = sizes
+        compilation.uniform_decode_cudagraph_capture_sizes = []
         replay_config = copy(vllm_config)
         replay_config.compilation_config = compilation
         super().__init__(
