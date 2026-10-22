@@ -707,9 +707,10 @@ class CompilationConfig:
     `max_num_batched_tokens` are dropped. None (default): a ladder up to
     `max_mixed_cudagraph_capture_size`."""
     max_mixed_cudagraph_capture_size: int | None = Field(default=None, ge=0)
-    """Largest token count of a mixed CUDA graph. None (default): the platform's
-    default `max_cudagraph_capture_size`; at most `max_num_batched_tokens`. More
-    and wider graphs take memory from the KV cache and lengthen startup."""
+    """Largest token count of a mixed CUDA graph. None (default): 8192 on SM100
+    GPUs, otherwise the platform's default `max_cudagraph_capture_size`; at most
+    `max_num_batched_tokens`. More and wider graphs take memory from the KV
+    cache and lengthen startup."""
     uniform_decode_cudagraph_capture_sizes: list[int] | None = None
     """Request counts of the FULL CUDA graphs for uniform decode batches, whose
     requests all have the same query length `q`: `1 + num_speculative_tokens`
@@ -720,12 +721,13 @@ class CompilationConfig:
     to draft decodes. `[]` captures none. None (default): a ladder up to
     `max_uniform_decode_cudagraph_capture_size`."""
     max_uniform_decode_cudagraph_capture_size: int | None = Field(default=None, ge=0)
-    """Largest request count of a uniform decode CUDA graph. None (default): the
-    most requests that the platform's default `max_cudagraph_capture_size` holds
-    at the target model's query lengths. Graphs no wider than the widest mixed
-    graph mostly reuse its memory in the shared graph pool. Wider graphs, and
-    FULL graphs of models with large per-token buffers (e.g. DeepSeek's indexer
-    at a long `max_model_len`), take memory from the KV cache."""
+    """Largest request count of a uniform decode CUDA graph. None (default):
+    `max_num_seqs` on SM100 GPUs, otherwise the most requests that the
+    platform's default `max_cudagraph_capture_size` holds at the target model's
+    query lengths. Graphs no wider than the widest mixed graph mostly reuse its
+    memory in the shared graph pool. Wider graphs, and FULL graphs of models
+    with large per-token buffers (e.g. DeepSeek's indexer at a long
+    `max_model_len`), take memory from the KV cache."""
     cudagraph_copy_inputs: bool = False
     """Whether to copy input tensors for
     cudagraph. If the caller can guarantee that the same input buffers

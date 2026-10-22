@@ -499,6 +499,7 @@ def test_should_split():
         (None, 0, 2048, CUDAGraphMode.FULL_AND_PIECEWISE, ValidationError),
     ],
 )
+@pytest.mark.usefixtures("off_sm100")
 def test_cudagraph_sizes_post_init(
     cudagraph_capture_sizes,
     max_cudagraph_capture_size,
@@ -645,6 +646,19 @@ def test_mixed_and_uniform_decode_capture_sizes_are_independent(
     )
 
 
+def test_sm100_default_capture_sizes_cover_max_num_seqs_at_any_query_length(
+    monkeypatch,
+):
+    """On SM100, uniform decode graphs reach max_num_seqs requests, whatever
+    the number of speculative tokens, and mixed graphs reach 8192 tokens."""
+    compilation_config = _resolve_capture_sizes(monkeypatch, sm100=True)
+
+    assert compilation_config.max_mixed_cudagraph_capture_size == 8192
+    assert compilation_config.max_uniform_decode_cudagraph_capture_size == 1024
+    assert _widest_covered_request_count(compilation_config, 8, 1024) == 1024
+    assert compilation_config.max_cudagraph_capture_size == 8192
+
+
 def test_deprecated_capture_sizes_set_both_kinds(monkeypatch):
     """The deprecated shared sizes are the mixed sizes and, rounded up to whole
     requests of K + 1 = 8 tokens, the uniform decode sizes. They cannot be
@@ -682,6 +696,16 @@ def test_capture_sizes_above_their_cap_raise(monkeypatch, kwargs):
         _resolve_capture_sizes(monkeypatch, sm100=True, **kwargs)
 
 
+@pytest.fixture
+def off_sm100(monkeypatch):
+    """The default sizes these tests pin are the ones kept off SM100; model
+    runner V2 defaults to wider graphs on SM100."""
+    monkeypatch.setattr(
+        current_platform, "is_device_capability_family", lambda *args, **kw: False
+    )
+
+
+@pytest.mark.usefixtures("off_sm100")
 @pytest.mark.parametrize("max_num_seqs", [100, 101])
 def test_default_cudagraph_capture_sizes_cover_off_stride_max_num_seqs(
     max_num_seqs: int,
@@ -701,6 +725,7 @@ def test_default_cudagraph_capture_sizes_cover_off_stride_max_num_seqs(
     assert max_num_seqs in compilation_config.cudagraph_capture_sizes
 
 
+@pytest.mark.usefixtures("off_sm100")
 @pytest.mark.parametrize(
     ("max_num_seqs", "num_speculative_tokens", "widest_is_captured"),
     [
@@ -726,7 +751,8 @@ def test_default_cudagraph_capture_sizes_cover_off_stride_max_num_seqs(
 def test_default_cudagraph_capture_size_respects_platform_ceiling(
     max_num_seqs, num_speculative_tokens, widest_is_captured
 ):
-    """Uniform decode coverage must not raise the platform default ceiling.
+    """Off SM100, uniform decode coverage must not raise the platform default
+    ceiling.
 
     A decode step presents up to `max_num_seqs * (1 + num_speculative_tokens)`
     tokens. Off-stride sizes within the platform ceiling are captured exactly.
@@ -764,6 +790,7 @@ def test_default_cudagraph_capture_size_respects_platform_ceiling(
     ) is widest_is_captured
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_default_cudagraph_capture_sizes_keep_all_sizes_bounded():
     """Keep both token and uniform-decode grids under the platform default.
 
@@ -858,6 +885,7 @@ def test_real_vllm_config_caps_widest_ngram_decode_batch():
     )
 
 
+@pytest.mark.usefixtures("off_sm100")
 @pytest.mark.parametrize("max_num_seqs", [8, 32, 256, 300, 512, 600, 1024, 2048])
 def test_default_cudagraph_capture_size_unchanged_without_speculation(max_num_seqs):
     """Without speculation the default must reproduce the historical formula.
@@ -892,6 +920,7 @@ def test_default_cudagraph_capture_size_unchanged_without_speculation(max_num_se
     )
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_single_speculative_token_does_not_raise_default_capture_size():
     """One speculative token must not raise the default capture ceiling.
 
@@ -923,6 +952,7 @@ def test_single_speculative_token_does_not_raise_default_capture_size():
     assert 600 not in compilation_config.cudagraph_capture_sizes
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_default_cudagraph_capture_size_caps_tokens():
     """The ceiling remains a platform-bounded token count.
 
@@ -965,6 +995,7 @@ def _widest_covered_request_count(compilation_config, query_len, max_num_seqs):
     return max((n for n, _ in shapes), default=0)
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_default_cudagraph_capture_sizes_cover_every_dynamic_decode_width():
     """Each scheduled draft width needs sizes over the range it applies to.
 
@@ -993,6 +1024,7 @@ def test_default_cudagraph_capture_sizes_cover_every_dynamic_decode_width():
     assert _widest_covered_request_count(compilation_config, 3, 128) == 128
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_dynamic_decode_capture_clamps_configured_width():
     compilation_config = CompilationConfig(
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE
@@ -1011,6 +1043,7 @@ def test_dynamic_decode_capture_clamps_configured_width():
     assert config.get_decode_cudagraph_query_lens(4) == {4: 16}
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_dynamic_decode_capture_covers_schedule_gap_and_tail():
     compilation_config = CompilationConfig(
         cudagraph_mode=CUDAGraphMode.FULL_AND_PIECEWISE
@@ -1030,6 +1063,7 @@ def test_dynamic_decode_capture_covers_schedule_gap_and_tail():
     assert 34 in sizes
 
 
+@pytest.mark.usefixtures("off_sm100")
 def test_default_cudagraph_capture_size_still_clamped_by_token_budget():
     """Decode coverage does not override the `max_num_batched_tokens` clamp.
 
@@ -1075,9 +1109,10 @@ def test_default_cudagraph_capture_size_still_clamped_by_token_budget():
     reason="Skip if static graph mode is not supported",
 )
 @pytest.mark.parametrize(
-    ("is_blackwell", "expected_max_size"), [(False, 512), (True, 1024)]
+    ("is_blackwell", "expected_max_size"), [(False, 512), (True, 2048)]
 )
 def test_blackwell_cudagraph_default(is_blackwell, expected_max_size):
+    # On SM100, mixed graphs reach min(8192, max_num_batched_tokens) tokens.
     vllm_config = VllmConfig()
     vllm_config.model_config = MagicMock(enforce_eager=False)
     vllm_config.scheduler_config = SchedulerConfig(

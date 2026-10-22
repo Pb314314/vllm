@@ -2743,6 +2743,8 @@ class VllmConfig:
                 "uniform decode graphs with uniform_decode_cudagraph_capture_sizes "
                 "or max_uniform_decode_cudagraph_capture_size."
             )
+        from vllm.platforms import current_platform
+
         shared_sizes = compilation_config.cudagraph_capture_sizes
         shared_max = compilation_config.max_cudagraph_capture_size
         max_num_seqs = self.scheduler_config.max_num_seqs
@@ -2753,6 +2755,11 @@ class VllmConfig:
         except ValueError:
             # Validation lives elsewhere; keep the single static width.
             target_query_lens = {decode_query_len: max_num_seqs}
+        # The deprecated fields, and the defaults off SM100, come from the shared
+        # sizes resolved above.
+        from_shared_sizes = (
+            legacy_sizes and not uses_split_sizes
+        ) or not current_platform.is_device_capability_family(100)
 
         def explicit(sizes: list[int], limit: int, cap: int | None, name: str):
             kept = sorted({s for s in sizes if 1 <= s <= limit})
@@ -2777,14 +2784,12 @@ class VllmConfig:
                 max_mixed_size,
                 "mixed_cudagraph_capture_sizes",
             )
-        elif max_mixed_size is not None:
+        elif max_mixed_size is not None or not from_shared_sizes:
             mixed_sizes = _mixed_cudagraph_ladder(
-                min(max_mixed_size, max_num_tokens),
+                min(8192 if max_mixed_size is None else max_mixed_size, max_num_tokens),
                 dense_head=self.performance_mode == "interactivity",
             )
         else:
-            # The defaults, like the deprecated fields, are the shared sizes
-            # resolved above.
             mixed_sizes = list(shared_sizes)
 
         if decode_sizes is not None:
@@ -2794,9 +2799,11 @@ class VllmConfig:
                 max_decode_size,
                 "uniform_decode_cudagraph_capture_sizes",
             )
-        elif max_decode_size is not None:
+        elif max_decode_size is not None or not from_shared_sizes:
             decode_sizes = _uniform_decode_cudagraph_ladder(
-                min(max_decode_size, max_num_seqs)
+                max_num_seqs
+                if max_decode_size is None
+                else min(max_decode_size, max_num_seqs)
             )
         else:
             # The request counts each target query length rounds the shared sizes
