@@ -892,10 +892,18 @@ def weak_ref_tensors(
     """
     if isinstance(tensors, torch.Tensor):
         return weak_ref_tensor(tensors)
+    # Recurse into nested lists/tuples: a model output like
+    # (hidden_states, [aux_hidden_states, ...]) must not keep the aux strong.
     if isinstance(tensors, list):
-        return [weak_ref_tensor(t) for t in tensors]
+        return [
+            weak_ref_tensors(t) if isinstance(t, (list, tuple)) else weak_ref_tensor(t)
+            for t in tensors
+        ]
     if isinstance(tensors, tuple):
-        return tuple(weak_ref_tensor(t) for t in tensors)
+        return tuple(
+            weak_ref_tensors(t) if isinstance(t, (list, tuple)) else weak_ref_tensor(t)
+            for t in tensors
+        )
 
     # For IntermediateTensors used in pipeline parallelism
     from vllm.sequence import IntermediateTensors
