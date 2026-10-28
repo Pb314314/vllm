@@ -5,6 +5,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 import random
 import socket
@@ -16,9 +17,11 @@ from pathlib import Path
 import torch
 from flashinfer.testing import bench_gpu_time_with_cupti
 from pipeline_bench import (
+    MIB,
     MODELS,
     correctness,
     distribution,
+    indexer_module,
     init_workspace_manager,
     make_inputs,
     plan,
@@ -41,6 +44,10 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--rows", type=int, default=8192)
     parser.add_argument("--trials", type=int, default=5)
+    parser.add_argument("--models", default="v4,v41-c1")
+    parser.add_argument("--variants", default="single-auto,single-ds,final-512")
+    parser.add_argument("--production-helper", action="store_true")
+    parser.add_argument("--strict-cold-l2", action="store_true")
     args = parser.parse_args()
     args.out.parent.mkdir(parents=True, exist_ok=True)
     init_workspace_manager(torch.device("cuda"))
@@ -59,9 +66,16 @@ def main():
         pipeline_source_sha256=hashlib.sha256(
             Path(__file__).with_name("pipeline_bench.py").read_bytes()
         ).hexdigest(),
+        native_sha256={
+            artifact.name: hashlib.sha256(artifact.read_bytes()).hexdigest()
+            for pattern in ("_C_stable_libtorch*.so", "_deepselect_C*.so")
+            for artifact in Path(vllm.__file__).parent.glob(pattern)
+        },
+        production_planner=args.production_helper,
+        strict_cold_l2=args.strict_cold_l2,
         graph_pool_policy="one persistent private pool per arm; replay serially",
     )
-    for model in ("v4", "v41-c1"):
+    for model in args.models.split(","):
         heads, width, compression, _ = MODELS[model]
         for context in (8192, 32768):
             x = make_inputs(
@@ -80,9 +94,27 @@ def main():
             )
             graphs = {}
             checks = {}
-            for variant in ("single-auto", "single-ds", "final-512"):
+            for variant in args.variants.split(","):
                 backend, chunks = plan(args.rows, width, variant)
-                fn = runner(x, backend, chunks, 512, width * compression, "none")
+                helper = None
+                if args.production_helper and variant.startswith(("final-", "ds-")):
+                    backend, ranges = indexer_module.varlen_decode_plan(
+                        args.rows,
+                        width,
+                        "deep_select" if variant.startswith("ds-") else "auto",
+                        int(variant.rsplit("-", 1)[1]) * MIB,
+                    )
+                    if ranges:
+                        chunks, helper = ranges, indexer_module._varlen_decode_rows
+                fn = runner(
+                    x,
+                    backend,
+                    chunks,
+                    512,
+                    width * compression,
+                    "none",
+                    production_helper=helper,
+                )
                 check = correctness(x, fn, chunks, 512, "none")
                 assert not any(
                     check[name]
@@ -132,6 +164,19 @@ def main():
                             repeat_iters=100,
                             use_cuda_graph=False,
                             cold_l2_cache=cache == "cold",
+                            **(
+                                {
+                                    "l2_flush_size_mb": math.ceil(
+                                        2
+                                        * torch.cuda.get_device_properties(
+                                            0
+                                        ).L2_cache_size
+                                        / MIB
+                                    )
+                                }
+                                if args.strict_cold_l2 and cache == "cold"
+                                else {}
+                            ),
                         )
                         timing = distribution([s * 1000 for s in samples])
                         medians.setdefault((variant, cache), []).append(

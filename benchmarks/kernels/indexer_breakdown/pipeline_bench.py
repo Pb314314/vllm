@@ -503,6 +503,17 @@ def benchmark(fn, args):
                     repeat_iters=args.repeat,
                     use_cuda_graph=True,
                     cold_l2_cache=cold == "cold",
+                    **(
+                        {
+                            "l2_flush_size_mb": math.ceil(
+                                2
+                                * torch.cuda.get_device_properties(0).L2_cache_size
+                                / MIB
+                            )
+                        }
+                        if args.strict_cold_l2 and cold == "cold"
+                        else {}
+                    ),
                 )
                 trials.append(distribution([v * 1000 for v in samples]))
             medians = [t["median_us"] for t in trials]
@@ -644,6 +655,7 @@ def main():
         "--candidate", choices=["none", "mask", "select"], default="none"
     )
     parser.add_argument("--cache", default="warm,cold")
+    parser.add_argument("--strict-cold-l2", action="store_true")
     parser.add_argument("--repeat", type=int, default=100)
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--eager", action="store_true")
@@ -657,7 +669,7 @@ def main():
     parser.add_argument(
         "--production-helper",
         action="store_true",
-        help="Use the active checkout's varlen planner/helper for final-* arms",
+        help="Use the active planner/helper for final-* and ds-* budget arms",
     )
     parser.add_argument("--stages", action="store_true")
     parser.add_argument(
@@ -705,6 +717,12 @@ def main():
         argv=os.sys.argv,
         source_file=__file__,
         source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+        strict_cold_l2=args.strict_cold_l2,
+        public_cold_flush_bytes=(
+            math.ceil(2 * torch.cuda.get_device_properties(0).L2_cache_size / MIB) * MIB
+            if args.strict_cold_l2
+            else None
+        ),
     )
     args.out.parent.mkdir(parents=True, exist_ok=True)
     completed = set()
@@ -772,13 +790,15 @@ def main():
                                 backend, chunks = plan(rows, width, mapped)
                                 production_helper = None
                                 if args.production_helper and variant.startswith(
-                                    "final-"
+                                    ("final-", "ds-")
                                 ):
                                     backend, production_chunks = (
                                         indexer_module.varlen_decode_plan(
                                             rows,
                                             width,
-                                            "auto",
+                                            "deep_select"
+                                            if variant.startswith("ds-")
+                                            else "auto",
                                             int(variant.rsplit("-", 1)[1]) * MIB,
                                         )
                                     )

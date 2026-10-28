@@ -1,0 +1,90 @@
+{
+  "event": "experiments_stopped_before_pr_completion",
+  "time_utc": "2026-10-28T20:26:53.829137+00:00",
+  "reason": "User requested completing PR before additional experiments",
+  "job_id": 40645,
+  "files": [
+    {
+      "file": "budget_graph_replay_v2.jsonl",
+      "bytes": 118166,
+      "sha256": "a605d01fcdbe4b7a3979668c61e886a66df6874a554f3bc6f4ee10b71b1612d0",
+      "records": 120,
+      "statuses": {
+        "ok": 120
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_candidate.jsonl",
+      "bytes": 1437711,
+      "sha256": "5df5ac3440dcfe3562dd2796e46c5c248e184ff74ef9e873391fc27f9580160e",
+      "records": 192,
+      "statuses": {
+        "ok": 192
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_core.jsonl",
+      "bytes": 2448870,
+      "sha256": "db607bf6cfeeb951f6b99b63b6bb2a351f5081132a86a1a5550a9df67cb5d61e",
+      "records": 366,
+      "statuses": {
+        "ok": 366
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_full.jsonl",
+      "bytes": 748519,
+      "sha256": "2788adb0ab2f43d4612708992085a532a2f382167df82e9ec06085985dd3a47c",
+      "records": 112,
+      "statuses": {
+        "ok": 112
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_interleaved_8192.jsonl",
+      "bytes": 1060955,
+      "sha256": "fecf5c0911197fc8c76ec465c70b69f04999cf8cd49872a66ad172a7e957052d",
+      "records": 405,
+      "statuses": {
+        "ok": 404,
+        "noisy": 1
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_long.jsonl",
+      "bytes": 978995,
+      "sha256": "59dc2da3ff755069724537ac058cfd6cc9c625d94ccfa7b07ad6f52e2c2fad83",
+      "records": 144,
+      "statuses": {
+        "ok": 144
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_mask.jsonl",
+      "bytes": 680514,
+      "sha256": "e7c6c6150a9d84277d2140ba3e5109cf49ab6b64f9c6d37281ef3234f4488618",
+      "records": 96,
+      "statuses": {
+        "ok": 96
+      },
+      "malformed_lines": []
+    },
+    {
+      "file": "pipeline_budget_v2_smoke.jsonl",
+      "bytes": 68117,
+      "sha256": "972d0b3e059ea4e379ece899d629c8e98e320683333a34e93e9afa2beb48f45f",
+      "records": 12,
+      "statuses": {
+        "ok": 12
+      },
+      "malformed_lines": []
+    }
+  ],
+  "resume_note": "Completed pipeline keys remain resumable; graph/interleaved partial runs require a distinct continuation file or explicit key-aware resume."
+}
