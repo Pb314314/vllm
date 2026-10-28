@@ -8,6 +8,28 @@
 
 ---
 
+## 执行补充（2026-10-28，开始测量前的代码核对）
+
+- 历史 PR 基线是 `cff6224872`（本分支产品代码），最终分块 PR #64138 是
+  `4e5b4f8ce9`（基于 `b4a0830f66`）。`553747b1df` 是单独的旧 1 GiB 原型，
+  不能替代最终 PR 的 512 MiB、预算内保留旧路径规则。结果分别记录源码和编译产物版本。
+- V4.1 的 dense `SparseAttnIndexer` 与紧凑 candidate `SparseMQAIndexer` 分开测量。
+  本分支 sparse-logits 默认关闭、仅支持 MXFP4 opt-in；核查的 main `9bc1c8b4fe`
+  则在满足条件时自动开启（FP8/MXFP4）。不能把默认路径的版本变化当成优化收益。
+- PW 必须分别核对 breakable eager decorator 和 compiled/Inductor partition 边界。
+  `splitting_ops=[]` 不保证把 indexer 放进 PW，必须记录最终实际 mode。
+- 分开报告容量分配、有效列流量、live peak 和 pool reserved。upcast 分配全容量，
+  但只转换有效列；不得要求 reserved 与 live-peak 公式误差小于 2%。
+  两个 allocator segments 不能直接推断为同次调用的两个 FP32 tensor。
+- large-row eager 分块保留 2048/4096/8192 行关键点；已有 host 成本说明不能忽略。
+  新增 V4.1 的 85/86、170/171 行预算边界（以及相邻合法 graph shape）。
+- `seq_lens` 不得超过 capacity；压缩模型的 per-query 可见长度应由未压缩位置除以
+  compress ratio 得到，不应一律假设压缩位置每 query 增加 1。
+- `torch` 精确参考用于判定各实现的误差，不预设 persistent 的所有分支精确。
+  候选生产 dispatch 若改变选集，只报告实验建议，不在本分支改产品行为。
+
+---
+
 ## 0. 规则（必须遵守）
 
 1. **不改产品代码的行为，不推上游，不开 PR。** 在分支 `cg/indexer-topk-breakdown` 上工作（已基于 `cg/pr-a-v1` 建好，本计划即 `benchmarks/kernels/indexer_breakdown/PLAN.md`），
@@ -26,7 +48,7 @@
 ## 1. 必须先理解的事实（已核实，附位置）
 
 | 事实 | 位置 |
-|---|---|
+| --- | --- |
 | SM100 decode 路径：`fp8_fp4_paged_mqa_logits` 一次性产出 `[rows, stride≈max_model_len/compress]` 的 **BF16** logits | `vllm/model_executor/layers/sparse_attn_indexer.py` ~L880 |
 | 若 `topk_backend != "deep_select"` 或 DCP>1，`as_fp32_logits` 再整份造一个 **FP32 副本**（同 stride） | 同文件 L304–L327、~L891 |
 | 这不是"量化"，是 **BF16→FP32 upcast**：一次额外 kernel（读 2B 写 4B/元素）+ 一份 4B/元素 的显存 | 同上 |
@@ -61,6 +83,7 @@
 目标：用实测回答三个问题，每个问题给出 "结论 + 证据（snapshot/数字）"。
 
 ### 1.1 静态确认：PIECEWISE 下 indexer 是否在 graph 外
+
 - 对每个使用 indexer 的模型路径（DSv3.2 `deepseek_v32/attention.py`、DSv4 `deepseek_v4/attention.py`、DSv4.1、GLM5next、HY-v4），
   确认 indexer 是通过哪个 custom op 被调用的（`vllm::sparse_attn_indexer` 本身，还是被包在 `vllm::deepseek_v4_attention` 里），
   以及该 op 是否在最终 `splitting_ops` 里。
@@ -68,24 +91,29 @@
 - 输出：表格「模型 → indexer 所在 op → 默认是否 split → 哪些 flag 会改变这一点」。
 
 ### 1.2 动态确认：capture 时的 pool 归属
+
 用一个小但能复现的配置（建议 DSv4-Flash，TP 按集群可用，`max_model_len` 先用 256K 以节省时间，再在 1M 上复测一次关键点）：
+
 - A：`cudagraph_mode=PIECEWISE`；B：`FULL_DECODE_ONLY`；C：`FULL_AND_PIECEWISE`（PR #2 默认）。
 - 在 graph capture 阶段开 `torch.cuda.memory._record_memory_history(max_entries=...)`，capture 完 dump snapshot。
 - 按 stack frame 归因：哪些 segment 属于 graph pool、来自 `fp8_fp4_paged_mqa_logits` / `as_fp32_logits` 的分配在 A/B/C 各自是多少。
 - 预期：A 中 indexer logits 不在任何 graph pool；B/C 的 FULL pool 里有，大小 ≈ `rows × stride × (2 + 4)`。若不符，记录并解释。
 
 ### 1.3 PIECEWISE / eager 的运行时峰值（风险，不是常驻）
+
 - 在 A 模式下，跑 (a) 超出 4096-token decode 预算、退回 PIECEWISE 的大 uniform decode（如 1024 req × q=8），
   (b) 含大量 decode 行的 mixed batch。测 `torch.cuda.max_memory_allocated()` 相对 step 前的增量。
 - 与 profiling 预留（512 MB dummy）对比，给出 "运行时峰值 − profiling 预留" 的差额随 rows × ctx 的表。
 - 结论要说明：在默认 `gpu_memory_utilization` 下是否会 OOM（实际 KV 已占满的情况下跑一次，看是否 OOM）。
 
 ### 1.4 解释 "两个 4104 MiB segment"
+
 - 4096 rows × 262144 × 4 B = 4096 MiB；多出的 8 MiB 是否来自 DeepGEMM 的对齐 stride（打印 `logits.stride(0)`）。
 - 为什么是**两个**：候选假设 ——（a）两种 capture size 的 FP32 副本无法复用同一块；（b）DSpark/AV 的两次 forward；
   （c）BF16 释放后 FP32 分配因 caching allocator 的 block 规则无法复用而新开 segment。用 1.2 的 snapshot 的 alloc/free 时间线确认。
 
 ### 1.5 显存公式并验证
+
 - 给出公式 `peak_bytes(rows, width) = rows × stride(width) × (2 + 4·[upcast]) + workspace(backend)`，
   以及有分块时 `chunk_rows × …`。在 rows ∈ {512, 1024, 2048, 4096}、width ∈ {64K, 256K} 上用实测 pool 增量验证（误差 < 2%）。
 
@@ -96,7 +124,7 @@
 从各模型的 HF config 与 vLLM 代码中**读出**（不要凭记忆）每类 indexer 层的参数，写成 `indexer_breakdown/SHAPES.md`：
 
 | 模型 | 层类型 | indexer heads × head_dim | `index_topk` | compress ratio | 默认/典型 max_model_len | logits 宽度 | 是否有 candidate 两级选择 | Q/KV dtype（fp8 / mxfp4） | 每层 forward 的 indexer 层数 |
-|---|---|---|---|---|---|---|---|---|---|
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 
 至少覆盖：DeepSeek-V3.2、DeepSeek-V4-Flash、DeepSeek-V4（Pro，若有）、DeepSeek-V4.1-Flash、GLM5next、HY-v4。
 同一模型内维度不同的层要分开列（例如 DSv4 的 compress 4 层 vs 其他层）。
@@ -115,7 +143,7 @@ heads/head_dim 只影响 logits GEMM（Phase 3.5 的组合测量要用）。
 每个方案的计时 = 方案内所有 kernel 之和，并**分别记录每个 kernel 的时间**：
 
 | 方案 | 步骤 |
-|---|---|
+| --- | --- |
 | `DS-bf16` | deep_select(BF16) |
 | `UP+COOP` | as_fp32_logits → cooperative_topk（仅 rows ≤ 64 合法） |
 | `UP+PERS` | as_fp32_logits → persistent_topk |
@@ -133,15 +161,16 @@ heads/head_dim 只影响 logits GEMM（Phase 3.5 的组合测量要用）。
   小 rows 时 launch/cluster-launch 开销差别大）。
 - **L2 状态**：(a) warm（logits 刚写完，模拟 GEMM 紧接 top-k）；(b) cold（测前用 ≥ 2×L2 大小的 buffer flush）。生产更接近 warm-partial，两者都报。
 - **显存**：
-  - 方案额外分配的峰值字节：`torch.cuda.reset_peak_memory_stats()` 后测 `max_memory_allocated` 增量（不含输入 logits 本身）。
-  - **graph pool 增量**：在新的 private pool 里 capture 该方案，记录 `memory_reserved` 增量（这才是 FULL graph 下常驻的成本）。
-  - 记录 deep_select 是否有内部 workspace（读它的 C++ 接口或用 snapshot 看）。
+    - 方案额外分配的峰值字节：`torch.cuda.reset_peak_memory_stats()` 后测 `max_memory_allocated` 增量（不含输入 logits 本身）。
+    - **graph pool 增量**：在新的 private pool 里 capture 该方案，记录 `memory_reserved` 增量（这才是 FULL graph 下常驻的成本）。
+    - 记录 deep_select 是否有内部 workspace（读它的 C++ 接口或用 snapshot 看）。
 - **正确性**：每个配置和 `torch` 参考比较——index **集合**相等（顺序无关），越界位置为 -1，无重复；
   对有并列值的情况记录"集合不同但被选值的多重集合相同"的比例（并列导致的差异可以接受，但要统计）。
 
 ### 3.3 形状网格（按优先级，超时从低优先级裁剪）
 
-**P0（必须全测）**
+#### P0（必须全测）
+
 - `rows`：**在 cooperative 阈值附近加密**：1,2,3,4,5,6,7,8,10,12,14,16,20,24,28,32,40,48,56,60,62,63,64,65,66,72,80,96,112,128，
   再加 160,192,256,320,384,512,640,768,1024,1536,2048,3072,4096,6144,8192。
   并标注每个 rows 对应的 (requests, q)：q ∈ {1,2,3,4,6,8}（K=0,1,2,3,5,7），即 rows = requests × q。
@@ -149,13 +178,14 @@ heads/head_dim 只影响 logits GEMM（Phase 3.5 的组合测量要用）。
 - `topk`：Phase 2 表里出现的每个值（预期至少 512 / 1024 / 2048）。
 - logits **capacity（stride）**：Phase 2 中每个模型/层的 `max_model_len/compress`（例如 1M/4=256K、128K、160K 等），并加 64K、32K。
 - **实际行长分布**（决定 kernel 走哪条路径，非常重要）：
-  - `short`：所有行长 ≈ 4K；`mid`：≈ 32K；`long`：≈ 128K；`full`：= capacity；
-  - `ragged`：行长在 [1K, capacity] 对数均匀；
-  - spec decode 结构：同一 request 的 q 行长度依次 +1（`_row_ends` 的规则）。
+    - `short`：所有行长 ≈ 4K；`mid`：≈ 32K；`long`：≈ 128K；`full`：= capacity；
+    - `ragged`：行长在 [1K, capacity] 对数均匀；
+    - spec decode 结构：同一 request 的 q 行长度依次 +1（`_row_ends` 的规则）。
 - **`persistent_topk` 的 `max_seq_len` 参数**：分别用 (a) 实际 batch 最大行长，(b) capture 时会烤进 graph 的值。
   先从代码/打印确认 FULL graph capture 时 `attn_metadata_narrowed.max_seq_len` 实际是多少，再按真实值测。
 
-**P1**
+#### P1
+
 - **logits 值分布**（radix/select 类 kernel 对值分布和并列敏感）：(a) `randn`；(b) **真实 logits**：在 Phase 1 的模型跑一次 decode，
   hook 下 2–3 个 indexer 层的 BF16 logits（不同层、不同 ctx 长度），存成 `.pt`，用它们（按需平铺到目标 rows）重测 P0 中的关键点
   （rows ∈ {1,8,32,64,65,128,512,1024,4096} × 主要 capacity）。如果和 randn 结论不同，**以真实 logits 为准**。
@@ -166,22 +196,25 @@ heads/head_dim 只影响 logits GEMM（Phase 3.5 的组合测量要用）。
   "总延迟（含多次 launch + 每块 `get_paged_mqa_logits_metadata`）" 和 "峰值/pool 显存"。分块下 FP32 副本变小，
   cooperative/persistent 的显存劣势会缩小——要看分块后 deep_select 是否仍然更优。
 
-**P2（有时间再做）**
+#### P2（有时间再做）
+
 - DCP>1 路径（强制 FP32）：只需确认方案集合和 rows/ctx 的缩放，不需要全网格。
 - H100/H200（若有节点）：只有 cooperative vs persistent vs per_row（无 deep_select），rows 网格同 P0。
 
 ### 3.4 运行组织
+
 - 方案顺序在每个形状内随机交错（A/B/C/A/B/C…），避免温漂偏向某一方案。
 - 每 ~200 个配置做一次同一 "哨兵配置"（如 rows=64、256K、topk=2048、`UP+PERS`）的复测，检测时钟漂移，偏差 > 3% 时记录并重跑上一段。
 - 粗估：P0 约 45 rows × 3 topk × ~5 capacity × 6 长度分布 × 6 方案 × 2 执行方式 × 2 L2 ≈ 9.7 万次测量点，
   每点 ~0.1–0.3 s → 3–8 h，**太多**。按以下方式裁剪到 ~2.5 h：
-  - L2 cold 只在 rows ∈ {1,16,64,256,1024,4096} 上做；
-  - eager 只在 rows ≤ 128 上做（大 rows 时 launch 开销可忽略，用 graph replay 即可）；
-  - `UP+PERROW`、`UP+FI` 只在 rows ∈ {1,8,64,512,4096} 上做；
-  - capacity 每个模型只取其最大值 + 64K。
+    - L2 cold 只在 rows ∈ {1,16,64,256,1024,4096} 上做；
+    - eager 只在 rows ≤ 128 上做（大 rows 时 launch 开销可忽略，用 graph replay 即可）；
+    - `UP+PERROW`、`UP+FI` 只在 rows ∈ {1,8,64,512,4096} 上做；
+    - capacity 每个模型只取其最大值 + 64K。
   先跑一个 5 分钟的"计时探针"估算每点耗时，再定裁剪，并把裁剪决定写进 `PROGRESS.md`。
 
 ### 3.5 组合测量：一层 indexer decode 的完整成本
+
 对 Phase 2 表中的每个主要（模型, 层）组合，在 rows ∈ {8, 64, 65, 256, 512, 1024, 4096} 上测完整流水线：
 `fp8_fp4_paged_mqa_logits` → [candidate] → [upcast] → top-k，包含真实 KV cache 内容（随机 fp8/mxfp4 即可）与真实 block_table。
 目的：(a) top-k 方案的差异占整层 indexer 时间的比例；(b) warm-L2 的真实效果；(c) × 该模型 indexer 层数 = 每 step 的总差异（µs/step）。
@@ -228,7 +261,7 @@ decode batch requests ∈ {1, 8, 64, 256, 512}，ctx ∈ {8K, 128K}，对比 `au
 ## 时间表（总计 8 h）
 
 | Phase | 上限 |
-|---|---|
+| --- | --- |
 | 0 环境与基线 | 0:30 |
 | 1 显存机制 | 1:30 |
 | 2 形状盘点 | 0:30 |

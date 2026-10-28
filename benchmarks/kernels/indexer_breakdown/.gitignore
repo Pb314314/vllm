@@ -1,0 +1,11 @@
+# Small raw measurements and reference metadata belong to this experiment.
+!*.json
+!results/*.json
+!results/*.jsonl
+
+# Keep snapshots and process output on the node; report their locations.
+*.pickle
+*.pkl
+*.pt
+*.log
+__pycache__/
