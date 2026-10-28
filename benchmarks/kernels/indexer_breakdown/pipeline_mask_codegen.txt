@@ -1,0 +1,52 @@
+cache: DCGAGMFDCW6D6R7SMDFG3ZX3PKJDV33HO7PD3BP436ALAKW2FT6Q
+ptx_sha256: 57e858dc39c795f169f8e86d4e9d42d668e22ced2cb961dc48047a2e5b985702
+cubin_sha256: 7113a49e21644a64e8eaaed7ffbc9778c35eecd2df8673f81876abc96ca62069
+
+Resource usage:
+ Common:
+  GLOBAL:0
+ Function _mask_candidates_kernel:
+  REG:17 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:952 TEXTURE:0 SURFACE:0 SAMPLER:0
+	@%p9 st.global.b16 [ %rd4 + 0 ], { %rs10 };
+	@%p10 st.global.b16 [ %rd5 + 0 ], { %rs10 };
+	@%p11 st.global.b16 [ %rd6 + 0 ], { %rs10 };
+	@%p12 st.global.b16 [ %rd7 + 0 ], { %rs10 };
+	@%p13 st.global.b16 [ %rd8 + 0 ], { %rs10 };
+	@%p14 st.global.b16 [ %rd9 + 0 ], { %rs10 };
+	@%p15 st.global.b16 [ %rd10 + 0 ], { %rs10 };
+	@%p16 st.global.b16 [ %rd11 + 0 ], { %rs10 };
+        /*0740*/               @P4 STG.E.U16 desc[UR10][R2.64+0x2], R6 ;        /* 0x0000020602004986 */
+        /*07b0*/               @P0 STG.E.U16 desc[UR10][R2.64+0x6], R5 ;        /* 0x0000060502000986 */
+        /*07d0*/               @P2 STG.E.U16 desc[UR10][R2.64+0x8], R6 ;        /* 0x0000080602002986 */
+        /*07e0*/               @P4 STG.E.U16 desc[UR10][R2.64+0x4], R4 ;        /* 0x0000040402004986 */
+        /*07f0*/               @P1 STG.E.U16 desc[UR10][R2.64+0xa], R7 ;        /* 0x00000a0702001986 */
+        /*0800*/               @P5 STG.E.U16 desc[UR10][R2.64+0xc], R8 ;        /* 0x00000c0802005986 */
+        /*0810*/               @P6 STG.E.U16 desc[UR10][R2.64], R0 ;            /* 0x0000000002006986 */
+        /*0840*/                   STG.E.U16 desc[UR10][R2.64+0xe], R0 ;        /* 0x00000e0002007986 */
+
+cache: CVPZHQK6XVG4KD25YHP5QEG4ABZTST5UQX7IZM7NTSNVWRVMV5LQ
+ptx_sha256: 5ddedb27207ff92d95582b132dde4e94c8fbf5a795a88c791830b616e8003404
+cubin_sha256: 6c32b75b7a589c241c24c0225f2c172dc698938f7e672ece5507d25ef4bfcd16
+
+Resource usage:
+ Common:
+  GLOBAL:0
+ Function _mask_candidates_kernel:
+  REG:22 STACK:0 SHARED:0 LOCAL:0 CONSTANT[0]:952 TEXTURE:0 SURFACE:0 SAMPLER:0
+	@%p9 st.global.b32 [ %rd5 + 0 ], { %r2 };
+	@%p10 st.global.b32 [ %rd6 + 0 ], { %r2 };
+	@%p11 st.global.b32 [ %rd7 + 0 ], { %r2 };
+	@%p12 st.global.b32 [ %rd8 + 0 ], { %r2 };
+	@%p13 st.global.b32 [ %rd9 + 0 ], { %r2 };
+	@%p14 st.global.b32 [ %rd10 + 0 ], { %r2 };
+	@%p15 st.global.b32 [ %rd11 + 0 ], { %r2 };
+	@%p16 st.global.b32 [ %rd12 + 0 ], { %r2 };
+        /*0760*/               @P4 STG.E desc[UR10][R2.64+0x4], R9 ;           /* 0x0000040902004986 */
+        /*07f0*/               @P0 STG.E desc[UR10][R2.64+0xc], R11 ;          /* 0x00000c0b02000986 */
+        /*0800*/               @P4 STG.E desc[UR10][R2.64+0x8], R7 ;           /* 0x0000080702004986 */
+        /*0810*/               @P2 STG.E desc[UR10][R2.64+0x800], R9 ;         /* 0x0008000902002986 */
+        /*0820*/               @P1 STG.E desc[UR10][R2.64+0x804], R13 ;        /* 0x0008040d02001986 */
+        /*0830*/               @P5 STG.E desc[UR10][R2.64+0x808], R15 ;        /* 0x0008080f02005986 */
+        /*0840*/               @P6 STG.E desc[UR10][R2.64], R5 ;               /* 0x0000000502006986 */
+        /*0870*/                   STG.E desc[UR10][R2.64+0x80c], R5 ;         /* 0x00080c0502007986 */
+

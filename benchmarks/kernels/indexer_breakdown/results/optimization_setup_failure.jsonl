@@ -1,0 +1,1 @@
+{"status": "rejected_setup", "reason": "Nested cuGraphLaunch during profile helper capture is unsupported; corrected helper to capture fn directly. No performance recorded.", "log": "optimization_schedule.log", "utc": "2026-10-28T16:19Z"}

@@ -3,6 +3,9 @@
 ## Source and runtime identity
 
 - Experiment branch: `cg/indexer-topk-breakdown`, starting plan `d84086a863`.
+- After user clarification, that branch is only the plan input. Experiment
+  publication uses `cg/indexer-topk-breakdown-results`; the same product
+  baseline and worktree are retained.
 - Historical product code: `cff6224872ad24b10c224bc4186778dcd90a1b21`.
   Only benchmark/report files change in this experiment branch.
 - Final chunk-policy reference: PR #64138, `4e5b4f8ce9`, based on `b4a0830f66`.
@@ -20,6 +23,11 @@
 - `_deepselect_C.abi3.so` MD5: `edbdb13ef0ec0a900d54cf7dd858a6cd`.
 - Import check: PyTorch `2.14.0+cu132`, Triton `3.8.0`, FlashInfer `0.7.2`,
   DeepSelect extension available. Full package list: `environment-freeze.txt`.
+- CUPTI was absent initially; installed `cupti-python==13.4.0` via `uv pip`.
+  Its dependency resolution installed `cuda-bindings==13.4.4` and
+  `nvidia-cuda-cupti==13.4.92`; torch remains `2.14.0+cu132`. Both benchmark
+  workers verified actual CUPTI kernel activities; no event-timing fallback
+  is accepted. The package freeze reflects the environment after this install.
 
 ## Initial probe host
 
@@ -34,6 +42,8 @@
 ## Dedicated nodes
 
 - Slurm 40469: one exclusive GB200 node for kernel workers, requested 8 hours.
+- Allocation started 09:04:02 UTC on `gb200-rack1-04`; top-k GPU0, pipeline
+  GPU1, coordinator's existing default-grid smoke GPU2 (finished).
 - Slurm 40470: one exclusive GB200 node for model/memory work, requested 6 hours.
 - Node identities and actual start/end times are recorded by each worker.
 - Initial queue estimates were about one hour; probes execute on idle GPUs
@@ -50,3 +60,17 @@
 - BF16 ties and approximate top-k behavior are measured rather than assumed
   equivalent. Exact-reference disagreements are retained in raw results.
 - No new production dispatch rule is applied in this branch.
+- Historical FULL capture passes the **uncompressed** configured model length
+  as the persistent selector's host `max_seq_len`: runner line 2280, indexer
+  metadata line 1768, dense call line 933. Core grids use `width * compression`
+  for that scalar. Actual compressed row lengths remain separate device data.
+
+## Final integration
+
+Measurements finished before 16:35 UTC. The kernel reservation was released
+at 16:35:41 UTC after all worker GPU contexts exited. Final code checks move
+portable synchronization/cache/statistic calls to `torch.accelerator`, as
+required by the repository, while retaining CUDA-specific graph and allocator
+snapshot APIs. Raw measurements and archived runtime source hashes are not
+rewritten by this source cleanup; the native operators and arithmetic are
+unchanged. Optional model-forward/serving/accuracy sweeps were not run.

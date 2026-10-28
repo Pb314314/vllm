@@ -1,0 +1,120 @@
+Opening GPU coredump: /home/bopang/cg-project/design/idx-breakdown-cache/topk/debug/fi_expand_coredump_gb200-rack1-04.936766.1793187854
+[Current focus set to CUDA kernel 0, grid 42, cluster (4091,0,0), cluster dim (1,1,1), block (4091,0,0), thread (608,0,0), device 0, sm 12, warp 16, lane 0]
+
+CUDA Exception: Warp Illegal Address
+The exception was triggered at PC 0x328dde050  void flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false>(float const*, int*, int*, int*, int*, int*, int, int, int, int, int)  (fast_topk_clusters_exact.cuh:175 in _ZN10flashinfer8sampling17fast_topk_cuda_v4IfLi1ELb0EEENS0_11TopkResultsEPKT_PKiPNS0_16PackedCachedDataEiiii inlined from fast_topk_clusters_exact.cuh:526)
+#0  0x0000000328dde0d0 in flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false><<<(4096,1,1),(1024,1,1)>>> () at /workspace/include/flashinfer/topk_common.cuh:38 in _ZN10flashinfer8sampling15RadixTopKTraitsIfE9ToOrderedEf inlined from fast_topk_clusters_exact.cuh:177
+warning: 38	/workspace/include/flashinfer/topk_common.cuh: No such file or directory
+R2             0x40fff800          1090516992
+R3             0x4                 4
+R4             0x415fb180          1096790400
+R5             0x2                 2
+R12            0x260               608
+R13            0x8017ec00          2149051392
+Dump of assembler code from 0x328ddd100 to 0x328ddd900:
+   0x0000000328ddd100 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+0>:	Cannot access memory at address 0x328ddd100
+Opening GPU coredump: /home/bopang/cg-project/design/idx-breakdown-cache/topk/debug/fi_expand_coredump_gb200-rack1-04.936766.1793187854
+[Current focus set to CUDA kernel 0, grid 42, cluster (4091,0,0), cluster dim (1,1,1), block (4091,0,0), thread (608,0,0), device 0, sm 12, warp 16, lane 0]
+
+CUDA Exception: Warp Illegal Address
+The exception was triggered at PC 0x328dde050  void flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false>(float const*, int*, int*, int*, int*, int*, int, int, int, int, int)  (fast_topk_clusters_exact.cuh:175 in _ZN10flashinfer8sampling17fast_topk_cuda_v4IfLi1ELb0EEENS0_11TopkResultsEPKT_PKiPNS0_16PackedCachedDataEiiii inlined from fast_topk_clusters_exact.cuh:526)
+#0  0x0000000328dde0d0 in flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false><<<(4096,1,1),(1024,1,1)>>> () at /workspace/include/flashinfer/topk_common.cuh:38 in _ZN10flashinfer8sampling15RadixTopKTraitsIfE9ToOrderedEf inlined from fast_topk_clusters_exact.cuh:177
+warning: 38	/workspace/include/flashinfer/topk_common.cuh: No such file or directory
+Dump of assembler code from 0x328ddd200 to 0x328ddd800:
+   0x0000000328ddd200 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+256>:	Cannot disassemble instruction at pc 0x328ddd200
+   0x0000000328ddd210 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+272>:	S2R R7,SR_TID.X
+   0x0000000328ddd220 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+288>:	ISETP.GE.AND P0,PT,R7,UR7,PT
+   0x0000000328ddd230 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+304>:	@P0 EXIT
+   0x0000000328ddd240 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+320>:	LOP3.LUT R6,RZ,R7,RZ,0x33,!PT
+   0x0000000328ddd250 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+336>:	BSSY.RECONVERGENT B0,0x328ddd7f0
+   0x0000000328ddd260 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+352>:	SHF.R.S32.HI R0,RZ,0x1f,R15
+   0x0000000328ddd270 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+368>:	IMAD.MOV.U32 R5,RZ,RZ,RZ
+   0x0000000328ddd280 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+384>:	IADD3 R6,P0,PT,R6,UR7,RZ
+   0x0000000328ddd290 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+400>:	ISETP.GE.U32.AND P1,PT,R6,0x1c00,PT
+   0x0000000328ddd2a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+416>:	IMAD.X R11,RZ,RZ,-0x1,P0
+   0x0000000328ddd2b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+432>:	SHF.R.U64 R10,R6,0xa,R11
+   0x0000000328ddd2c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+448>:	ISETP.GE.U32.AND.EX P1,PT,R11,RZ,PT,P1
+   0x0000000328ddd2d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+464>:	IADD3 R10,P2,PT,R10,0x1,RZ
+   0x0000000328ddd2e0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+480>:	LOP3.LUT R22,R10,0x7,RZ,0xc0,!PT
+   0x0000000328ddd2f0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+496>:	LEA.HI.X R11,R11,RZ,RZ,0x16,P2
+   0x0000000328ddd300 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+512>:	ISETP.NE.U32.AND P0,PT,R22,RZ,PT
+   0x0000000328ddd310 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+528>:	ISETP.NE.AND.EX P0,PT,RZ,RZ,PT,P0
+   0x0000000328ddd320 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+544>:	@!P1 BRA 0x328ddd7e0
+   0x0000000328ddd330 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+560>:	LDCU.64 UR4,c[0x0][0x388]
+   0x0000000328ddd340 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+576>:	IADD3 R19,P1,PT,R4,R7,RZ
+   0x0000000328ddd350 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+592>:	IMAD.IADD R12,R8,0x1,R7
+   0x0000000328ddd360 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+608>:	LOP3.LUT R11,R11,0x7fffff,RZ,0xc0,!PT
+   0x0000000328ddd370 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+624>:	LOP3.LUT R13,R10,0xfffffff8,RZ,0xc0,!PT
+   0x0000000328ddd380 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+640>:	IMAD.X R2,R9,0x1,R5,P1
+   0x0000000328ddd390 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+656>:	LEA R14,P2,R19,UR4,0x2
+   0x0000000328ddd3a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+672>:	IADD3 R14,P1,PT,R14,0x4000,RZ
+   0x0000000328ddd3b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+688>:	LEA.HI.X R19,R19,UR5,R2,0x2,P2
+   0x0000000328ddd3c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+704>:	IMAD.X R19,RZ,RZ,R19,P1
+   0x0000000328ddd3d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+720>:	IADD3 R16,P5,PT,R7.reuse,0x800,RZ
+   0x0000000328ddd3e0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+736>:	VIADD R20,R12.reuse,0x1800
+   0x0000000328ddd3f0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+752>:	IADD3 R18,P2,PT,R7.reuse,0x400,RZ
+   0x0000000328ddd400 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+768>:	VIADD R24,R12,0x1c00
+   0x0000000328ddd410 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+784>:	IADD3 R2,P4,PT,R7.reuse,0xc00,RZ
+   0x0000000328ddd420 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+800>:	IMAD.X R3,RZ,RZ,R5.reuse,P5
+   0x0000000328ddd430 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+816>:	ISETP.GE.U32.AND P3,PT,R16,R15.reuse,PT
+   0x0000000328ddd440 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+832>:	IMAD.X R17,RZ,RZ,R5.reuse,P2
+   0x0000000328ddd450 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+848>:	ISETP.GE.U32.AND P2,PT,R2,R15.reuse,PT
+   0x0000000328ddd460 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+864>:	VIADD R2,R12,0x800
+   0x0000000328ddd470 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+880>:	IADD3 R16,P6,PT,R7,0x1400,RZ
+   0x0000000328ddd480 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+896>:	IMAD.X R29,RZ,RZ,R5,P4
+   0x0000000328ddd490 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+912>:	ISETP.GE.U32.AND P1,PT,R18,R15,PT
+   0x0000000328ddd4a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+928>:	ISETP.GE.AND.EX P3,PT,R3,R0.reuse,PT,P3
+   0x0000000328ddd4b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+944>:	IMAD.X R27,RZ,RZ,R5.reuse,P6
+   0x0000000328ddd4c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+960>:	IADD3 R18,P5,PT,R7,0x1000,RZ
+   0x0000000328ddd4d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+976>:	ISETP.GE.AND.EX P1,PT,R17,R0,PT,P1
+   0x0000000328ddd4e0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+992>:	VIADD R17,R12,0x400
+   0x0000000328ddd4f0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1008>:	SEL R23,R2,0xffffffff,!P3
+   0x0000000328ddd500 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1024>:	IMAD.X R21,RZ,RZ,R5,P5
+   0x0000000328ddd510 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1040>:	IADD3 R2,P6,PT,R7,0x1c00,RZ
+   0x0000000328ddd520 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1056>:	ISETP.GE.U32.AND P3,PT,R16,R15,PT
+   0x0000000328ddd530 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1072>:	IADD3 R16,P4,PT,R7.reuse,0x1800,RZ
+   0x0000000328ddd540 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1088>:	IMAD.X R3,RZ,RZ,R5.reuse,P6
+   0x0000000328ddd550 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1104>:	ISETP.GE.U32.AND P5,PT,R7,R15.reuse,PT
+   0x0000000328ddd560 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1120>:	SEL R17,R17,0xffffffff,!P1
+   0x0000000328ddd570 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1136>:	IMAD.X R25,RZ,RZ,R5,P4
+   0x0000000328ddd580 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1152>:	ISETP.GE.U32.AND P1,PT,R18,R15.reuse,PT
+   0x0000000328ddd590 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1168>:	VIADD R18,R12,0x1400
+   0x0000000328ddd5a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1184>:	ISETP.GE.U32.AND P6,PT,R2,R15.reuse,PT
+   0x0000000328ddd5b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1200>:	IMAD.MOV.U32 R2,RZ,RZ,R14
+   0x0000000328ddd5c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1216>:	ISETP.GE.AND.EX P5,PT,R5,R0.reuse,PT,P5
+   0x0000000328ddd5d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1232>:	VIADD R14,R12,0xc00
+   0x0000000328ddd5e0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1248>:	ISETP.GE.U32.AND P4,PT,R16,R15,PT
+   0x0000000328ddd5f0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1264>:	VIADD R16,R12,0x1000
+   0x0000000328ddd600 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1280>:	ISETP.GE.AND.EX P1,PT,R21,R0,PT,P1
+   0x0000000328ddd610 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1296>:	ISETP.GE.AND.EX P6,PT,R3,R0.reuse,PT,P6
+   0x0000000328ddd620 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1312>:	IMAD.MOV.U32 R3,RZ,RZ,R19
+   0x0000000328ddd630 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1328>:	SEL R21,R12.reuse,0xffffffff,!P5
+   0x0000000328ddd640 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1344>:	VIADD R12,R12,0x2000
+   0x0000000328ddd650 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1360>:	ISETP.GE.AND.EX P3,PT,R27,R0.reuse,PT,P3
+   0x0000000328ddd660 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1376>:	ISETP.GE.AND.EX P4,PT,R25,R0,PT,P4
+   0x0000000328ddd670 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1392>:	STG.E desc[UR10][R2.64+-0x4000],R21
+   0x0000000328ddd680 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1408>:	SEL R25,R16,0xffffffff,!P1
+   0x0000000328ddd690 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1424>:	SEL R27,R18,0xffffffff,!P3
+   0x0000000328ddd6a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1440>:	STG.E desc[UR10][R2.64+-0x3000],R17
+   0x0000000328ddd6b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1456>:	IADD3 R13,P1,PT,R13,-0x8,RZ
+   0x0000000328ddd6c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1472>:	ISETP.GE.AND.EX P2,PT,R29,R0,PT,P2
+   0x0000000328ddd6d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1488>:	STG.E desc[UR10][R2.64+-0x2000],R23
+   0x0000000328ddd6e0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1504>:	IADD3.X R11,PT,PT,R11,-0x1,RZ,P1,!PT
+   0x0000000328ddd6f0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1520>:	ISETP.NE.U32.AND P1,PT,R13,RZ,PT
+   0x0000000328ddd700 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1536>:	STG.E desc[UR10][R2.64],R25
+   0x0000000328ddd710 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1552>:	SEL R21,R20,0xffffffff,!P4
+   0x0000000328ddd720 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1568>:	ISETP.NE.AND.EX P1,PT,R11,RZ,PT,P1
+   0x0000000328ddd730 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1584>:	STG.E desc[UR10][R2.64+0x1000],R27
+   0x0000000328ddd740 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1600>:	SEL R17,R24,0xffffffff,!P6
+   0x0000000328ddd750 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1616>:	SEL R19,R14,0xffffffff,!P2
+   0x0000000328ddd760 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1632>:	STG.E desc[UR10][R2.64+0x2000],R21
+   0x0000000328ddd770 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1648>:	IADD3 R7,P2,PT,R7,0x2000,RZ
+   0x0000000328ddd780 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1664>:	IADD3 R14,P3,PT,R2,0x8000,RZ
+   0x0000000328ddd790 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1680>:	STG.E desc[UR10][R2.64+0x3000],R17
+   0x0000000328ddd7a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1696>:	IMAD.X R5,RZ,RZ,R5,P2
+   0x0000000328ddd7b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1712>:	STG.E desc[UR10][R2.64+-0x1000],R19
+   0x0000000328ddd7c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1728>:	IMAD.X R19,RZ,RZ,R3,P3
+   0x0000000328ddd7d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1744>:	@P1 BRA 0x328ddd3d0
+   0x0000000328ddd7e0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1760>:	BSYNC.RECONVERGENT B0
+   0x0000000328ddd7f0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+1776>:	@!P0 EXIT
+End of assembler dump.

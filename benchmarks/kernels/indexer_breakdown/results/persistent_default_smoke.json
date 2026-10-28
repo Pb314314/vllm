@@ -1,0 +1,455 @@
+{
+  "metadata": {
+    "gpu": "_CudaDeviceProperties(name='NVIDIA GB200', major=10, minor=0, total_memory=188729MB, multi_processor_count=152, uuid=60303add-b817-42e9-2313-9a78a05cf8af, pci_bus_id=193, pci_device_id=0, pci_domain_id=0, L2_cache_size=129MB)",
+    "torch": "2.14.0+cu132",
+    "cuda": "13.2",
+    "args": {
+      "rows": [
+        1,
+        32,
+        128,
+        256,
+        1024
+      ],
+      "widths": [
+        8192,
+        65536,
+        163840
+      ],
+      "top_k": [
+        512,
+        2048
+      ],
+      "capacity": null,
+      "full_length": false,
+      "backend": "auto",
+      "warm": false,
+      "repeat": 60,
+      "trials": 3,
+      "seed": 123,
+      "output": "benchmarks/kernels/indexer_breakdown/results/persistent_default_smoke.json"
+    }
+  },
+  "results": [
+    {
+      "rows": 1,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 512,
+      "backend": "cooperative",
+      "us": 5.12,
+      "trials_us": [
+        5.12,
+        5.136,
+        5.12
+      ],
+      "effective_gbps": 5.86171875
+    },
+    {
+      "rows": 1,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 2048,
+      "backend": "cooperative",
+      "us": 5.248,
+      "trials_us": [
+        5.248,
+        5.248,
+        5.232
+      ],
+      "effective_gbps": 6.889481707317073
+    },
+    {
+      "rows": 1,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 512,
+      "backend": "cooperative",
+      "us": 10.8,
+      "trials_us": [
+        10.8,
+        10.751999999999999,
+        10.831999999999999
+      ],
+      "effective_gbps": 22.59962962962963
+    },
+    {
+      "rows": 1,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 2048,
+      "backend": "cooperative",
+      "us": 11.68,
+      "trials_us": [
+        11.68,
+        11.84,
+        11.68
+      ],
+      "effective_gbps": 21.42294520547945
+    },
+    {
+      "rows": 1,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 512,
+      "backend": "cooperative",
+      "us": 12.032,
+      "trials_us": [
+        12.032,
+        12.0,
+        12.032
+      ],
+      "effective_gbps": 50.282247340425535
+    },
+    {
+      "rows": 1,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 2048,
+      "backend": "cooperative",
+      "us": 13.408,
+      "trials_us": [
+        13.440000000000001,
+        13.344,
+        13.408
+      ],
+      "effective_gbps": 45.58025059665871
+    },
+    {
+      "rows": 32,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 512,
+      "backend": "cooperative",
+      "us": 5.5360000000000005,
+      "trials_us": [
+        5.5360000000000005,
+        5.5360000000000005,
+        5.5200000000000005
+      ],
+      "effective_gbps": 179.11127167630056
+    },
+    {
+      "rows": 32,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 2048,
+      "backend": "cooperative",
+      "us": 5.68,
+      "trials_us": [
+        5.68,
+        5.696,
+        5.664
+      ],
+      "effective_gbps": 209.18450704225353
+    },
+    {
+      "rows": 32,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 512,
+      "backend": "cooperative",
+      "us": 14.239999999999998,
+      "trials_us": [
+        14.239999999999998,
+        14.239999999999998,
+        14.176
+      ],
+      "effective_gbps": 538.4117977528091
+    },
+    {
+      "rows": 32,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 2048,
+      "backend": "cooperative",
+      "us": 16.048,
+      "trials_us": [
+        16.0,
+        16.112000000000002,
+        16.048
+      ],
+      "effective_gbps": 490.00448654037893
+    },
+    {
+      "rows": 32,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 512,
+      "backend": "cooperative",
+      "us": 20.032,
+      "trials_us": [
+        20.032,
+        19.968,
+        20.096
+      ],
+      "effective_gbps": 940.7022763578275
+    },
+    {
+      "rows": 32,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 2048,
+      "backend": "cooperative",
+      "us": 22.304000000000002,
+      "trials_us": [
+        22.368,
+        22.304000000000002,
+        22.288000000000004
+      ],
+      "effective_gbps": 853.6924318507889
+    },
+    {
+      "rows": 128,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 512,
+      "backend": "persistent",
+      "us": 6.335999999999999,
+      "trials_us": [
+        6.335999999999999,
+        6.335999999999999,
+        6.335999999999999
+      ],
+      "effective_gbps": 632.7948232323233
+    },
+    {
+      "rows": 128,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 6.56,
+      "trials_us": [
+        6.56,
+        6.56,
+        6.528
+      ],
+      "effective_gbps": 731.0701219512196
+    },
+    {
+      "rows": 128,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 512,
+      "backend": "persistent",
+      "us": 29.04,
+      "trials_us": [
+        29.04,
+        29.04,
+        29.008499999999998
+      ],
+      "effective_gbps": 1056.4331955922864
+    },
+    {
+      "rows": 128,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 32.016000000000005,
+      "trials_us": [
+        32.016000000000005,
+        32.064,
+        31.983999999999998
+      ],
+      "effective_gbps": 982.7977261369314
+    },
+    {
+      "rows": 128,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 512,
+      "backend": "persistent",
+      "us": 38.080000000000005,
+      "trials_us": [
+        38.080000000000005,
+        38.048,
+        38.16
+      ],
+      "effective_gbps": 1988.3362394957978
+    },
+    {
+      "rows": 128,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 38.16,
+      "trials_us": [
+        38.32,
+        38.16,
+        38.096000000000004
+      ],
+      "effective_gbps": 2004.7766247379454
+    },
+    {
+      "rows": 256,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 512,
+      "backend": "persistent",
+      "us": 10.975999999999999,
+      "trials_us": [
+        10.975999999999999,
+        10.944,
+        10.975999999999999
+      ],
+      "effective_gbps": 736.1884110787172
+    },
+    {
+      "rows": 256,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 11.392,
+      "trials_us": [
+        11.424,
+        11.392,
+        11.328
+      ],
+      "effective_gbps": 847.3725421348314
+    },
+    {
+      "rows": 256,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 512,
+      "backend": "persistent",
+      "us": 55.1035,
+      "trials_us": [
+        55.1035,
+        55.135999999999996,
+        55.04
+      ],
+      "effective_gbps": 1109.5388859146879
+    },
+    {
+      "rows": 256,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 59.903999999999996,
+      "trials_us": [
+        59.98349999999999,
+        59.903999999999996,
+        59.856
+      ],
+      "effective_gbps": 1046.8806757478633
+    },
+    {
+      "rows": 256,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 512,
+      "backend": "persistent",
+      "us": 71.36000000000001,
+      "trials_us": [
+        71.58449999999999,
+        71.24849999999999,
+        71.36000000000001
+      ],
+      "effective_gbps": 2108.6216367713
+    },
+    {
+      "rows": 256,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 71.66349999999998,
+      "trials_us": [
+        71.66349999999998,
+        71.67999999999999,
+        71.632
+      ],
+      "effective_gbps": 2121.639384065808
+    },
+    {
+      "rows": 1024,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 512,
+      "backend": "persistent",
+      "us": 32.992,
+      "trials_us": [
+        32.992,
+        32.928,
+        33.0405
+      ],
+      "effective_gbps": 978.6206353055286
+    },
+    {
+      "rows": 1024,
+      "width": 8192,
+      "capacity": 8192,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 33.7915,
+      "trials_us": [
+        33.776,
+        33.7915,
+        33.839999999999996
+      ],
+      "effective_gbps": 1141.651243655949
+    },
+    {
+      "rows": 1024,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 512,
+      "backend": "persistent",
+      "us": 176.624,
+      "trials_us": [
+        176.624,
+        176.577,
+        176.767
+      ],
+      "effective_gbps": 1376.8834586466166
+    },
+    {
+      "rows": 1024,
+      "width": 65536,
+      "capacity": 65536,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 196.5285,
+      "trials_us": [
+        196.5925,
+        196.5285,
+        196.4645
+      ],
+      "effective_gbps": 1269.4449914389006
+    },
+    {
+      "rows": 1024,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 512,
+      "backend": "persistent",
+      "us": 232.576,
+      "trials_us": [
+        232.71999999999997,
+        232.576,
+        232.4795
+      ],
+      "effective_gbps": 2610.5764137314254
+    },
+    {
+      "rows": 1024,
+      "width": 163840,
+      "capacity": 163840,
+      "k": 2048,
+      "backend": "persistent",
+      "us": 234.1925,
+      "trials_us": [
+        234.3675,
+        234.15999999999997,
+        234.1925
+      ],
+      "effective_gbps": 2619.421527162484
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+Opening GPU coredump: /home/bopang/cg-project/design/idx-breakdown-cache/topk/debug/fi_expand_coredump_gb200-rack1-04.936766.1793187854
+[Current focus set to CUDA kernel 0, grid 42, cluster (4091,0,0), cluster dim (1,1,1), block (4091,0,0), thread (608,0,0), device 0, sm 12, warp 16, lane 0]
+
+CUDA Exception: Warp Illegal Address
+The exception was triggered at PC 0x328dde050  void flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false>(float const*, int*, int*, int*, int*, int*, int, int, int, int, int)  (fast_topk_clusters_exact.cuh:175 in _ZN10flashinfer8sampling17fast_topk_cuda_v4IfLi1ELb0EEENS0_11TopkResultsEPKT_PKiPNS0_16PackedCachedDataEiiii inlined from fast_topk_clusters_exact.cuh:526)
+#0  0x0000000328dde0d0 in flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false><<<(4096,1,1),(1024,1,1)>>> () at /workspace/include/flashinfer/topk_common.cuh:38 in _ZN10flashinfer8sampling15RadixTopKTraitsIfE9ToOrderedEf inlined from fast_topk_clusters_exact.cuh:177
+38	    return (bits & 0x80000000) ? ~bits : (bits ^ 0x80000000);
+#0  0x0000000328dde0d0 in flashinfer::sampling::fast_topk_clusters_exact_ragged_transform_kernel<float, 1, false><<<(4096,1,1),(1024,1,1)>>> () at /workspace/include/flashinfer/topk_common.cuh:38 in _ZN10flashinfer8sampling15RadixTopKTraitsIfE9ToOrderedEf inlined from fast_topk_clusters_exact.cuh:177
+   0x328dde020 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3872>:	Cannot disassemble instruction at pc 0x328dde020
+   0x328dde030 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3888>:	IMAD.WIDE R4,R13,0x4,R2
+   0x328dde040 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3904>:	IMAD.WIDE R4,R12,0x4,R4
+*> 0x328dde050 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3920>:	LDG.E.CONSTANT R16,desc[UR10][R4.64]
+   0x328dde060 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3936>:	LDG.E.CONSTANT R24,desc[UR10][R4.64+0x1000]
+   0x328dde070 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3952>:	LDG.E.CONSTANT R22,desc[UR10][R4.64+0x2000]
+   0x328dde080 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3968>:	LDG.E.CONSTANT R19,desc[UR10][R4.64+0x3000]
+   0x328dde090 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+3984>:	LDG.E.CONSTANT R20,desc[UR10][R4.64+0x4000]
+   0x328dde0a0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+4000>:	LDG.E.CONSTANT R21,desc[UR10][R4.64+0x5000]
+   0x328dde0b0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+4016>:	LDG.E.CONSTANT R18,desc[UR10][R4.64+0x6000]
+   0x328dde0c0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+4032>:	IMAD.MOV.U32 R17,RZ,RZ,-0x80000000
+=> 0x328dde0d0 <_ZN10flashinfer8sampling48fast_topk_clusters_exact_ragged_transform_kernelIfLi1ELb0EEEvPKT_PiS5_S5_S5_S5_iiiii+4048>:	ISETP.GT.AND P3,PT,R16,-0x1,PT

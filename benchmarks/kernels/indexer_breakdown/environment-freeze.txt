@@ -57,6 +57,7 @@ cuda-pathfinder==1.8.3
 cuda-python==13.4.4
 cuda-tile==1.6.0
 cuda-toolkit==13.2.1
+cupti-python==13.4.0
 cycler==0.12.1
 datamodel-code-generator==0.86.0
 dataproperty==1.1.1
@@ -202,7 +203,7 @@ numpy==2.3.5
 nvidia-cublas==13.4.0.1
 nvidia-cuda-cccl==13.3.4.3.1
 nvidia-cuda-crt==13.4.92
-nvidia-cuda-cupti==13.2.75
+nvidia-cuda-cupti==13.4.92
 nvidia-cuda-nvcc==13.4.92
 nvidia-cuda-nvrtc==13.2.78
 nvidia-cuda-runtime==13.2.75
@@ -287,6 +288,7 @@ pydantic==2.14.1
 pydantic-core==2.50.1
 pydantic-extra-types==2.11.1
 pydantic-settings==2.16.0
+pyelftools==0.33
 pygments==2.21.0
 pyjwt==2.15.1
 pynvvideocodec==2.0.4
@@ -327,6 +329,7 @@ rich-toolkit==0.20.6
 rignore==0.8.1
 rouge-score==0.1.2
 rpds-py==2026.9.1
+ruff==0.17.3
 runai-model-streamer==0.15.7
 runai-model-streamer-azure==0.15.7
 runai-model-streamer-gcs==0.15.7

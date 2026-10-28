@@ -1,0 +1,1 @@
+{"hostname": "gb200-rack1-04", "device_index": 1, "current_context": null, "attributes": {"multiprocessor_count": 152, "max_threads_per_multiprocessor": 2048, "shared_memory_per_multiprocessor": 233472, "registers_per_multiprocessor": 65536, "max_blocks_per_multiprocessor": 32}, "source": "CUDA driver enum values from local cuda.h"}

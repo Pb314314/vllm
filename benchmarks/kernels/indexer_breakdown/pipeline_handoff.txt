@@ -1,0 +1,18 @@
+Indexer pipeline completion handoff, 2026-10-28 UTC
+
+All pipeline GPU experiments finished at about 11:50 UTC. No product code
+was changed. The coordinator owns commits and publication.
+
+Authoritative methods and findings: PIPELINE.md and ENV_pipeline.md.
+Historical native core: 1620 accepted variants; final PR native core: 270.
+Final PR candidate cases: 24 accepted. Actual-bound legacy errors were
+rejected before timing and are archived separately.
+
+Additional grids include query grouping, budget, candidate, full/long
+contexts, eager submission, launch geometry and interleaved comparisons.
+Run pipeline_audit.py to validate accepted correctness and ensure rejected
+records contain no timings. Derived policy rows are not GPU measurements.
+
+Interpretation limits: the tested model baseline did not OOM; private pool
+and logged capture footprint differ; clocks were adaptive and power capping
+was observed; isolated eager wall time is not model serving latency.
