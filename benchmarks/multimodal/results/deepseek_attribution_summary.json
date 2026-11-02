@@ -1,0 +1,1434 @@
+{
+  "jobs": {
+    "43412": {
+      "complete": true,
+      "cases": {
+        "heldout-13-0": {
+          "checks": {
+            "production-full": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "packed-eager": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "max-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "slots-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "attention-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "patch-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "all-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            }
+          },
+          "input": {
+            "name": "heldout-13-0",
+            "image_pixels": [
+              [
+                392,
+                392
+              ],
+              [
+                364,
+                140
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                448,
+                896
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                280,
+                280
+              ],
+              [
+                392,
+                392
+              ],
+              [
+                672,
+                672
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                280,
+                280
+              ],
+              [
+                280,
+                280
+              ]
+            ],
+            "tokens": [
+              184,
+              200,
+              184,
+              212,
+              266,
+              184,
+              184,
+              184,
+              274,
+              212,
+              184,
+              184,
+              184
+            ],
+            "patch_rows": [
+              1521,
+              1575,
+              1521,
+              1600,
+              2048,
+              1521,
+              1521,
+              1521,
+              2304,
+              1600,
+              1521,
+              1521,
+              1521
+            ]
+          },
+          "actual_shapes": {
+            "patches": [
+              21295,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              21295,
+              1,
+              32
+            ],
+            "vit_sin": [
+              21295,
+              1,
+              32
+            ],
+            "cu_seqlens": [
+              14
+            ],
+            "max_seqlen": [],
+            "merge_idx": [
+              2431,
+              9
+            ],
+            "merge_mask": [
+              2431,
+              9,
+              1
+            ]
+          },
+          "capture_shapes": {
+            "patches": [
+              24192,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              24192,
+              1,
+              32
+            ],
+            "vit_sin": [
+              24192,
+              1,
+              32
+            ],
+            "max_seqlen": [],
+            "cu_seqlens": [
+              130
+            ],
+            "merge_idx": [
+              2688,
+              9
+            ],
+            "merge_mask": [
+              2688,
+              9,
+              1
+            ]
+          },
+          "actual_max_seqlen": 2304,
+          "captured_max_seqlen": 24192,
+          "timings": {
+            "encoder_complete": {
+              "production-full": 61.89019203186035,
+              "packed-eager": 58.104719161987305,
+              "max-tight": 61.79984092712402,
+              "slots-tight": 61.02756690979004,
+              "attention-tight": 61.0111198425293,
+              "patch-tight": 55.17851257324219,
+              "all-tight": 55.17710494995117
+            },
+            "forward_prepared": {
+              "production-full": 59.75691223144531,
+              "max-tight": 59.78463935852051,
+              "slots-tight": 59.00872039794922,
+              "attention-tight": 59.027774810791016,
+              "patch-tight": 53.27873611450195,
+              "all-tight": 53.25856018066406,
+              "packed-eager": 56.1724796295166
+            }
+          },
+          "sequential_ablation_ms": {
+            "attention_slots_and_bounds": 0.7291374206542969,
+            "patch_capacity": 5.7490386962890625,
+            "merge_capacity": 0.020175933837890625,
+            "net_graph_saving": 2.913919448852539,
+            "surrounding_difference": 0.20104026794433594,
+            "net_complete_regression": 3.785472869873047
+          }
+        },
+        "heldout-13-1": {
+          "checks": {
+            "production-full": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "packed-eager": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "max-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "slots-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "attention-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "patch-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "all-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            }
+          },
+          "input": {
+            "name": "heldout-13-1",
+            "image_pixels": [
+              [
+                448,
+                896
+              ],
+              [
+                224,
+                224
+              ],
+              [
+                392,
+                392
+              ],
+              [
+                448,
+                896
+              ],
+              [
+                392,
+                392
+              ],
+              [
+                672,
+                672
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                420,
+                280
+              ],
+              [
+                420,
+                280
+              ],
+              [
+                448,
+                896
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                280,
+                280
+              ]
+            ],
+            "tokens": [
+              266,
+              184,
+              184,
+              266,
+              184,
+              274,
+              184,
+              212,
+              189,
+              189,
+              266,
+              212,
+              184
+            ],
+            "patch_rows": [
+              2048,
+              1521,
+              1521,
+              2048,
+              1521,
+              2304,
+              1521,
+              1600,
+              1536,
+              1536,
+              2048,
+              1600,
+              1521
+            ]
+          },
+          "actual_shapes": {
+            "patches": [
+              22325,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              22325,
+              1,
+              32
+            ],
+            "vit_sin": [
+              22325,
+              1,
+              32
+            ],
+            "cu_seqlens": [
+              14
+            ],
+            "max_seqlen": [],
+            "merge_idx": [
+              2571,
+              9
+            ],
+            "merge_mask": [
+              2571,
+              9,
+              1
+            ]
+          },
+          "capture_shapes": {
+            "patches": [
+              25344,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              25344,
+              1,
+              32
+            ],
+            "vit_sin": [
+              25344,
+              1,
+              32
+            ],
+            "max_seqlen": [],
+            "cu_seqlens": [
+              130
+            ],
+            "merge_idx": [
+              2816,
+              9
+            ],
+            "merge_mask": [
+              2816,
+              9,
+              1
+            ]
+          },
+          "actual_max_seqlen": 2304,
+          "captured_max_seqlen": 25344,
+          "timings": {
+            "encoder_complete": {
+              "production-full": 65.71395111083984,
+              "packed-eager": 60.8384952545166,
+              "max-tight": 65.62260818481445,
+              "slots-tight": 64.70742416381836,
+              "attention-tight": 64.81907272338867,
+              "patch-tight": 58.529184341430664,
+              "all-tight": 58.55468940734863
+            },
+            "forward_prepared": {
+              "production-full": 63.21455955505371,
+              "max-tight": 63.251888275146484,
+              "slots-tight": 62.45048141479492,
+              "attention-tight": 62.46734428405762,
+              "patch-tight": 56.29969596862793,
+              "all-tight": 56.2797908782959,
+              "packed-eager": 58.707679748535156
+            }
+          },
+          "sequential_ablation_ms": {
+            "attention_slots_and_bounds": 0.7472152709960938,
+            "patch_capacity": 6.1676483154296875,
+            "merge_capacity": 0.01990509033203125,
+            "net_graph_saving": 2.427888870239258,
+            "surrounding_difference": 0.3685760498046875,
+            "net_complete_regression": 4.875455856323242
+          }
+        }
+      }
+    },
+    "43413": {
+      "complete": true,
+      "cases": {
+        "heldout-13-0": {
+          "checks": {
+            "production-full": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "packed-eager": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "buffer-matched": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "max-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "slots-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "attention-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "patch-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "all-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            }
+          },
+          "input": {
+            "name": "heldout-13-0",
+            "image_pixels": [
+              [
+                392,
+                392
+              ],
+              [
+                364,
+                140
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                448,
+                896
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                280,
+                280
+              ],
+              [
+                392,
+                392
+              ],
+              [
+                672,
+                672
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                280,
+                280
+              ],
+              [
+                280,
+                280
+              ]
+            ],
+            "tokens": [
+              184,
+              200,
+              184,
+              212,
+              266,
+              184,
+              184,
+              184,
+              274,
+              212,
+              184,
+              184,
+              184
+            ],
+            "patch_rows": [
+              1521,
+              1575,
+              1521,
+              1600,
+              2048,
+              1521,
+              1521,
+              1521,
+              2304,
+              1600,
+              1521,
+              1521,
+              1521
+            ]
+          },
+          "actual_shapes": {
+            "patches": [
+              21295,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              21295,
+              1,
+              32
+            ],
+            "vit_sin": [
+              21295,
+              1,
+              32
+            ],
+            "cu_seqlens": [
+              14
+            ],
+            "max_seqlen": [],
+            "merge_idx": [
+              2431,
+              9
+            ],
+            "merge_mask": [
+              2431,
+              9,
+              1
+            ]
+          },
+          "capture_shapes": {
+            "patches": [
+              24192,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              24192,
+              1,
+              32
+            ],
+            "vit_sin": [
+              24192,
+              1,
+              32
+            ],
+            "max_seqlen": [],
+            "cu_seqlens": [
+              130
+            ],
+            "merge_idx": [
+              2688,
+              9
+            ],
+            "merge_mask": [
+              2688,
+              9,
+              1
+            ]
+          },
+          "actual_max_seqlen": 2304,
+          "captured_max_seqlen": 24192,
+          "timings": {
+            "encoder_complete": {
+              "production-full": 61.77219200134277,
+              "packed-eager": 58.003761291503906,
+              "buffer-matched": 61.753265380859375,
+              "max-tight": 61.71980667114258,
+              "slots-tight": 60.907487869262695,
+              "attention-tight": 60.99385643005371,
+              "patch-tight": 55.13003349304199,
+              "all-tight": 55.06608009338379
+            },
+            "forward_prepared": {
+              "production-full": 59.74948692321777,
+              "buffer-matched": 59.78803062438965,
+              "max-tight": 59.7784481048584,
+              "slots-tight": 59.025407791137695,
+              "attention-tight": 59.01724815368652,
+              "patch-tight": 53.278175354003906,
+              "all-tight": 53.26731300354004,
+              "packed-eager": 56.14246368408203
+            }
+          },
+          "sequential_ablation_ms": {
+            "attention_slots_and_bounds": 0.73223876953125,
+            "patch_capacity": 5.739072799682617,
+            "merge_capacity": 0.010862350463867188,
+            "net_graph_saving": 2.875150680541992,
+            "surrounding_difference": 0.161407470703125,
+            "net_complete_regression": 3.768430709838867
+          }
+        },
+        "heldout-13-1": {
+          "checks": {
+            "production-full": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "packed-eager": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "buffer-matched": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "max-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "slots-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "attention-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "patch-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            },
+            "all-tight": {
+              "shapes_match": true,
+              "finite": true,
+              "equal": true,
+              "close": true,
+              "max_abs": 0.0,
+              "relative_l2": 0.0
+            }
+          },
+          "input": {
+            "name": "heldout-13-1",
+            "image_pixels": [
+              [
+                448,
+                896
+              ],
+              [
+                224,
+                224
+              ],
+              [
+                392,
+                392
+              ],
+              [
+                448,
+                896
+              ],
+              [
+                392,
+                392
+              ],
+              [
+                672,
+                672
+              ],
+              [
+                448,
+                448
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                420,
+                280
+              ],
+              [
+                420,
+                280
+              ],
+              [
+                448,
+                896
+              ],
+              [
+                560,
+                560
+              ],
+              [
+                280,
+                280
+              ]
+            ],
+            "tokens": [
+              266,
+              184,
+              184,
+              266,
+              184,
+              274,
+              184,
+              212,
+              189,
+              189,
+              266,
+              212,
+              184
+            ],
+            "patch_rows": [
+              2048,
+              1521,
+              1521,
+              2048,
+              1521,
+              2304,
+              1521,
+              1600,
+              1536,
+              1536,
+              2048,
+              1600,
+              1521
+            ]
+          },
+          "actual_shapes": {
+            "patches": [
+              22325,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              22325,
+              1,
+              32
+            ],
+            "vit_sin": [
+              22325,
+              1,
+              32
+            ],
+            "cu_seqlens": [
+              14
+            ],
+            "max_seqlen": [],
+            "merge_idx": [
+              2571,
+              9
+            ],
+            "merge_mask": [
+              2571,
+              9,
+              1
+            ]
+          },
+          "capture_shapes": {
+            "patches": [
+              25344,
+              3,
+              14,
+              14
+            ],
+            "vit_cos": [
+              25344,
+              1,
+              32
+            ],
+            "vit_sin": [
+              25344,
+              1,
+              32
+            ],
+            "max_seqlen": [],
+            "cu_seqlens": [
+              130
+            ],
+            "merge_idx": [
+              2816,
+              9
+            ],
+            "merge_mask": [
+              2816,
+              9,
+              1
+            ]
+          },
+          "actual_max_seqlen": 2304,
+          "captured_max_seqlen": 25344,
+          "timings": {
+            "encoder_complete": {
+              "production-full": 65.31875228881836,
+              "packed-eager": 60.69499206542969,
+              "buffer-matched": 65.32342147827148,
+              "max-tight": 65.35208129882812,
+              "slots-tight": 64.53329467773438,
+              "attention-tight": 64.46583938598633,
+              "patch-tight": 58.29270362854004,
+              "all-tight": 58.22073554992676
+            },
+            "forward_prepared": {
+              "production-full": 63.18864059448242,
+              "buffer-matched": 63.24460983276367,
+              "max-tight": 63.24531173706055,
+              "slots-tight": 62.44664001464844,
+              "attention-tight": 62.44259262084961,
+              "patch-tight": 56.277103424072266,
+              "all-tight": 56.25860786437988,
+              "packed-eager": 58.77054405212402
+            }
+          },
+          "sequential_ablation_ms": {
+            "attention_slots_and_bounds": 0.7460479736328125,
+            "patch_capacity": 6.165489196777344,
+            "merge_capacity": 0.018495559692382812,
+            "net_graph_saving": 2.5119361877441406,
+            "surrounding_difference": 0.20566368103027344,
+            "net_complete_regression": 4.623760223388672
+          }
+        }
+      }
+    }
+  },
+  "profiles": [
+    {
+      "job": 43412,
+      "case": "heldout-13-0",
+      "arm": "production-full",
+      "per_forward_kernel_ms": {
+        "gemm": 11.92897766666667,
+        "dtype_copy": 11.67400433333334,
+        "elementwise_reduce_other": 30.569277666666654,
+        "attention": 7.47187466666667
+      },
+      "attention_grids": [
+        [
+          3552,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-0",
+      "arm": "attention-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.98367633333334,
+        "dtype_copy": 11.642236666666665,
+        "elementwise_reduce_other": 30.545446333333434,
+        "attention": 6.672578333333336
+      },
+      "attention_grids": [
+        [
+          1712,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-0",
+      "arm": "patch-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.124605999999995,
+        "dtype_copy": 10.219402000000002,
+        "elementwise_reduce_other": 26.932323333333322,
+        "attention": 6.671543999999999
+      },
+      "attention_grids": [
+        [
+          1536,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-0",
+      "arm": "all-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.127252000000002,
+        "dtype_copy": 10.216373666666671,
+        "elementwise_reduce_other": 26.92333533333344,
+        "attention": 6.658754666666664
+      },
+      "attention_grids": [
+        [
+          1536,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-0",
+      "arm": "packed-eager",
+      "per_forward_kernel_ms": {
+        "gemm": 11.583899999999986,
+        "dtype_copy": 10.262837666666663,
+        "elementwise_reduce_other": 26.735919333333335,
+        "attention": 6.734936000000003
+      },
+      "attention_grids": [
+        [
+          1536,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-1",
+      "arm": "production-full",
+      "per_forward_kernel_ms": {
+        "gemm": 12.541443999999986,
+        "dtype_copy": 12.208515666666651,
+        "elementwise_reduce_other": 32.04610366666666,
+        "attention": 7.9005356666666655
+      },
+      "attention_grids": [
+        [
+          3632,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-1",
+      "arm": "attention-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 12.630565000000002,
+        "dtype_copy": 12.200509333333331,
+        "elementwise_reduce_other": 31.985602333333336,
+        "attention": 7.0732409999999994
+      },
+      "attention_grids": [
+        [
+          1776,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-1",
+      "arm": "patch-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.46171100000001,
+        "dtype_copy": 10.773071333333316,
+        "elementwise_reduce_other": 28.298601999999928,
+        "attention": 7.069877
+      },
+      "attention_grids": [
+        [
+          1600,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-1",
+      "arm": "all-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.46130433333333,
+        "dtype_copy": 10.770212333333335,
+        "elementwise_reduce_other": 28.28374000000007,
+        "attention": 7.065460333333334
+      },
+      "attention_grids": [
+        [
+          1600,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43412,
+      "case": "heldout-13-1",
+      "arm": "packed-eager",
+      "per_forward_kernel_ms": {
+        "gemm": 11.56561299999999,
+        "dtype_copy": 10.835876000000003,
+        "elementwise_reduce_other": 28.068505333333345,
+        "attention": 7.107952000000003
+      },
+      "attention_grids": [
+        [
+          1600,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "production-full",
+      "per_forward_kernel_ms": {
+        "gemm": 11.887385000000007,
+        "dtype_copy": 11.677591999999985,
+        "elementwise_reduce_other": 30.57245900000008,
+        "attention": 7.473360666666665
+      },
+      "attention_grids": [
+        [
+          3552,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "max-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.998359333333328,
+        "dtype_copy": 11.665014999999991,
+        "elementwise_reduce_other": 30.54105666666675,
+        "attention": 7.451954666666669
+      },
+      "attention_grids": [
+        [
+          3552,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "slots-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.984257666666668,
+        "dtype_copy": 11.644566666666664,
+        "elementwise_reduce_other": 30.550336666666777,
+        "attention": 6.663826333333334
+      },
+      "attention_grids": [
+        [
+          1712,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "attention-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.963585999999987,
+        "dtype_copy": 11.643241666666672,
+        "elementwise_reduce_other": 30.526762333333384,
+        "attention": 6.675035333333334
+      },
+      "attention_grids": [
+        [
+          1712,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "patch-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.120163333333334,
+        "dtype_copy": 10.221432000000005,
+        "elementwise_reduce_other": 26.925189333333307,
+        "attention": 6.671904
+      },
+      "attention_grids": [
+        [
+          1536,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "all-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.120690666666661,
+        "dtype_copy": 10.215866999999989,
+        "elementwise_reduce_other": 26.92203033333332,
+        "attention": 6.664992000000001
+      },
+      "attention_grids": [
+        [
+          1536,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-0",
+      "arm": "packed-eager",
+      "per_forward_kernel_ms": {
+        "gemm": 11.210507333333341,
+        "dtype_copy": 10.295774666666663,
+        "elementwise_reduce_other": 26.74913833333326,
+        "attention": 6.679249333333332
+      },
+      "attention_grids": [
+        [
+          1536,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "production-full",
+      "per_forward_kernel_ms": {
+        "gemm": 12.534025666666668,
+        "dtype_copy": 12.186911666666676,
+        "elementwise_reduce_other": 32.00237100000004,
+        "attention": 7.876611
+      },
+      "attention_grids": [
+        [
+          3632,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "max-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 12.591136333333331,
+        "dtype_copy": 12.208598333333343,
+        "elementwise_reduce_other": 32.00580033333335,
+        "attention": 7.864228333333325
+      },
+      "attention_grids": [
+        [
+          3632,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "slots-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 12.612491333333322,
+        "dtype_copy": 12.193931000000019,
+        "elementwise_reduce_other": 32.00874066666664,
+        "attention": 7.067299666666667
+      },
+      "attention_grids": [
+        [
+          1776,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "attention-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 12.644348333333312,
+        "dtype_copy": 12.197500333333341,
+        "elementwise_reduce_other": 31.991497000000003,
+        "attention": 7.061060000000001
+      },
+      "attention_grids": [
+        [
+          1776,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "patch-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.452745333333334,
+        "dtype_copy": 10.768790333333326,
+        "elementwise_reduce_other": 28.29640133333333,
+        "attention": 7.070724333333331
+      },
+      "attention_grids": [
+        [
+          1600,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "all-tight",
+      "per_forward_kernel_ms": {
+        "gemm": 11.451053666666663,
+        "dtype_copy": 10.767309333333333,
+        "elementwise_reduce_other": 28.26644733333335,
+        "attention": 7.0633973333333335
+      },
+      "attention_grids": [
+        [
+          1600,
+          1,
+          1
+        ]
+      ]
+    },
+    {
+      "job": 43413,
+      "case": "heldout-13-1",
+      "arm": "packed-eager",
+      "per_forward_kernel_ms": {
+        "gemm": 11.530359666666666,
+        "dtype_copy": 10.845057000000006,
+        "elementwise_reduce_other": 28.114918999999954,
+        "attention": 7.079268666666663
+      },
+      "attention_grids": [
+        [
+          1600,
+          1,
+          1
+        ]
+      ]
+    }
+  ],
+  "scope": "GB200 BF16 FA4 TP1 encoder only",
+  "source_sha256": {
+    "vllm/models/deepseek_v41/common/vl_cudagraph.py": "ed4105b32657c4000ed04483cd77efa1dd5afa7d569abcff260dd27936f19285",
+    "vllm/models/deepseek_v4/common/vision.py": "a8e4c34d9b15f075d1b8a2c01138a5b786138669434db104eb0bc5656d89500c",
+    "vllm/v1/worker/encoder_cudagraph.py": "96da67b71d469d72165cabe54e0a24914b188a662527aec990f4d23c91d61f5d",
+    "vllm/v1/attention/ops/vit_attn_wrappers.py": "04cf9efbe7e8f854d9a20a77aaa96fef46e476a3bee754a5150fa38fd826a585",
+    "vllm/vllm_flash_attn/cute/tile_scheduler.py": "27482cb3ef36aabcc07b115075557f6c18740790b4bd30986f2d52959be23abd",
+    "vllm/vllm_flash_attn/cute/interface.py": "0d00d4b96c9cd616eae488ae394d6c50ab22e403a01df5a896995599fd62b2e3",
+    "vllm/vllm_flash_attn/cute/flash_fwd_sm100.py": "a080f5c1565a53bd90789ca88133ab055f0fa34e93fe866ed768f39c916667cb"
+  }
+}

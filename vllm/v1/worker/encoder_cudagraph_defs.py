@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 
 import torch
 
+from vllm.compilation.encoder_cudagraph import EncoderAttentionMetadata
+
 EncoderCudaGraphPaddingLogic = Callable[[torch.Tensor, torch.Tensor], None]
 
 # Reserved mm_kwargs key: models with ``EncoderCudaGraphConfig.capture_axes``
@@ -102,6 +104,16 @@ class EncoderCudaGraphConfig:
     product), so the total number of captured graphs is
     ``num_budgets * prod(len(axis) for axis in capture_axes)``."""
 
+    supports_breakable: bool = False
+    """Whether the model supplies the experimental packed attention metadata."""
+
+    supports_buffer_reuse: bool = False
+    """Whether FULL captures may share input/output storage within a path.
+
+    All CUDA inputs must be refreshed before each replay, and
+    ``postprocess_encoder_output`` must honor ``clone=True``.
+    """
+
 
 @dataclass
 class EncoderCudaGraphCaptureInputs:
@@ -115,6 +127,8 @@ class EncoderCudaGraphCaptureInputs:
     CUDA graph.  The manager stores references to these exact
     tensor objects and copies new data into them before each
     ``graph.replay()`` call (buffer identity invariant)."""
+
+    attention_metadata: EncoderAttentionMetadata | None = None
 
 
 @dataclass
@@ -130,3 +144,5 @@ class EncoderCudaGraphReplayBuffers:
     """Data to copy into the captured buffers before replay.
     ``None`` values leave the corresponding captured buffer
     unchanged."""
+
+    attention_metadata: EncoderAttentionMetadata | None = None

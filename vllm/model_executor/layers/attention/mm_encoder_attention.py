@@ -7,6 +7,7 @@ import json
 import numpy as np
 import torch
 
+from vllm.compilation.encoder_cudagraph import get_encoder_attention_metadata
 from vllm.config import MultiModalConfig
 from vllm.kernels.triton.qkv_padded_fp8_quant import (
     quantize_fp8_maybe_pad_head_dim,
@@ -789,6 +790,34 @@ class MMEncoderAttention(CustomOp):
         sequence_lengths: torch.Tensor
         | None = None,  # Only used for FlashInfer CuDNN backend
     ) -> torch.Tensor:
+        if get_encoder_attention_metadata() is not None:
+            if self.fp8_enabled or self.attn_backend not in (
+                AttentionBackendEnum.FLASH_ATTN,
+                AttentionBackendEnum.TORCH_SDPA,
+                AttentionBackendEnum.FLASHINFER,
+            ):
+                raise NotImplementedError(
+                    "Encoder breakable supports BF16 FA/SDPA/FlashInfer"
+                )
+            bsz, q_len = query.shape[:2]
+            reshaped = query.dim() != 4
+            query, key, value = self.view_qkv_to_4d(
+                query, key, value, bsz, q_len, key.size(1)
+            )
+            output = torch.empty_like(query, memory_format=torch.contiguous_format)
+            torch.ops.vllm.encoder_attention_with_output(
+                query,
+                key,
+                value,
+                output,
+                self.scale,
+                self.attn_backend.name,
+                self._fa_version,
+                _get_flashinfer_workspace_buffer()
+                if self.attn_backend == AttentionBackendEnum.FLASHINFER
+                else None,
+            )
+            return output.reshape(bsz, q_len, -1) if reshaped else output
         if self.fp8_enabled and self.attn_backend == AttentionBackendEnum.ROCM_AITER_FA:
             return self._forward_aiter_fp8(query, key, value, cu_seqlens, max_seqlen)
         elif self.is_flash_attn_backend:

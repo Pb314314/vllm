@@ -276,6 +276,7 @@ def torch_sdpa_wrapper(
     scale: float | None = None,
     cu_seqlens: torch.Tensor | None = None,
     enable_gqa: bool = False,
+    sequence_lengths: list[int] | None = None,
 ) -> torch.Tensor:
     # Never remove the contiguous logic for ROCm
     # Without it, hallucinations occur with the backend
@@ -284,14 +285,17 @@ def torch_sdpa_wrapper(
         k = k.contiguous()
         v = v.contiguous()
 
-    if cu_seqlens is None:
+    if cu_seqlens is None and sequence_lengths is None:
         return apply_sdpa(q, k, v, scale=scale, enable_gqa=enable_gqa).contiguous()
 
     outputs = []
 
     # `torch.split` needs Python int sizes.
-    with gpu_sync_allowed():
-        lens = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+    if sequence_lengths is None:
+        assert cu_seqlens is not None
+        with gpu_sync_allowed():
+            sequence_lengths = (cu_seqlens[1:] - cu_seqlens[:-1]).tolist()
+    lens = sequence_lengths
     q_chunks = torch.split(q, lens, dim=1)
     k_chunks = torch.split(k, lens, dim=1)
     v_chunks = torch.split(v, lens, dim=1)
@@ -309,6 +313,7 @@ def torch_sdpa_wrapper_fake(
     scale: float | None = None,
     cu_seqlens: torch.Tensor | None = None,
     enable_gqa: bool = False,
+    sequence_lengths: list[int] | None = None,
 ) -> torch.Tensor:
     return torch.empty_like(q, memory_format=torch.contiguous_format)
 

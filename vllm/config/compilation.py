@@ -532,12 +532,34 @@ class CompilationConfig:
 
     encoder_cudagraph_token_budgets: list[int] = field(default_factory=list)
     """Token budget levels for encoder CUDA graph capture.
-    Each budget defines a fixed token capacity. At runtime, images are greedy-packed
-    into the smallest fitting budget and the corresponding CUDA graph is replayed.
+    Each budget defines a fixed token capacity. At runtime, the local batch uses
+    the smallest fitting budget. Add intermediate budgets to reduce padding.
     If empty (default), auto-inferred from model architecture as power-of-2
     levels from the model's estimated min budget to max budget.
     User-provided values override auto-inference.
     Example: [2048, 4096, 8192, 13824]"""
+
+    encoder_cudagraph_oversize_policy: Literal["split", "eager"] = "eager"
+    """Execution policy when a local encoder batch exceeds a captured path's
+    maximum token budget or the captured item capacity. ``split`` preserves
+    greedy packing into multiple replays. ``eager`` uses at most one replay per
+    active path; batches exceeding capture capacity run entirely eagerly.
+    Whole-batch eager execution can require more temporary memory than splitting.
+    The capture budgets also set the switching boundary; increasing them allows
+    larger batches to use graphs. This does not change encoder admission limits.
+    """
+
+    encoder_cudagraph_eager_min_tokens: int | None = Field(default=None, ge=0)
+    """Opt-in lower bound for the encoder padding limit, in tokens per local path.
+    With the ``eager`` policy, a batch at or above this size runs wholly eagerly
+    if a path exceeds encoder_cudagraph_max_padding_ratio. None disables this
+    rule. Smaller batches still use their smallest fitting captured graph."""
+
+    encoder_cudagraph_max_padding_ratio: float = Field(default=0.0, ge=0)
+    """Maximum (capture budget - actual tokens) / actual tokens once
+    encoder_cudagraph_eager_min_tokens is reached. Only used by the ``eager``
+    policy. Tune with model/backend measurements; this limits token padding,
+    not every model-specific buffer dimension or attention cost."""
 
     encoder_cudagraph_max_vision_items_per_batch: int = 0
     """Maximum number of images/videos per batch for encoder CUDA graph capture.

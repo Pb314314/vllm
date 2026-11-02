@@ -64,6 +64,16 @@ def _weak_ref_capture_arg(arg: Any) -> Any:
     return weak_ref_tensor(arg)
 
 
+def record_eager_call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """Record an in-place eager call without retaining graph-pool tensors."""
+    capture = BreakableCUDAGraphCapture.current()
+    if capture is None or not capture._capturing:
+        return fn(*args, **kwargs)
+    weak_args = tuple(_weak_ref_capture_arg(a) for a in args)
+    weak_kwargs = {k: _weak_ref_capture_arg(v) for k, v in kwargs.items()}
+    return capture.add_eager(lambda: fn(*weak_args, **weak_kwargs))
+
+
 def eager_break_during_capture(fn: F) -> F:
     """Decorator that turns a custom-op Python kernel into a "break point"
     for the breakable cudagraph capture.
@@ -113,9 +123,7 @@ def eager_break_during_capture(fn: F) -> F:
         # Weak-ref args: strong refs in the replay lambda pin cudagraph-pool
         # slots across batch descriptors. cudagraph owns the slot, so the
         # weak_ref is safe to deref on replay.
-        weak_args = tuple(_weak_ref_capture_arg(a) for a in args)
-        weak_kwargs = {k: _weak_ref_capture_arg(v) for k, v in kwargs.items()}
-        return capture.add_eager(lambda: fn(*weak_args, **weak_kwargs))
+        return record_eager_call(fn, *args, **kwargs)
 
     return wrapper  # type: ignore[return-value]
 

@@ -2,14 +2,17 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """CUDA graph manager for vision encoder budget-batch execution."""
 
+import gc
 import itertools
 import math
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterable
 from dataclasses import dataclass
 from typing import Any, TypeAlias
 
 import torch
 
+from vllm.compilation.breakable_cudagraph import BreakableCUDAGraphCapture
+from vllm.compilation.encoder_cudagraph import encoder_attention_context
 from vllm.config import VllmConfig
 from vllm.distributed import (
     get_tensor_model_parallel_rank,
@@ -54,7 +57,7 @@ class BudgetGraphMetadata:
     token_budget: int
     max_batch_size: int  # Max number of images/videos per batch
     max_frames_per_batch: int  # Max total frames per batch (for video)
-    graph: torch.cuda.CUDAGraph
+    graph: torch.cuda.CUDAGraph | BreakableCUDAGraphCapture
     # Buffers recorded into the CUDA graph (e.g. embeddings, sequence metadata).
     # Before replay the manager updates these in-place. By default buffers are
     # zeroed before slice-copying the actual values; model-specific padding
@@ -75,6 +78,8 @@ class EncoderCudaGraphManager:
         device: torch.device,
         dtype: torch.dtype,
         model: SupportsEncoderCudaGraph,
+        *,
+        use_breakable: bool = False,
     ):
         """Initialize CUDA graph manager with provided token budgets
         and max batch size."""
@@ -83,13 +88,31 @@ class EncoderCudaGraphManager:
         self.dtype = dtype
         self.model = model
         self.config: EncoderCudaGraphConfig = model.get_encoder_cudagraph_config()
+        self.use_breakable = use_breakable
 
         comp_config = vllm_config.compilation_config
+        self.oversize_policy = comp_config.encoder_cudagraph_oversize_policy
+        self.eager_min_tokens = comp_config.encoder_cudagraph_eager_min_tokens
+        self.max_padding_ratio = comp_config.encoder_cudagraph_max_padding_ratio
         user_budgets = comp_config.encoder_cudagraph_token_budgets
         user_max_vision_items = comp_config.encoder_cudagraph_max_vision_items_per_batch
         user_max_frames = comp_config.encoder_cudagraph_max_frames_per_batch
 
         multimodal_config = vllm_config.model_config.multimodal_config
+        assert multimodal_config is not None
+        if use_breakable:
+            if not self.config.supports_breakable:
+                raise ValueError("Model does not support encoder breakable graphs")
+            if (
+                dtype != torch.bfloat16
+                or vllm_config.parallel_config.tensor_parallel_size != 1
+                or comp_config.compile_mm_encoder
+                or multimodal_config.get_limit_per_prompt("video") != 0
+            ):
+                raise ValueError(
+                    "Experimental encoder breakable requires BF16, TP1, "
+                    "images only, and compile_mm_encoder=False"
+                )
 
         self._capture_axes: tuple[CaptureAxisKeys, ...] = tuple(
             tuple(axis) for axis in self.config.capture_axes
@@ -163,7 +186,6 @@ class EncoderCudaGraphManager:
                     min(self.token_budgets),
                 )
 
-        assert multimodal_config is not None
         if multimodal_config.get_limit_per_prompt("video") == 0:
             self.max_frames_per_batch = 0
         elif user_max_frames is not None:
@@ -266,9 +288,18 @@ class EncoderCudaGraphManager:
                         axis_keys=axis_keys,
                     )
 
+        graph_count = sum(
+            entry.graph.num_graphs
+            if isinstance(entry.graph, BreakableCUDAGraphCapture)
+            else 1
+            for entries in self.budget_graphs.values()
+            for entry in entries.values()
+        )
         logger.info(
-            "Encoder CUDA graph capture complete. Captured %d graphs across %d paths.",
+            "Encoder CUDA graph capture complete. Captured %d entries, "
+            "%d graph segments across %d paths.",
             num_graphs,
+            graph_count,
             len(self.path_token_budgets),
         )
 
@@ -289,6 +320,24 @@ class EncoderCudaGraphManager:
         if path not in self.budget_graphs:
             self.budget_graphs[path] = {}
         return self.budget_graphs[path]
+
+    @staticmethod
+    def _shared_buffer_view(
+        value: torch.Tensor, candidates: Iterable[torch.Tensor | None]
+    ) -> torch.Tensor | None:
+        """Reuse compatible storage from an earlier capture on the same path."""
+        if not value.is_cuda or not value.is_contiguous():
+            return None
+        for candidate in candidates:
+            if (
+                candidate is not None
+                and candidate.device == value.device
+                and candidate.dtype == value.dtype
+                and candidate.is_contiguous()
+                and candidate.numel() >= value.numel()
+            ):
+                return candidate.view(-1)[: value.numel()].view_as(value)
+        return None
 
     def _capture_budget_graph(
         self,
@@ -319,18 +368,60 @@ class EncoderCudaGraphManager:
         )
 
         values = capture_inputs.values
+        # Breakable attention metadata retains references to the original inputs.
+        reuse_buffers = self.config.supports_buffer_reuse and not self.use_breakable
+        if reuse_buffers:
+            for key, value in values.items():
+                if not isinstance(value, torch.Tensor):
+                    continue
+                shared = self._shared_buffer_view(
+                    value,
+                    (entry.input_buffers.get(key) for entry in graph_set.values()),
+                )
+                if shared is not None:
+                    shared.copy_(value)
+                    values[key] = shared
+        metadata = capture_inputs.attention_metadata if self.use_breakable else None
+        if self.use_breakable and metadata is None:
+            raise ValueError("Encoder breakable capture requires attention metadata")
 
-        with torch.inference_mode():
+        with torch.inference_mode(), encoder_attention_context(metadata):
             output = self.model.encoder_cudagraph_forward({**values}, path=path)
-            output_buffer = torch.empty_like(output)
+            output_buffer = None
+            if reuse_buffers:
+                # Same-path replays are sequential and postprocessing clones outputs.
+                output_buffer = self._shared_buffer_view(
+                    output, (entry.output_buffer for entry in graph_set.values())
+                )
+            if output_buffer is None:
+                output_buffer = torch.empty_like(output)
+            del output
 
-        graph = torch.cuda.CUDAGraph()
+        graph: torch.cuda.CUDAGraph | BreakableCUDAGraphCapture
+        if self.use_breakable:
+            # Match torch.cuda.graph's cleanup of allocations from warmup.
+            torch.accelerator.synchronize()
+            if gc.isenabled():
+                gc.collect()
+            torch.accelerator.empty_cache()
+            graph = BreakableCUDAGraphCapture(pool=self.graph_pool)
+            capture_context = graph
+        else:
+            graph = torch.cuda.CUDAGraph()
+            capture_context = torch.cuda.graph(
+                graph, pool=self.graph_pool, stream=current_stream()
+            )
         with (
             torch.inference_mode(),
-            torch.cuda.graph(graph, pool=self.graph_pool, stream=current_stream()),
+            encoder_attention_context(metadata),
+            capture_context,
         ):
             output = self.model.encoder_cudagraph_forward({**values}, path=path)
             output_buffer.copy_(output)
+            del output
+
+        if self.use_breakable and graph.num_eager_breaks == 0:
+            raise RuntimeError("Encoder breakable captured no attention boundaries")
 
         graph_map_key: BudgetGraphMapKey = (
             token_budget if not axis_keys else (token_budget, axis_keys)
@@ -438,6 +529,15 @@ class EncoderCudaGraphManager:
             path,
         )
 
+        # Token capacity alone does not bound frame counts or other shape axes.
+        for key, buf in graph_meta.input_buffers.items():
+            src = replay.values.get(key)
+            if src is not None and (
+                src.ndim != buf.ndim or any(s > d for s, d in zip(src.shape, buf.shape))
+            ):
+                self.graph_misses += num_items
+                return None
+
         # Copy replay values into the buffers recorded for this path.
         for key, buf in graph_meta.input_buffers.items():
             src = replay.values.get(key)
@@ -451,7 +551,11 @@ class EncoderCudaGraphManager:
                 )
                 padding_logic(buf, src)
 
-        graph_meta.graph.replay()
+        metadata = replay.attention_metadata if self.use_breakable else None
+        if self.use_breakable and metadata is None:
+            raise ValueError("Encoder breakable replay requires attention metadata")
+        with encoder_attention_context(metadata):
+            graph_meta.graph.replay()
 
         self.graph_hits += num_items
         return graph_meta.output_buffer
@@ -460,7 +564,7 @@ class EncoderCudaGraphManager:
         self,
         mm_kwargs: dict[str, Any],
     ) -> list[torch.Tensor]:
-        """Execute locally using greedy packing across all configured paths."""
+        """Execute each local path once, or use explicitly requested split packing."""
         item_specs = self._get_item_specs(mm_kwargs)
         num_items = len(item_specs)
         paths = tuple(self.path_token_budgets)
@@ -471,56 +575,111 @@ class EncoderCudaGraphManager:
         per_item_out_tokens = [spec.output_tokens for spec in item_specs]
         max_path_budgets = {path: max(self.path_token_budgets[path]) for path in paths}
 
-        sorted_indices = sorted(range(num_items), key=lambda i: per_item_out_tokens[i])
-        batches: list[tuple[list[int], dict[str, int | None]]] = []
-        current_batch: list[int] = []
-        current_tokens = dict.fromkeys(paths, 0)
-
-        def append_current_batch() -> None:
-            if not current_batch:
-                return
-            path_budgets = {
-                path: self._path_fitting_budget(path, current_tokens[path])
-                for path in paths
-            }
-            batches.append((list(current_batch), path_budgets))
-
-        def should_defer_item(item_tokens: dict[str, int]) -> bool:
-            """Whether closing the batch strictly reduces summed budgets."""
-            for path in paths:
-                item = item_tokens[path]
-                if item == 0:
+        if num_items == 0:
+            return []
+        excessive_padding = False
+        if self.oversize_policy == "eager" and self.eager_min_tokens is not None:
+            for path, tokens in per_item_path_tokens.items():
+                total = sum(tokens)
+                if total == 0 or total < self.eager_min_tokens:
                     continue
-                cur = current_tokens[path]
-                b_cur = self._path_fitting_budget(path, cur)
-                b_alone = self._path_fitting_budget(path, item)
-                b_merged = self._path_fitting_budget(path, cur + item)
-                # Only called when the item fits; lookups land on a budget.
-                assert (
-                    b_cur is not None and b_alone is not None and b_merged is not None
-                )
-                # Only defer items that alone outweigh the whole current
-                # batch; splitting smaller ones fragments flood packing.
-                if b_cur + b_alone < b_merged and b_alone >= b_cur:
-                    return True
-            return False
-
-        for orig_idx in sorted_indices:
-            item_tokens = {path: per_item_path_tokens[path][orig_idx] for path in paths}
-            fits = len(current_batch) < self.max_batch_size and all(
-                current_tokens[path] + item_tokens[path] <= max_path_budgets[path]
+                budget = self._path_fitting_budget(path, total)
+                if (
+                    budget is not None
+                    and budget - total > total * self.max_padding_ratio
+                ):
+                    excessive_padding = True
+                    break
+        if self.oversize_policy == "eager" and (
+            excessive_padding
+            or num_items > self.max_batch_size
+            or any(
+                sum(per_item_path_tokens[path]) > max_path_budgets[path]
                 for path in paths
             )
-            if current_batch and (not fits or should_defer_item(item_tokens)):
-                append_current_batch()
-                current_batch = []
-                current_tokens = dict.fromkeys(paths, 0)
+        ):
+            outputs = {}
+            with torch.inference_mode():
+                for path in paths:
+                    if any(per_item_path_tokens[path]):
+                        outputs[path] = self.model.encoder_eager_forward(
+                            mm_kwargs, path=path
+                        )
+            result: dict[int, torch.Tensor] = {}
+            self.model.postprocess_encoder_output(
+                outputs,
+                list(range(num_items)),
+                per_item_out_tokens,
+                result,
+                clone=True,
+                batch_mm_kwargs=mm_kwargs,
+            )
+            self.graph_misses += num_items
+            return [result[i] for i in range(num_items)]
 
-            current_batch.append(orig_idx)
-            for path in paths:
-                current_tokens[path] += item_tokens[path]
+        batches: list[tuple[list[int], dict[str, int | None]]] = []
+        if self.oversize_policy == "eager":
+            path_budgets = {
+                path: self._path_fitting_budget(path, sum(tokens))
+                for path, tokens in per_item_path_tokens.items()
+            }
+            batches.append((list(range(num_items)), path_budgets))
+        else:
+            sorted_indices = sorted(
+                range(num_items), key=lambda i: per_item_out_tokens[i]
+            )
+            current_batch: list[int] = []
+            current_tokens = dict.fromkeys(paths, 0)
 
-        append_current_batch()
+            def append_current_batch() -> None:
+                if not current_batch:
+                    return
+                path_budgets = {
+                    path: self._path_fitting_budget(path, current_tokens[path])
+                    for path in paths
+                }
+                batches.append((list(current_batch), path_budgets))
+
+            def should_defer_item(item_tokens: dict[str, int]) -> bool:
+                """Whether closing the batch strictly reduces summed budgets."""
+                for path in paths:
+                    item = item_tokens[path]
+                    if item == 0:
+                        continue
+                    cur = current_tokens[path]
+                    b_cur = self._path_fitting_budget(path, cur)
+                    b_alone = self._path_fitting_budget(path, item)
+                    b_merged = self._path_fitting_budget(path, cur + item)
+                    # Only called when the item fits; lookups land on a budget.
+                    assert (
+                        b_cur is not None
+                        and b_alone is not None
+                        and b_merged is not None
+                    )
+                    # Only defer items that alone outweigh the whole current
+                    # batch; splitting smaller ones fragments flood packing.
+                    if b_cur + b_alone < b_merged and b_alone >= b_cur:
+                        return True
+                return False
+
+            for orig_idx in sorted_indices:
+                item_tokens = {
+                    path: per_item_path_tokens[path][orig_idx] for path in paths
+                }
+                fits = len(current_batch) < self.max_batch_size and all(
+                    current_tokens[path] + item_tokens[path] <= max_path_budgets[path]
+                    for path in paths
+                )
+                if current_batch and (not fits or should_defer_item(item_tokens)):
+                    append_current_batch()
+                    current_batch = []
+                    current_tokens = dict.fromkeys(paths, 0)
+
+                current_batch.append(orig_idx)
+                for path in paths:
+                    current_tokens[path] += item_tokens[path]
+
+            append_current_batch()
 
         outputs_by_orig_idx: dict[int, torch.Tensor] = {}
         for batch_indices, path_budgets in batches:
@@ -547,8 +706,13 @@ class EncoderCudaGraphManager:
                         path=path,
                         axis_keys=axis_keys,
                     )
-                    assert graph_output is not None
-                    output = graph_output
+                    if graph_output is None:
+                        with torch.inference_mode():
+                            output = self.model.encoder_eager_forward(
+                                batch_mm_kwargs, path=path
+                            )
+                    else:
+                        output = graph_output
                 graph_outputs[path] = output
 
             if all_eager:

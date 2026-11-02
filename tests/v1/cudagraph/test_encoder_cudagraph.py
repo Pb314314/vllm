@@ -13,6 +13,7 @@ Test organization:
 """
 
 from collections.abc import Hashable
+from contextlib import nullcontext
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock, patch
@@ -46,6 +47,55 @@ if current_platform.is_xpu():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("model_name", ["minimax", "deepseek"])
+@pytest.mark.parametrize("indices", [[0, 1], [1, 0], [1], [1, 1], []])
+def test_real_encoder_item_selection_preserves_order(model_name, indices):
+    """Whole-batch copy elision must preserve subset and reordering behavior."""
+    patches = torch.arange(36).reshape(12, 3)
+    if model_name == "minimax":
+        from vllm.models.minimax_m3.common.encoder_cudagraph import (
+            MiniMaxM3EncoderCudaGraphMixin,
+        )
+
+        class ItemSelector(MiniMaxM3EncoderCudaGraphMixin):
+            def get_max_frames_per_video(self) -> int:
+                return 1
+
+        model = ItemSelector()
+        data = {
+            "pixel_values": patches,
+            "image_grid_thw": torch.tensor([[1, 2, 2], [1, 2, 4]]),
+        }
+        patch_key = "pixel_values"
+    else:
+        from vllm.models.deepseek_v41.common.vl_cudagraph import (
+            DeepseekV4VLEncoderCudaGraphMixin,
+        )
+
+        model = DeepseekV4VLEncoderCudaGraphMixin()
+        data = {
+            "patches": patches,
+            "vit_grid": torch.tensor([[2, 2], [2, 4]]),
+            "llm_grid": torch.tensor([[1, 1], [1, 2]]),
+            "types": torch.arange(9),
+        }
+        patch_key = "patches"
+    selected = model.select_encoder_cudagraph_items(data, indices)
+    chunks = [patches[:4], patches[4:]]
+    expected = torch.cat([chunks[i] for i in indices]) if indices else patches[:0]
+    torch.testing.assert_close(selected[patch_key], expected)
+    for key in data.keys() - {patch_key, "types"}:
+        torch.testing.assert_close(selected[key], data[key][indices])
+    if "types" in data:
+        spans = [data["types"][:4], data["types"][4:]]
+        expected_types = (
+            torch.cat([spans[i] for i in indices]) if indices else data["types"][:0]
+        )
+        torch.testing.assert_close(selected["types"], expected_types)
+    if indices == [0, 1]:
+        assert selected[patch_key].data_ptr() == patches.data_ptr()
+
+
 class _MockCompilationConfig:
     """Minimal mock for VllmConfig.compilation_config."""
 
@@ -57,6 +107,9 @@ class _MockCompilationConfig:
         self.encoder_cudagraph_token_budgets = token_budgets or []
         self.encoder_cudagraph_max_vision_items_per_batch = max_mm_items
         self.encoder_cudagraph_max_frames_per_batch = None
+        self.encoder_cudagraph_oversize_policy = "split"
+        self.encoder_cudagraph_eager_min_tokens = None
+        self.encoder_cudagraph_max_padding_ratio = 0.0
 
 
 class _MockMultimodalConfig:
@@ -167,6 +220,10 @@ def _make_manager_with_budgets(budgets: list[int]) -> EncoderCudaGraphManager:
     mgr.path_token_budgets = {"default": mgr.token_budgets}
     mgr.max_batch_size = 16
     mgr.use_dp = False
+    mgr.use_breakable = False
+    mgr.oversize_policy = "split"
+    mgr.eager_min_tokens = None
+    mgr.max_padding_ratio = 0.0
     mgr.config = EncoderCudaGraphConfig(
         modalities=["image"],
         buffer_keys=[],
@@ -308,11 +365,111 @@ def _run_packing(
 
 
 class TestExecuteLocalPacking:
-    """Greedy packing defers items that cross a budget cliff."""
+    """One replay per path by default; explicit split packing remains available."""
 
     @staticmethod
     def _spec(tokens: int) -> EncoderItemSpec:
         return EncoderItemSpec(input_size=tokens, output_tokens=tokens)
+
+    @pytest.mark.parametrize(
+        "tokens,use_graph", [(1025, True), (2048, True), (2049, False), (4095, True)]
+    )
+    def test_padding_limit_keeps_small_and_nearly_exact_batches(
+        self, tokens, use_graph
+    ):
+        mgr = _make_manager_with_budgets([128, 2048, 2176, 4096])
+        mgr.oversize_policy = "eager"
+        mgr.eager_min_tokens = 1536
+        mgr.max_padding_ratio = 0.02
+        runs = _run_packing(mgr, [self._spec(tokens)])
+        assert bool(runs) == use_graph
+        eager_forward = cast(MagicMock, mgr.model.encoder_eager_forward)
+        assert eager_forward.call_count == (0 if use_graph else 1)
+
+    def test_padding_limit_is_inclusive_and_does_not_change_split_policy(self):
+        mgr = _make_manager_with_budgets([110])
+        mgr.eager_min_tokens = 50
+        mgr.max_padding_ratio = 0.10
+        mgr.oversize_policy = "eager"
+        assert _run_packing(mgr, [self._spec(100)]) == [([0], "default", 110)]
+        mgr.oversize_policy = "split"
+        assert _run_packing(mgr, [self._spec(51)]) == [([0], "default", 110)]
+
+    @pytest.mark.parametrize(
+        "tokens,max_items", [([2048, 2048], 16), ([2048, 2049], 16), ([64] * 3, 2)]
+    )
+    def test_eager_policy_switches_only_above_capture_capacity(self, tokens, max_items):
+        mgr = _make_manager_with_budgets([2048, 4096])
+        mgr.max_batch_size = max_items
+        mgr.oversize_policy = "eager"
+        runs = _run_packing(mgr, [self._spec(n) for n in tokens])
+        eager = cast(MagicMock, mgr.model.encoder_eager_forward)
+        if sum(tokens) <= 4096 and len(tokens) <= max_items:
+            assert runs == [([0, 1], "default", 4096)]
+            eager.assert_not_called()
+        else:
+            assert runs == []
+            eager.assert_called_once_with({}, path="default")
+            assert mgr.graph_misses == len(tokens)
+
+    def test_eager_policy_preserves_original_batch_for_all_active_paths(self):
+        mgr = _make_manager_with_budgets([64])
+        mgr.oversize_policy = "eager"
+        mgr.path_token_budgets = {"a": [64], "b": [64], "idle": [64]}
+        specs = [
+            EncoderItemSpec(40, 40, {"a": 40, "b": 10}),
+            EncoderItemSpec(30, 30, {"a": 30, "b": 10}),
+        ]
+        assert _run_packing(mgr, specs) == []
+        eager = cast(MagicMock, mgr.model.encoder_eager_forward)
+        assert eager.call_args_list == [
+            (({},), {"path": "a"}),
+            (({},), {"path": "b"}),
+        ]
+
+    @pytest.mark.parametrize("tokens", [[5, 1, 2], [5, 1]])
+    def test_eager_policy_uses_one_replay_even_when_splitting_saves_padding(
+        self, tokens
+    ):
+        mgr = _make_manager_with_budgets([1, 2, 4, 5, 8])
+        mgr.oversize_policy = "eager"
+        runs = _run_packing(mgr, [self._spec(n) for n in tokens])
+        assert runs == [(list(range(len(tokens))), "default", 8)]
+
+    def test_eager_policy_uses_one_replay_for_each_active_path(self):
+        mgr = _make_manager_with_budgets([1, 2, 4, 5, 8])
+        mgr.path_token_budgets = {"a": [1, 2, 4, 5, 8], "b": [1, 2, 4, 8]}
+        mgr.oversize_policy = "eager"
+        specs = [
+            EncoderItemSpec(5, 5, {"a": 5, "b": 4}),
+            EncoderItemSpec(1, 1, {"a": 1, "b": 1}),
+            EncoderItemSpec(2, 2, {"a": 2, "b": 1}),
+        ]
+        runs = _run_packing(mgr, specs)
+        assert runs == [
+            ([0, 1, 2], "a", 8),
+            ([0, 1, 2], "b", 8),
+        ]
+
+    @pytest.mark.parametrize("count,budget", [(32, 2048), (64, 4096)])
+    def test_eager_policy_does_not_fragment_small_images_on_sparse_grid(
+        self, count, budget
+    ):
+        mgr = _make_manager_with_budgets([128, 2048, 4096, 8192])
+        mgr.max_batch_size = 64
+        mgr.oversize_policy = "eager"
+        runs = _run_packing(mgr, [self._spec(64)] * count)
+        assert runs == [(list(range(count)), "default", budget)]
+
+    @pytest.mark.parametrize(
+        "budgets,expected", [([512, 1024, 2048], 2048), ([512, 1024, 1152, 2048], 1152)]
+    )
+    def test_extra_budget_reduces_padding_without_splitting(self, budgets, expected):
+        mgr = _make_manager_with_budgets(budgets)
+        mgr.oversize_policy = "eager"
+        assert _run_packing(mgr, [self._spec(512), self._spec(576)]) == [
+            ([0, 1], "default", expected)
+        ]
 
     def test_cliff_deferral_splits_batch(self):
         # Merging would force 4200 tokens into the 8192 budget; deferring
@@ -436,6 +593,122 @@ class TestGetCumulativeStats:
 # GPU fixtures and helpers
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.skipif(not current_platform.is_cuda(), reason="CUDA required")
+@pytest.mark.parametrize("decoder_full", [False, True])
+@pytest.mark.parametrize("backend", ["TORCH_SDPA", "FLASHINFER"])
+def test_breakable_encoder_uses_current_lengths_and_stable_output(
+    monkeypatch, decoder_full, backend
+):
+    """Changing image composition must not reuse captured lengths or padded rows."""
+    from vllm.compilation.breakable_cudagraph import BreakableCUDAGraphCapture
+    from vllm.compilation.encoder_cudagraph import (
+        EncoderAttentionMetadata,
+        encoder_attention_context,
+        get_encoder_attention_metadata,
+    )
+    from vllm.config import CUDAGraphMode
+    from vllm.utils.torch_utils import _current_stream_tls
+
+    monkeypatch.setenv("VLLM_USE_BREAKABLE_CUDAGRAPH", "0")
+    decoder_context = (
+        patch(
+            "vllm.compilation.breakable_cudagraph.get_forward_context",
+            return_value=SimpleNamespace(cudagraph_runtime_mode=CUDAGraphMode.FULL),
+        )
+        if decoder_full
+        else nullcontext()
+    )
+    device, dtype = "cuda", torch.bfloat16
+    generator = torch.Generator(device=device).manual_seed(42)
+    x = torch.randn(1, 64, 2, 64, device=device, dtype=dtype, generator=generator)
+    workspace = None
+    if backend == "FLASHINFER":
+        pytest.importorskip("flashinfer")
+        workspace = torch.empty(128 * 1024**2, device=device, dtype=torch.uint8)
+    saved_stream = getattr(_current_stream_tls, "value", None)
+    stream = torch.cuda.Stream()
+    stream.wait_stream(torch.cuda.current_stream())
+
+    def metadata(lengths):
+        cu = torch.tensor([0, *lengths], device=device, dtype=torch.int32).cumsum(0)
+        if backend == "FLASHINFER":
+            cu = torch.cat((cu, cu[-1:].expand(8 - len(lengths)))).to(torch.int32)
+            return EncoderAttentionMetadata(
+                tuple(lengths),
+                torch.cat((cu * 128, cu * 384)),
+                torch.tensor(1024),
+                torch.tensor(
+                    lengths + [0] * (8 - len(lengths)), device=device, dtype=torch.int32
+                ),
+            )
+        return EncoderAttentionMetadata(
+            tuple(lengths), cu.to(torch.int32), torch.tensor(max(lengths))
+        )
+
+    def forward():
+        q = x * 0.5
+        v = torch.stack((q, q, q), dim=2)[:, :, 2]
+        out = torch.empty_like(q)
+        torch.ops.vllm.encoder_attention_with_output(
+            q, q, v, out, 64**-0.5, backend, None, workspace
+        )
+        return out * 2
+
+    try:
+        with (
+            torch.inference_mode(),
+            torch.cuda.stream(stream),
+            decoder_context,
+            patch(
+                "vllm.compilation.breakable_cudagraph.is_forward_context_available",
+                return_value=decoder_full,
+            ),
+        ):
+            capture_metadata = metadata([32, 32])
+            with encoder_attention_context(capture_metadata):
+                forward()
+                cap = BreakableCUDAGraphCapture(pool=torch.cuda.graph_pool_handle())
+                with cap:
+                    result = forward()
+            assert cap.num_eager_breaks == 1 and cap.num_graphs == 2
+            address = result.data_ptr()
+            for lengths in ([64], [8, 16], [16, 8], [4], [32, 32], [64]):
+                n = sum(lengths)
+                x.normal_(generator=generator)
+                x[:, n:].fill_(float("nan"))
+                current = metadata(lengths)
+                with encoder_attention_context(current):
+                    cap.replay()
+                    uncaptured = forward()
+                torch.testing.assert_close(result, uncaptured, rtol=0, atol=0)
+                assert get_encoder_attention_metadata() is None
+                expected = []
+                for q in (x[:, :n] * 0.5).split(lengths, dim=1):
+                    q = q.transpose(1, 2).float()
+                    expected.append(
+                        torch.nn.functional.scaled_dot_product_attention(
+                            q, q, q
+                        ).transpose(1, 2)
+                        * 2
+                    )
+                # BF16 backends differ near zero; also check a float32 oracle.
+                torch.testing.assert_close(
+                    result[:, :n].float(),
+                    torch.cat(expected, dim=1),
+                    rtol=0.01,
+                    atol=0.01,
+                )
+                assert result[:, n:].count_nonzero() == 0
+                assert result.data_ptr() == address
+            with pytest.raises(RuntimeError), encoder_attention_context(current):
+                raise RuntimeError("Context must be reset on exceptions")
+            assert get_encoder_attention_metadata() is None
+        torch.cuda.current_stream().wait_stream(stream)
+    finally:
+        _current_stream_tls.value = saved_stream
+
+
 # Mock encoder parameters (kept small for fast capture)
 _SPATIAL_MERGE = 2
 _HIDDEN = 32
@@ -480,6 +753,7 @@ class SimpleMockViTModel(torch.nn.Module, SupportsEncoderCudaGraph):
             modalities=["image"],
             buffer_keys=["dummy_buf"],
             out_hidden_size=_HIDDEN,
+            supports_buffer_reuse=True,
         )
 
     def get_input_modality(
@@ -621,6 +895,10 @@ def _make_manager_for_gpu(
         max_frames_per_batch if max_frames_per_batch is not None else max_batch_size * 2
     )
     mgr.use_dp = False
+    mgr.use_breakable = False
+    mgr.oversize_policy = "split"
+    mgr.eager_min_tokens = None
+    mgr.max_padding_ratio = 0.0
     mgr.budget_graphs = {"default": {}}
     mgr.graph_pool = None
     mgr._capture_axes = ()
@@ -694,6 +972,49 @@ class TestEncoderCudaGraphCaptureReplay:
     def test_capture_uses_supplied_graph_pool(self):
         assert self.mgr.graph_pool is self.graph_pool
 
+    def test_capture_reuses_storage_across_budget_sizes(self):
+        """Adding smaller CUDA graph sizes must not duplicate persistent buffers."""
+        if self.device.type != "cuda":
+            pytest.skip("CUDA buffer reuse")
+        entries = list(self.mgr.budget_graphs["default"].values())
+        assert (
+            len({entry.input_buffers["pixel_values"].data_ptr() for entry in entries})
+            == 1
+        )
+        assert len({entry.output_buffer.data_ptr() for entry in entries}) == 1
+
+    def test_capture_constants_stay_independent_without_buffer_reuse(self):
+        """Replay may omit capture-specific constants unless reuse is opted into."""
+        self.mgr.clear()
+        self.mgr.config.supports_buffer_reuse = False
+        prepare = self.model.prepare_encoder_cudagraph_capture_inputs
+        forward = self.model.encoder_cudagraph_forward
+
+        def capture_inputs(token_budget, *args, **kwargs):
+            inputs = prepare(token_budget, *args, **kwargs)
+            inputs.values["constant"] = torch.full(
+                (), token_budget, device=self.device, dtype=self.dtype
+            )
+            return inputs
+
+        def graph_forward(values, path="default"):
+            return forward(values, path) + values["constant"]
+
+        with (
+            patch.object(
+                self.model, "prepare_encoder_cudagraph_capture_inputs", capture_inputs
+            ),
+            patch.object(self.model, "encoder_cudagraph_forward", graph_forward),
+        ):
+            self.mgr.capture(self.graph_pool)
+
+        for budget in reversed(_BUDGETS):
+            inputs = _make_mm_kwargs([[1, 2, budget * 2]], self.device, self.dtype)
+            result = self.mgr.execute(inputs)
+            with torch.inference_mode():
+                expected = self.model.encoder_eager_forward(inputs) + budget
+            torch.testing.assert_close(result[0], expected)
+
     def test_clear_releases_graphs_and_pool(self):
         self.mgr.clear()
         assert self.mgr.budget_graphs == {"default": {}}
@@ -761,6 +1082,39 @@ class TestEncoderCudaGraphCaptureReplay:
         for out in result:
             assert out.shape == (4, _HIDDEN)
 
+    def test_missing_capture_falls_back_without_replaying_other_sizes(self):
+        self.mgr.oversize_policy = "eager"
+        mm_kwargs = _make_mm_kwargs([[1, 8, 8]], self.device, self.dtype)
+        expected = self.model.encoder_eager_forward(mm_kwargs)
+        del self.mgr.budget_graphs["default"][16]
+        result = self.mgr.execute(mm_kwargs)
+        assert result is not None
+        torch.testing.assert_close(torch.cat(result), expected)
+        assert self.mgr.graph_hits == 0
+        assert self.mgr.graph_misses == 1
+
+    def test_metadata_over_capacity_falls_back_even_when_tokens_fit(self):
+        self.mgr.oversize_policy = "eager"
+        mm_kwargs = _make_mm_kwargs([[1, 8, 8]], self.device, self.dtype)
+        expected = self.model.encoder_eager_forward(mm_kwargs)
+        entry = self.mgr.budget_graphs["default"][16]
+        entry.input_buffers["frame_metadata"] = torch.zeros(4, device=self.device)
+        prepare = self.model.prepare_encoder_cudagraph_replay_buffers
+
+        def too_many_frames(*args, **kwargs):
+            replay = prepare(*args, **kwargs)
+            replay.values["frame_metadata"] = torch.zeros(5, device=self.device)
+            return replay
+
+        with patch.object(
+            self.model, "prepare_encoder_cudagraph_replay_buffers", too_many_frames
+        ):
+            result = self.mgr.execute(mm_kwargs)
+        assert result is not None
+        torch.testing.assert_close(torch.cat(result), expected)
+        assert self.mgr.graph_hits == 0
+        assert self.mgr.graph_misses == 1
+
 
 # ---------------------------------------------------------------------------
 # E-only capture and output lifecycle
@@ -770,8 +1124,11 @@ class TestEncoderCudaGraphCaptureReplay:
 @pytest.mark.skipif(not HAS_DEVICE_GRAPH, reason="Requires CUDA, ROCm or XPU graph")
 @pytest.mark.usefixtures("dist_init", "workspace_init")
 @pytest.mark.parametrize("profile_only", [False, True])
+@pytest.mark.parametrize("oversize_policy", ["split", "eager"])
 @torch.inference_mode()
-def test_eonly_capture_preserves_outputs_across_replay_and_fallback(profile_only):
+def test_eonly_capture_preserves_outputs_across_replay_and_fallback(
+    profile_only, oversize_policy
+):
     """The E-only entry captures only the encoder and preserves cached outputs."""
     from vllm.distributed.ec_transfer.ec_connector.base import (
         ECConnectorBase,
@@ -787,6 +1144,7 @@ def test_eonly_capture_preserves_outputs_across_replay_and_fallback(profile_only
     dtype = torch.float16
     model = SimpleMockViTModel().to(device).half()
     manager = _make_manager_for_gpu(model, _BUDGETS, _MAX_BATCH, device, dtype)
+    manager.oversize_policy = oversize_policy
     encoder = object.__new__(EncoderRunner)
     encoder.device = device
     encoder.cudagraph_manager = manager
@@ -821,7 +1179,13 @@ def test_eonly_capture_preserves_outputs_across_replay_and_fallback(profile_only
     )
     saved_outputs: list[tuple[torch.Tensor, torch.Tensor]] = []
     # Mixed sizes exercise packing order; 64 is the boundary, 81 falls back.
-    for grids in ([[1, 8, 8], [1, 4, 4]], [[1, 16, 16]], [[1, 18, 18]], [[1, 4, 4]]):
+    for grids in (
+        [[1, 8, 8], [1, 4, 4]],
+        [[1, 16, 16]],
+        [[1, 16, 16], [1, 4, 4]],
+        [[1, 18, 18]],
+        [[1, 4, 4]],
+    ):
         inputs = _make_mm_kwargs(grids, device, dtype)
         expected = model.encoder_eager_forward(inputs).split(
             [t * (h // 2) * (w // 2) for t, h, w in grids]
@@ -838,8 +1202,8 @@ def test_eonly_capture_preserves_outputs_across_replay_and_fallback(profile_only
         for previous, snapshot in saved_outputs:
             torch.testing.assert_close(previous, snapshot, rtol=0, atol=0)
         saved_outputs.extend((output, output.clone()) for output in outputs)
-    assert manager.graph_hits == 4
-    assert manager.graph_misses == 1
+    assert manager.graph_hits == (4 if oversize_policy == "eager" else 6)
+    assert manager.graph_misses == (3 if oversize_policy == "eager" else 1)
     assert pending_sends.keys() == cache.keys()
     connector.get_finished.return_value = (set(cache), None)
     with ec.maybe_get_output(scheduled) as ec_output:
@@ -876,6 +1240,7 @@ class SimpleMockViTVideoModel(SimpleMockViTModel):
             modalities=["image", "video"],
             buffer_keys=["dummy_buf"],
             out_hidden_size=_HIDDEN,
+            supports_buffer_reuse=True,
         )
 
     def get_input_modality(self, mm_kwargs: dict[str, Any]) -> str:

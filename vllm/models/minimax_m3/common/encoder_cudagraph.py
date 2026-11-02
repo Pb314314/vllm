@@ -157,6 +157,9 @@ class MiniMaxM3EncoderCudaGraphMixin(SupportsEncoderCudaGraph):
         pixel_values = self._get_pixel_values(mm_kwargs)
         source_grid = mm_kwargs["image_grid_thw"]
 
+        if indices and indices == list(range(len(grid_thw_list))):
+            return {"pixel_values": pixel_values, "image_grid_thw": source_grid}
+
         if len(indices) == 0:
             empty_grid = (
                 source_grid[:0]

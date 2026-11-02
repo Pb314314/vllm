@@ -120,6 +120,7 @@ from vllm.utils.cache import LRUCache
 from vllm.utils.collection_utils import is_list_of
 from vllm.utils.math_utils import cdiv, round_up
 from vllm.utils.torch_utils import PIN_MEMORY
+from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.worker.encoder_cudagraph_defs import EncoderCudaGraphReplayBuffers
 
 from ...utils.gpu_sync_debug import gpu_sync_allowed
@@ -2148,6 +2149,8 @@ class Qwen3VLForConditionalGeneration(
             ],
             out_hidden_size=self.visual.out_hidden_size,
             max_frames_per_video=max_frames,
+            supports_breakable=not self.is_multimodal_pruning_enabled,
+            supports_buffer_reuse=True,
         )
 
     def get_input_modality(
@@ -2265,6 +2268,38 @@ class Qwen3VLForConditionalGeneration(
                 "video_grid_thw": selected_grid,
             }
 
+    def _encoder_breakable_metadata(self, grid_thw_list, values):
+        from vllm.compilation.encoder_cudagraph import EncoderAttentionMetadata
+
+        lengths = tuple(h * w for t, h, w in grid_thw_list for _ in range(t))
+        if self.visual.attn_backend == AttentionBackendEnum.FLASHINFER:
+            from vllm.model_executor.layers.attention.mm_encoder_attention import (
+                FLASHINFER_BATCH_BUCKETS,
+                bucket_flashinfer_max_seqlen,
+            )
+
+            count = next(
+                (b for b in FLASHINFER_BATCH_BUCKETS if b >= len(lengths)),
+                ((len(lengths) + 7) // 8) * 8,
+            )
+            offsets = values["cu_seqlens"]
+            half = offsets.shape[0] // 2
+            return EncoderAttentionMetadata(
+                sequence_lengths=lengths,
+                cu_seqlens=torch.cat(
+                    (offsets[: count + 1], offsets[half : half + count + 1])
+                ),
+                max_seqlen=torch.tensor(
+                    bucket_flashinfer_max_seqlen(max(lengths)), dtype=torch.int32
+                ),
+                sequence_lengths_gpu=values["sequence_lengths"][:count],
+            )
+        return EncoderAttentionMetadata(
+            sequence_lengths=lengths,
+            cu_seqlens=values["cu_seqlens"][: len(lengths) + 1],
+            max_seqlen=torch.tensor(max(lengths), dtype=torch.int32),
+        )
+
     def prepare_encoder_cudagraph_capture_inputs(
         self,
         token_budget: int,
@@ -2350,6 +2385,7 @@ class Qwen3VLForConditionalGeneration(
 
         return EncoderCudaGraphCaptureInputs(
             values=values,
+            attention_metadata=self._encoder_breakable_metadata(grid_config, values),
         )
 
     def prepare_encoder_cudagraph_replay_buffers(
@@ -2378,7 +2414,10 @@ class Qwen3VLForConditionalGeneration(
         values = metadata | {
             "pixel_values": self._get_pixel_values_by_modality(mm_kwargs),
         }
-        return EncoderCudaGraphReplayBuffers(values=values)
+        return EncoderCudaGraphReplayBuffers(
+            values=values,
+            attention_metadata=self._encoder_breakable_metadata(grid_thw_list, values),
+        )
 
     def encoder_cudagraph_forward(
         self,
