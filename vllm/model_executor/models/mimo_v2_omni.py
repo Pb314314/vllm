@@ -679,10 +679,12 @@ def _video_timestamps_from_metadata(
 ) -> torch.Tensor | None:
     """Media time (s) of each sampled frame, from the video loader's metadata.
 
-    The loader samples frames uniformly, so return evenly spaced times from
-    the first to the last sampled frame: keeping the timestamps arithmetic is
-    what lets ``get_video_replacement`` rebuild the exact same timestamp
-    labels from ``second_per_grid_ts`` and ``video_start_times``.
+    The loader samples frames (near-)uniformly, so return evenly spaced times
+    from the first to the last sampled frame. With dropped frames or
+    frame_recovery, ``frames_indices`` can be non-uniform; the even spacing is
+    then an approximation, which is required because ``get_video_replacement``
+    rebuilds the timestamp labels as arithmetic ``start + j *
+    ``second_per_grid_ts`` steps and the two must agree.
 
     Returns None if the metadata cannot provide the frame times.
     """
@@ -953,7 +955,7 @@ class MiMoV2OmniMultiModalProcessor(BaseMultiModalProcessor[MiMoV2OmniProcessing
       regenerate the exact same timestamp token IDs.
     """
 
-    # Fallback fps for videos without loader metadata (e.g. raw arrays).
+    # Fallback fps when the video metadata has no usable frames_indices/fps.
     # With metadata, timestamps come from the sampled frames' media time.
     _INPUT_FPS: float = 1.0
 
