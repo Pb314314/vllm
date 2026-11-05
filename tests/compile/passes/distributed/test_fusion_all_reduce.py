@@ -157,9 +157,7 @@ def test_op_forces_two_shot_fp16_mnnvl(
         lambda **kwargs: SimpleNamespace(backend="mnnvl"),
     )
     monkeypatch.setattr(arf, "get_tensor_model_parallel_rank", lambda: 0)
-    monkeypatch.setattr(
-        arf, "get_tp_group", lambda: SimpleNamespace(cpu_group=None)
-    )
+    monkeypatch.setattr(arf, "get_tp_group", lambda: SimpleNamespace(cpu_group=None))
     monkeypatch.setattr(
         arf.flashinfer_comm,
         "allreduce_fusion",
