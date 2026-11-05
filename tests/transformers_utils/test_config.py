@@ -323,3 +323,79 @@ def test_mrope_num_dims_from_nested_rope_parameters():
 
 def test_mrope_num_dims_without_mrope():
     assert mrope_num_dims(PreTrainedConfig()) == 0
+
+
+def test_get_config_merges_legacy_hf_quant_config_layers(tmp_path):
+    """A config.json quantization_config that misses layers listed in the
+    legacy hf_quant_config.json gets them merged in (config.json wins on
+    conflicts). Regression test for
+    https://github.com/vllm-project/vllm/issues/65873, where the NVFP4 MTP
+    draft layers are absent from config.json and the draft then loaded
+    unquantized."""
+    mtp_layer = "model.mtp.layers.1.mixer.shared_experts.down_proj"
+    config_layers = {
+        "model.layers.0.mlp.down_proj": {"quant_algo": "NVFP4", "group_size": 16},
+        "model.layers.0.self_attn.q_proj": {"quant_algo": "FP8"},
+    }
+    legacy_layers = {
+        # Overlapping key with a different recipe: config.json must win.
+        "model.layers.0.mlp.down_proj": {"quant_algo": "NVFP4", "group_size": 32},
+        # Only in the legacy file (the #65873 MTP case).
+        mtp_layer: {"quant_algo": "NVFP4", "group_size": 16},
+    }
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "llama",
+                "architectures": ["LlamaForCausalLM"],
+                "quantization_config": {
+                    "quant_algo": "modelopt_mixed",
+                    "quant_method": "modelopt_mixed",
+                    "quantized_layers": config_layers,
+                    "ignore": ["model.mtp.layers.1.self_attn"],
+                },
+            }
+        )
+    )
+    (tmp_path / "hf_quant_config.json").write_text(
+        json.dumps(
+            {
+                "producer": {"name": "modelopt", "version": "0.29.0"},
+                "quantization": {
+                    "quant_algo": "modelopt_mixed",
+                    "quantized_layers": legacy_layers,
+                    "exclude_modules": ["model.mtp.layers.1.self_attn"],
+                },
+            }
+        )
+    )
+
+    config = config_module.get_config(tmp_path, trust_remote_code=False)
+    merged = config.quantization_config["quantized_layers"]
+    assert len(merged) == 3
+    # The legacy-only MTP layer is merged in.
+    assert merged[mtp_layer] == {"quant_algo": "NVFP4", "group_size": 16}
+    # config.json wins on conflicts.
+    assert merged["model.layers.0.mlp.down_proj"]["group_size"] == 16
+    # Exclusion semantics stay with config.json.
+    assert config.quantization_config["ignore"] == ["model.mtp.layers.1.self_attn"]
+
+
+def test_get_config_legacy_hf_quant_config_fallback_unchanged(tmp_path):
+    """Without a config.json quantization_config, hf_quant_config.json is
+    still used verbatim (the pre-existing ModelOpt <= 0.29 path)."""
+    legacy = {
+        "producer": {"name": "modelopt", "version": "0.29.0"},
+        "quantization": {
+            "quant_algo": "modelopt_mixed",
+            "quantized_layers": {"model.layers.0.mlp.down_proj": {"quant_algo": "FP8"}},
+            "exclude_modules": [],
+        },
+    }
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"]})
+    )
+    (tmp_path / "hf_quant_config.json").write_text(json.dumps(legacy))
+
+    config = config_module.get_config(tmp_path, trust_remote_code=False)
+    assert config.quantization_config == legacy

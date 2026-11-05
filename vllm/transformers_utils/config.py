@@ -891,6 +891,55 @@ def maybe_override_with_speculators(
     return model, tokenizer, speculative_config
 
 
+def _quant_layer_container(quant_config: dict[str, Any]) -> dict[str, Any]:
+    """Return the sub-dict holding the per-layer quantization map.
+
+    ModelOpt's legacy hf_quant_config.json nests it under "quantization";
+    the config.json quantization_config block keeps it at the top level.
+    """
+    nested = quant_config.get("quantization")
+    if isinstance(nested, dict) and "quantized_layers" in nested:
+        return nested
+    return quant_config
+
+
+def _merge_legacy_quant_config(
+    quant_config: dict[str, Any],
+    legacy_quant_config: dict[str, Any],
+    *,
+    model: str,
+) -> dict[str, Any]:
+    """Union the per-layer maps of config.json and hf_quant_config.json.
+
+    Only ``quantized_layers`` entries that are missing from config.json are
+    taken from the legacy file; config.json wins on conflicts, and the
+    exclusion lists (``ignore`` / ``exclude_modules``) are left to
+    config.json, which is the newer, authoritative source.
+    """
+    primary = _quant_layer_container(quant_config)
+    fallback = _quant_layer_container(legacy_quant_config)
+    primary_layers = primary.get("quantized_layers", {})
+    fallback_layers = fallback.get("quantized_layers", {})
+    if not isinstance(primary_layers, dict) or not isinstance(fallback_layers, dict):
+        return quant_config
+    missing = {
+        name: recipe
+        for name, recipe in fallback_layers.items()
+        if name not in primary_layers
+    }
+    if missing:
+        primary["quantized_layers"] = {**fallback_layers, **primary_layers}
+        logger.info(
+            "config.json quantization_config of %s is missing %d quantized "
+            "layer(s) listed in hf_quant_config.json; using the legacy "
+            "entries for them: %s",
+            model,
+            len(missing),
+            sorted(missing),
+        )
+    return quant_config
+
+
 def get_config(
     model: str | Path,
     trust_remote_code: bool,
@@ -969,12 +1018,36 @@ def get_config(
 
     # ModelOpt 0.29.0 and before saves the quantization config in a separate
     # "hf_quant_config.json" in the same directory as the model config file.
-    if quantization_config is None and file_or_path_exists(
-        model, "hf_quant_config.json", revision
-    ):
-        quantization_config = get_hf_file_to_dict(
-            "hf_quant_config.json", model, revision
-        )
+    if file_or_path_exists(model, "hf_quant_config.json", revision):
+        if quantization_config is None:
+            quantization_config = get_hf_file_to_dict(
+                "hf_quant_config.json", model, revision
+            )
+        else:
+            # Some checkpoints carry a per-layer map in config.json that is
+            # missing layers the legacy file lists (e.g. the NVFP4 MTP draft
+            # layers of NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-NVFP4, which
+            # otherwise load as unquantized and fail on shape mismatch).
+            # Union the two maps, with config.json winning on conflicts.
+            # The legacy file is only a supplement here, so never fail the
+            # load over it.
+            try:
+                legacy_quant_config = get_hf_file_to_dict(
+                    "hf_quant_config.json", model, revision
+                )
+            except Exception as e:
+                logger.warning(
+                    "Failed to read hf_quant_config.json for %s; using only "
+                    "the config.json quantization_config. Error: %s",
+                    model,
+                    e,
+                )
+            else:
+                quantization_config = _merge_legacy_quant_config(
+                    quantization_config,
+                    legacy_quant_config,
+                    model=str(model),
+                )
 
     if quantization_config is not None:
         config.quantization_config = quantization_config
