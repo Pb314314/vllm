@@ -450,7 +450,9 @@ def test_get_config_legacy_quant_merge_gated_on_modelopt(tmp_path):
         "quantized_layers": {"model.layers.0.mlp.down_proj": {"quant_algo": "FP8"}},
     }
     _write_mixed_quant_checkpoint(
-        tmp_path, quant_config, {"model.mtp.layers.1.mixer.experts": {"quant_algo": "NVFP4"}}
+        tmp_path,
+        quant_config,
+        {"model.mtp.layers.1.mixer.experts": {"quant_algo": "NVFP4"}},
     )
 
     config = config_module.get_config(tmp_path, trust_remote_code=False)
@@ -462,7 +464,9 @@ def test_get_config_legacy_quant_merge_requires_primary_layer_map(tmp_path):
     checkpoint) gets nothing injected from the legacy file."""
     quant_config = {"quant_algo": "fp8", "quant_method": "modelopt"}
     _write_mixed_quant_checkpoint(
-        tmp_path, quant_config, {"model.mtp.layers.1.mixer.experts": {"quant_algo": "NVFP4"}}
+        tmp_path,
+        quant_config,
+        {"model.mtp.layers.1.mixer.experts": {"quant_algo": "NVFP4"}},
     )
 
     config = config_module.get_config(tmp_path, trust_remote_code=False)
