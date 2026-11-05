@@ -120,12 +120,68 @@ def test_flashinfer_mnnvl_oneshot_fp16_fixed(
     installed: str,
     expected: bool,
 ):
-    import importlib.metadata
-
     import vllm.compilation.passes.fusion.allreduce_rms_fusion as arf
 
-    monkeypatch.setattr(importlib.metadata, "version", lambda _: installed)
+    monkeypatch.setattr(arf, "_installed_version", lambda _: installed)
     assert arf._flashinfer_mnnvl_oneshot_fp16_fixed() is expected
+
+
+@pytest.mark.skipif(
+    find_spec("flashinfer") is None, reason="needs flashinfer for the registered op"
+)
+@pytest.mark.parametrize(
+    ("dtype", "expected_use_oneshot"),
+    [
+        (torch.float16, False),  # fp16 on mnnvl: forced two-shot
+        (torch.bfloat16, None),  # bf16: AUTO passes through
+    ],
+)
+def test_op_forces_two_shot_fp16_mnnvl(
+    monkeypatch: pytest.MonkeyPatch,
+    dtype: torch.dtype,
+    expected_use_oneshot: bool | None,
+):
+    """Wiring test: the registered op must hand the guarded use_oneshot to
+    flashinfer (flashinfer#6817). Uses a fake mnnvl workspace and a spy on
+    flashinfer_comm.allreduce_fusion; no GPU collective runs."""
+    import vllm.compilation.passes.fusion.allreduce_rms_fusion as arf
+
+    if arf.flashinfer_comm is None:
+        pytest.skip("flashinfer.comm not available")
+
+    calls: list[dict] = []
+    monkeypatch.setattr(arf, "_FLASHINFER_MNNVL_ONESHOT_FP16_FIXED", False)
+    monkeypatch.setattr(
+        arf,
+        "get_fi_ar_workspace",
+        lambda **kwargs: SimpleNamespace(backend="mnnvl"),
+    )
+    monkeypatch.setattr(arf, "get_tensor_model_parallel_rank", lambda: 0)
+    monkeypatch.setattr(
+        arf.flashinfer_comm,
+        "allreduce_fusion",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    hidden = 64
+    x = torch.zeros(4, hidden, dtype=dtype)
+    residual = torch.zeros_like(x)
+    norm_out = torch.empty_like(x)
+    gamma = torch.ones(hidden, dtype=dtype)
+    arf.call_trtllm_fused_allreduce_norm(
+        x,
+        residual,
+        gamma,
+        1e-6,
+        2,  # world_size
+        True,  # launch_with_pdl
+        True,  # fp32_acc
+        1024,  # max_token_num
+        arf.ar_fusion_patterns.kARResidualRMSNorm,
+        norm_out,
+    )
+    assert len(calls) == 1
+    assert calls[0]["use_oneshot"] is expected_use_oneshot
 
 
 def _make_workspace_hidden_config(

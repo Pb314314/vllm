@@ -8,6 +8,7 @@ from typing import Any
 import torch
 import torch._inductor.pattern_matcher as pm
 import torch.fx as fx
+from packaging.version import Version
 from torch._higher_order_ops.auto_functionalize import auto_functionalized
 from torch._inductor.pattern_matcher import PatternMatcherPass
 
@@ -31,6 +32,7 @@ from vllm.model_executor.layers.quantization.utils.quant_utils import (
     kFp8StaticTensorSym,
 )
 from vllm.platforms import current_platform
+from vllm.utils.flashinfer import _installed_version
 from vllm.utils.torch_utils import (
     direct_register_custom_op,
 )
@@ -206,14 +208,8 @@ def _flashinfer_mnnvl_oneshot_fp16_fixed() -> bool:
     """Whether the installed flashinfer includes flashinfer-ai/flashinfer#6818
     (fp32 square in the MNNVL one-shot fused all-reduce + RMSNorm kernel),
     first released in flashinfer v0.7.3."""
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-
-        from packaging.version import Version
-
-        return Version(version("flashinfer-python")) >= Version("0.7.3")
-    except PackageNotFoundError:
-        return False
+    installed = _installed_version("flashinfer-python")
+    return installed is not None and Version(installed) >= Version("0.7.3")
 
 
 _FLASHINFER_MNNVL_ONESHOT_FP16_FIXED = _flashinfer_mnnvl_oneshot_fp16_fixed()
