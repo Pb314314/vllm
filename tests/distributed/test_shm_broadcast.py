@@ -4,6 +4,7 @@
 import dataclasses
 import gc
 import io
+import os
 import pickle
 import random
 import threading
@@ -20,6 +21,7 @@ import torch.distributed as dist
 
 from vllm.distributed.device_communicators import shm_broadcast, shm_tensor_arena
 from vllm.distributed.device_communicators.shm_broadcast import (
+    Handle,
     MessageQueue,
     ShmRingBuffer,
     _rebuild_tensor,
@@ -944,6 +946,86 @@ def test_shm_tensor_arena_creation_checks_free_space():
         pytest.raises(RuntimeError, match="Insufficient space"),
     ):
         ShmTensorArena(n_reader=1, slot_bytes=256 << 20, n_slots=8)
+
+
+def test_shm_ring_buffer_attach_to_missing_segment_stays_unused():
+    """A ShmRingBuffer attaching to a name that was never created (e.g. a
+    directly pickled object deserialized where a local attach isn't
+    required) must stay silent, per the documented pickling contract in
+    ShmRingBuffer.__reduce__ -- it is a legitimately unused object, not an
+    error by itself. Callers that require a working attach must check for
+    this themselves (see MessageQueue.create_from_handle)."""
+    with mock.patch.object(
+        shm_broadcast.shared_memory,
+        "SharedMemory",
+        side_effect=FileNotFoundError(),
+    ):
+        buffer = ShmRingBuffer(
+            n_reader=1,
+            max_chunk_bytes=24 * 1024 * 1024,
+            max_chunks=10,
+            name="vllm-test-x",
+        )
+    assert not hasattr(buffer, "shared_memory")
+
+
+def test_create_from_handle_raises_when_mandatory_local_attach_fails():
+    """When a rank is confirmed to be a local reader (present in
+    handle.local_reader_ranks) but the writer's shm segment can't be
+    attached, create_from_handle must fail clearly and immediately, not
+    return a half-constructed MessageQueue whose later use raises a
+    confusing AttributeError far from the real cause."""
+    handle = Handle(
+        local_reader_ranks=[0],
+        buffer_handle=(1, 24 * 1024 * 1024, 10, "vllm-test-x"),
+        local_subscribe_addr="ignored-because-we-fail-before-connecting",
+        local_notify_addr="ignored-because-we-fail-before-connecting",
+    )
+    with (
+        mock.patch.object(
+            shm_broadcast.shared_memory,
+            "SharedMemory",
+            side_effect=FileNotFoundError(),
+        ),
+        pytest.raises(RuntimeError, match="vllm-test-x"),
+    ):
+        MessageQueue.create_from_handle(handle, rank=0)
+
+
+def test_message_queue_survives_external_unlink_after_attach():
+    """Simulate an external cleaner (e.g. systemd-logind RemoveIPC) deleting
+    the ring's segment AFTER a local reader attached: existing writer and
+    reader mappings must keep working (POSIX shm unlink does not invalidate
+    live mmaps), while a NEW attach by name must fail fast with a clear
+    error. This invariant is what makes attaching before model load robust
+    against such cleaners."""
+    writer = MessageQueue(
+        n_reader=1,
+        n_local_reader=1,
+        max_chunk_bytes=1024,
+        max_chunks=4,
+        connect_ip="127.0.0.1",
+    )
+    reader = MessageQueue.create_from_handle(writer.export_handle(), rank=0)
+    writer.wait_until_ready()
+    reader.wait_until_ready()
+
+    # The external purge: unlink the segment while both sides hold it open.
+    shm_path = os.path.join("/dev/shm", writer.buffer.shared_memory.name)
+    os.unlink(shm_path)
+
+    try:
+        # Existing mappings are unaffected by the unlink.
+        writer.enqueue(b"payload")
+        assert reader.dequeue(timeout=5) == b"payload"
+
+        # A new reader cannot attach by name anymore, and is told so clearly.
+        with pytest.raises(RuntimeError, match="could not attach"):
+            MessageQueue.create_from_handle(writer.export_handle(), rank=0)
+    finally:
+        # The name is already gone; creator teardown must tolerate that.
+        writer.shutdown()
+        reader.shutdown()
 
 
 def test_remote_subscribe_addr_unique_concurrent_writers(
