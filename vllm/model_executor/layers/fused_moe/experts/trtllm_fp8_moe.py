@@ -442,7 +442,16 @@ class TrtLlmFp8ExpertsMonolithic(TrtLlmFp8ExpertsBase, mk.FusedMoEExpertsMonolit
             raise ValueError("Unsupported quantization scheme.")
 
     def supports_precomputed_routing(self) -> bool:
-        return self.quant_config.block_shape is not None
+        # Block-scale (incl. MXFP8) and static per-tensor FP8 both have a
+        # precomputed-routing TRT-LLM op.
+        return (
+            self.quant_config.block_shape is not None or self.quant_config.is_per_tensor
+        )
+
+    def supports_routed_weight_on_input(self) -> bool:
+        # trtllm_fp8_per_tensor_scale_routed_moe exposes
+        # use_routing_scales_on_input; the block-scale op does not.
+        return self.quant_config.is_per_tensor and self.quant_config.block_shape is None
 
     def apply_routed(
         self,
@@ -454,21 +463,80 @@ class TrtLlmFp8ExpertsMonolithic(TrtLlmFp8ExpertsBase, mk.FusedMoEExpertsMonolit
         activation: MoEActivation,
         global_num_experts: int,
         a1q_scale: torch.Tensor | None,
+        apply_router_weight_on_input: bool,
     ) -> torch.Tensor:
         import flashinfer
 
-        assert a1q_scale is not None
-        kwargs = self._block_scale_kwargs(hidden_states, w1, w2, activation, a1q_scale)
-        return flashinfer.fused_moe.trtllm_fp8_block_scale_routed_moe(
+        if self.quant_config.block_shape is not None:
+            assert a1q_scale is not None
+            assert not apply_router_weight_on_input
+            kwargs = self._block_scale_kwargs(
+                hidden_states, w1, w2, activation, a1q_scale
+            )
+            return flashinfer.fused_moe.trtllm_fp8_block_scale_routed_moe(
+                topk_ids=(topk_ids, topk_weights),
+                routing_bias=None,
+                num_experts=global_num_experts,
+                top_k=topk_ids.size(1),
+                n_group=None,
+                topk_group=None,
+                routed_scaling_factor=None,
+                routing_method_type=1,  # unused: routing is precomputed
+                **kwargs,
+            )
+        return self._apply_per_tensor_routed(
+            hidden_states,
+            w1,
+            w2,
+            topk_weights,
+            topk_ids,
+            activation,
+            global_num_experts,
+            apply_router_weight_on_input,
+        )
+
+    def _apply_per_tensor_routed(
+        self,
+        hidden_states: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        activation: MoEActivation,
+        global_num_experts: int,
+        apply_router_weight_on_input: bool,
+    ) -> torch.Tensor:
+        """Per-tensor FP8 with vLLM's routing (padding rows carry id -1).
+
+        Mirrors ``_apply_per_tensor`` but calls the precomputed-routing op:
+        routing bias / scaling are already folded into vLLM's top-k.
+        """
+        import flashinfer
+
+        assert self.quant_config.is_per_tensor
+        assert activation in [MoEActivation.SILU, MoEActivation.RELU2_NO_MUL]
+
+        return flashinfer.fused_moe.trtllm_fp8_per_tensor_scale_routed_moe(
             topk_ids=(topk_ids, topk_weights),
             routing_bias=None,
+            hidden_states=hidden_states,
+            gemm1_weights=w1,
+            output1_scales_scalar=self._g1_scale_c,
+            output1_scales_gate_scalar=self._g1_alphas,
+            gemm2_weights=w2,
+            output2_scales_scalar=self._g2_alphas,
             num_experts=global_num_experts,
             top_k=topk_ids.size(1),
-            n_group=None,
-            topk_group=None,
+            n_group=0,
+            topk_group=0,
+            intermediate_size=self.intermediate_size_per_partition,
+            local_expert_offset=self.ep_rank * self.local_num_experts,
+            local_num_experts=self.local_num_experts,
             routed_scaling_factor=None,
+            use_routing_scales_on_input=apply_router_weight_on_input,
             routing_method_type=1,  # unused: routing is precomputed
-            **kwargs,
+            activation_type=activation_to_flashinfer_int(activation),
+            tune_max_num_tokens=fi_moe_largest_bucket(self.moe_config),
         )
 
     def _block_scale_kwargs(

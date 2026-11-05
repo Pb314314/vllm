@@ -1194,6 +1194,418 @@ def test_trtllm_fp8_monolithic_routed_skips_padding(
     assert not routed[num_real:].any()
 
 
+def _mask_padding_rows(
+    topk_weights: torch.Tensor, topk_ids: torch.Tensor, num_real: int
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """What vLLM's routers write for padding rows (VLLM_MOE_SKIP_PADDING)."""
+    is_padding = torch.arange(topk_ids.shape[0], device=topk_ids.device) >= num_real
+    return topk_weights, topk_ids.to(torch.int32).masked_fill(is_padding[:, None], -1)
+
+
+def _assert_routed_skips_padding(
+    routed: torch.Tensor,
+    reference: torch.Tensor,
+    num_real: int,
+    atol: float,
+    rtol: float,
+) -> None:
+    """Real rows match the kernel's own routing; padding rows activate no
+    expert, so their output rows are exactly zero."""
+    assert isinstance(routed, torch.Tensor)
+    assert isinstance(reference, torch.Tensor)
+    torch.testing.assert_close(
+        routed[:num_real], reference[:num_real], atol=atol, rtol=rtol
+    )
+    assert not routed[num_real:].any()
+
+
+def _trtllm_padding_test_config(
+    e: int, topk: int, n: int, k: int, m: int, routing: RoutingMethodType
+) -> FusedMoEConfig:
+    return FusedMoEConfig(
+        num_experts=e,
+        experts_per_token=topk,
+        hidden_dim=k,
+        intermediate_size=n,
+        num_local_experts=e,
+        num_logical_experts=e,
+        moe_parallel_config=FusedMoEParallelConfig.make_no_parallel(),
+        in_dtype=torch.bfloat16,
+        activation=MoEActivation.SILU,
+        device="cuda",
+        routing_method=routing,
+        max_num_tokens=next_power_of_2(m),
+    )
+
+
+@pytest.mark.parametrize("m", [4, 64])
+@pytest.mark.skipif(
+    not current_platform.is_device_capability_family(100),
+    reason="Requires TRTLLM-Gen BF16 MoE (SM100)",
+)
+def test_trtllm_bf16_monolithic_routed_skips_padding(m: int, workspace_init):
+    """With vLLM's top-k, padded rows (expert id -1) reach no expert and real
+    rows match the BF16 monolithic kernel's own routing."""
+    from flashinfer import shuffle_matrix_a
+    from flashinfer.fused_moe import convert_to_block_layout
+
+    from vllm.model_executor.layers.fused_moe.experts.trtllm_bf16_moe import (
+        TrtLlmBf16ExpertsMonolithic,
+    )
+
+    e, topk, n, k = 32, 4, 1024, 1024
+    num_real = m // 2
+    set_random_seed(7)
+    with set_current_vllm_config(vllm_config):
+
+        def block_major_k(w: torch.Tensor) -> torch.Tensor:
+            """(E, M, K) -> the BlockMajorK layout the kernel expects."""
+            return torch.stack(
+                [
+                    convert_to_block_layout(
+                        shuffle_matrix_a(x.view(torch.uint8), 64), 128
+                    )
+                    for x in w
+                ]
+            ).view(torch.bfloat16)
+
+        w13 = block_major_k(torch.randn(e, 2 * n, k, device="cuda").bfloat16() * 0.1)
+        w2 = block_major_k(torch.randn(e, k, n, device="cuda").bfloat16() * 0.1)
+        moe_config = _trtllm_padding_test_config(
+            e, topk, n, k, m, RoutingMethodType.Renormalize
+        )
+        quant_config = FusedMoEQuantConfig.make(
+            quant_dtype=None,
+            per_act_token_quant=False,
+            per_out_ch_quant=False,
+            block_shape=None,
+        )
+        kernel = mk.FusedMoEKernel(
+            maybe_make_prepare_finalize(
+                moe=moe_config,
+                quant_config=quant_config,
+                allow_new_interface=True,
+                use_monolithic=True,
+            ),
+            TrtLlmBf16ExpertsMonolithic(
+                moe_config=moe_config, quant_config=quant_config
+            ),
+        )
+        assert kernel.supports_precomputed_routing()
+
+        a = torch.randn((m, k), device="cuda", dtype=torch.bfloat16) / 10
+        logits = torch.randn((m, e), device="cuda", dtype=torch.float32)
+        topk_weights, topk_ids, _ = fused_topk(a, logits, topk, renormalize=True)
+        topk_weights, topk_ids = _mask_padding_rows(topk_weights, topk_ids, num_real)
+        common = dict(
+            w1=w13, w2=w2, activation=MoEActivation.SILU, global_num_experts=e
+        )
+        routed = kernel.apply_monolithic_routed(
+            hidden_states=a,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            routing_sink=None,
+            **common,
+        )
+        reference = kernel.apply_monolithic(
+            hidden_states=a,
+            router_logits=logits,
+            expert_map=None,
+            apply_router_weight_on_input=False,
+            routing_sink=None,
+            **common,
+        )
+    _assert_routed_skips_padding(routed, reference, num_real, atol=2e-2, rtol=2e-2)
+
+
+@pytest.mark.parametrize("m", [4, 64])
+@pytest.mark.skipif(
+    not current_platform.is_device_capability_family(100),
+    reason="Requires TRTLLM-Gen per-tensor FP8 MoE (SM100)",
+)
+def test_trtllm_fp8_per_tensor_monolithic_routed_skips_padding(m: int, workspace_init):
+    """Per-tensor FP8 (Llama4-style, routing scales applied on input): padded
+    rows (expert id -1) reach no expert; real rows match the kernel's own
+    routing."""
+    e, topk, n, k = 16, 1, 1024, 1024
+    num_real = m // 2
+    set_random_seed(7)
+    with set_current_vllm_config(vllm_config):
+        td = TestData.make_moe_tensors_8bit(
+            m, k, n, e, is_trtllm=True, activation=MoEActivation.SILU
+        )
+        quant_config = fp8_w8a8_moe_quant_config(
+            w1_scale=td.w13_weight_scale,
+            w2_scale=td.w2_weight_scale,
+            a1_scale=td.a1_scale,
+            a2_scale=td.a2_scale,
+            per_act_token_quant=False,
+        )
+        assert quant_config.is_per_tensor and quant_config.block_shape is None
+        kernel = mk.FusedMoEKernel(
+            maybe_make_prepare_finalize(
+                moe=td.layer.moe,
+                quant_config=quant_config,
+                allow_new_interface=True,
+                use_monolithic=True,
+            ),
+            TrtLlmFp8ExpertsMonolithic(
+                moe_config=td.layer.moe, quant_config=quant_config
+            ),
+        )
+        assert kernel.supports_precomputed_routing()
+
+        score = torch.randn((m, e), device="cuda", dtype=torch.bfloat16)
+        topk_weights, topk_ids = Llama4MoE.custom_routing_function(
+            hidden_states=td.hidden_states,
+            gating_output=score,
+            topk=topk,
+            renormalize=False,
+        )
+        topk_weights, topk_ids = _mask_padding_rows(topk_weights, topk_ids, num_real)
+        common = dict(
+            w1=td.layer.w13_weight,
+            w2=td.layer.w2_weight,
+            activation=MoEActivation.SILU,
+            global_num_experts=e,
+        )
+        routed = kernel.apply_monolithic_routed(
+            hidden_states=td.hidden_states,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            apply_router_weight_on_input=True,
+            routing_sink=None,
+            **common,
+        )
+        reference = kernel.apply_monolithic(
+            hidden_states=td.hidden_states,
+            router_logits=score,
+            expert_map=None,
+            apply_router_weight_on_input=True,
+            routed_scaling_factor=1.0,
+            routing_sink=None,
+            **common,
+        )
+    assert isinstance(routed, torch.Tensor) and isinstance(reference, torch.Tensor)
+    check_accuracy(
+        ref_output=reference[:num_real],
+        actual_output=routed[:num_real],
+        atol=0.1,
+        rtol=0.85,
+        percent=0.925,
+    )
+    assert not routed[num_real:].any()
+
+
+@pytest.mark.parametrize("m", [4, 64])
+@pytest.mark.skipif(
+    not current_platform.is_device_capability_family(100),
+    reason="Requires TRTLLM-Gen NVFP4 MoE (SM100)",
+)
+def test_trtllm_nvfp4_monolithic_routed_skips_padding(m: int, workspace_init):
+    """With vLLM's top-k, padded rows (expert id -1) reach no expert and real
+    rows match the NVFP4 monolithic kernel's own routing."""
+    from flashinfer import fp4_quantize
+
+    from vllm.model_executor.layers.fused_moe.experts.trtllm_nvfp4_moe import (
+        TrtLlmNvFp4ExpertsMonolithic,
+    )
+
+    e, topk, n, k = 32, 4, 1024, 1024
+    block = 16
+    num_real = m // 2
+    set_random_seed(7)
+    with set_current_vllm_config(vllm_config):
+        global_scale = torch.tensor(1.0, device="cuda")
+
+        def quantize(w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+            q, scale = fp4_quantize(
+                w, global_scale, block, sf_use_ue8m0=False, is_sf_swizzled_layout=False
+            )
+            return q, scale.view(torch.float8_e4m3fn).reshape(*w.shape[:2], -1)
+
+        w13, w13_scale = quantize(torch.randn(e, 2 * n, k, device="cuda").bfloat16())
+        w2, w2_scale = quantize(torch.randn(e, k, n, device="cuda").bfloat16())
+        ones = torch.ones(e, device="cuda")
+        moe_config = _trtllm_padding_test_config(
+            e, topk, n, k, m, RoutingMethodType.Renormalize
+        )
+        quant_config = FusedMoEQuantConfig.make(
+            quant_dtype="nvfp4",
+            per_act_token_quant=False,
+            per_out_ch_quant=False,
+            block_shape=None,
+            w1_scale=w13_scale,
+            w2_scale=w2_scale,
+            g1_alphas=ones,
+            g2_alphas=ones,
+            a1_gscale=global_scale,
+            a2_gscale=ones,
+            is_scale_swizzled=False,
+        )
+        kernel = mk.FusedMoEKernel(
+            maybe_make_prepare_finalize(
+                moe=moe_config,
+                quant_config=quant_config,
+                allow_new_interface=True,
+                use_monolithic=True,
+            ),
+            TrtLlmNvFp4ExpertsMonolithic(
+                moe_config=moe_config, quant_config=quant_config
+            ),
+        )
+        assert kernel.supports_precomputed_routing()
+
+        a = torch.randn((m, k), device="cuda", dtype=torch.bfloat16) / 10
+        logits = torch.randn((m, e), device="cuda", dtype=torch.float32)
+        topk_weights, topk_ids, _ = fused_topk(a, logits, topk, renormalize=True)
+        topk_weights, topk_ids = _mask_padding_rows(topk_weights, topk_ids, num_real)
+        common = dict(
+            w1=w13, w2=w2, activation=MoEActivation.SILU, global_num_experts=e
+        )
+        routed = kernel.apply_monolithic_routed(
+            hidden_states=a,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            routing_sink=None,
+            **common,
+        )
+        reference = kernel.apply_monolithic(
+            hidden_states=a,
+            router_logits=logits,
+            expert_map=None,
+            apply_router_weight_on_input=False,
+            routing_sink=None,
+            **common,
+        )
+    # FP4 weights: the monolithic and routed kernels use different GEMM
+    # schedules, so real rows carry fp4 reorder noise (measured: max abs diff
+    # 0.44 on outputs of O(100)); the hard sentinel check is that padding rows
+    # are exactly zero.
+    _assert_routed_skips_padding(routed, reference, num_real, atol=1.0, rtol=0.10)
+
+
+def _mxint4_quantize(
+    x: torch.Tensor, sf_vec_size: int = 32
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """BF16 -> MxInt4: packed uint8 (signed INT4 [-8, 7]) + bf16 group scales.
+
+    Copied from tests/kernels/moe/test_marlin_vs_trtllm_mxint4.py."""
+    x_reshaped = x.reshape(-1, sf_vec_size)
+    x_max = x_reshaped.max(dim=-1, keepdim=True)[0].to(torch.float32)
+    x_min = x_reshaped.min(dim=-1, keepdim=True)[0].to(torch.float32)
+    x_max = x_max * 8.0 / 7.0
+    amax = torch.where(x_max > -x_min, x_max, -x_min)
+    scales = amax / 8.0
+    x_scaled = x_reshaped * scales.reciprocal()
+    x_int8 = (
+        x_scaled.round().clamp(-8, 7).to(torch.int8).reshape(-1, sf_vec_size // 2, 2)
+    )
+    x_int4 = (x_int8[..., 0] & 0x0F) | ((x_int8[..., 1] & 0x0F) << 4)
+    return (
+        x_int4.to(torch.uint8).reshape(*x.shape[:-1], x.shape[-1] // 2),
+        scales.to(x.dtype).reshape(*x.shape[:-1], x.shape[-1] // sf_vec_size),
+    )
+
+
+def _mxint4_quantize_moe_weights(
+    w_bf16: torch.Tensor, group_size: int = 32
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """[e, n, k] BF16 -> ([e, n, k//2] uint8, [e, n, k//group_size] bf16)."""
+    w_q, w_s = zip(
+        *[
+            _mxint4_quantize(w_bf16[i], sf_vec_size=group_size)
+            for i in range(w_bf16.shape[0])
+        ]
+    )
+    return torch.stack(w_q), torch.stack(w_s)
+
+
+@pytest.mark.parametrize("m", [4, 64])
+@pytest.mark.skipif(
+    not current_platform.is_device_capability_family(100),
+    reason="Requires TRTLLM-Gen MxInt4 MoE (SM100)",
+)
+def test_trtllm_mxint4_monolithic_routed_skips_padding(m: int, workspace_init):
+    """With vLLM's top-k (packed for the routed op), padded rows (expert id -1)
+    reach no expert and real rows match the MxInt4 monolithic kernel's own
+    routing."""
+    from vllm.model_executor.layers.fused_moe.experts.trtllm_mxint4_moe import (
+        TrtLlmMxint4ExpertsMonolithic,
+    )
+    from vllm.model_executor.layers.quantization.utils.flashinfer_mxint4_moe import (  # noqa: E501
+        prepare_static_weights_for_trtllm_mxint4_moe,
+    )
+    from vllm.scalar_type import scalar_types
+
+    e, topk, n, k = 32, 4, 1024, 1024
+    num_real = m // 2
+    set_random_seed(7)
+    with set_current_vllm_config(vllm_config):
+        std_w1 = (2.0 / (k + 2 * n)) ** 0.5
+        std_w2 = (2.0 / (n + k)) ** 0.5
+        w1_bf16 = torch.randn((e, 2 * n, k), device="cuda").bfloat16() * std_w1
+        w2_bf16 = torch.randn((e, k, n), device="cuda").bfloat16() * std_w2
+        w1_int4, w1_scales = _mxint4_quantize_moe_weights(w1_bf16)
+        w2_int4, w2_scales = _mxint4_quantize_moe_weights(w2_bf16)
+        prepared = prepare_static_weights_for_trtllm_mxint4_moe(
+            gemm1_weights=w1_int4,
+            gemm1_scales=w1_scales,
+            gemm2_weights=w2_int4,
+            gemm2_scales=w2_scales,
+        )
+        moe_config = _trtllm_padding_test_config(
+            e, topk, n, k, m, RoutingMethodType.Renormalize
+        )
+        quant_config = FusedMoEQuantConfig.make(
+            quant_dtype=scalar_types.uint4b8,
+            per_act_token_quant=False,
+            per_out_ch_quant=False,
+            block_shape=None,
+            w1_scale=prepared["gemm1_scales"],
+            w2_scale=prepared["gemm2_scales"],
+        )
+        kernel = mk.FusedMoEKernel(
+            maybe_make_prepare_finalize(
+                moe=moe_config,
+                quant_config=quant_config,
+                allow_new_interface=True,
+                use_monolithic=True,
+            ),
+            TrtLlmMxint4ExpertsMonolithic(
+                moe_config=moe_config, quant_config=quant_config
+            ),
+        )
+        assert kernel.supports_precomputed_routing()
+
+        a = torch.randn((m, k), device="cuda", dtype=torch.bfloat16) * 0.5
+        logits = torch.randn((m, e), device="cuda", dtype=torch.float32)
+        topk_weights, topk_ids, _ = fused_topk(a, logits, topk, renormalize=True)
+        topk_weights, topk_ids = _mask_padding_rows(topk_weights, topk_ids, num_real)
+        common = dict(
+            w1=prepared["gemm1_weights"],
+            w2=prepared["gemm2_weights"],
+            activation=MoEActivation.SILU,
+            global_num_experts=e,
+        )
+        routed = kernel.apply_monolithic_routed(
+            hidden_states=a,
+            topk_weights=topk_weights,
+            topk_ids=topk_ids,
+            routing_sink=None,
+            **common,
+        )
+        reference = kernel.apply_monolithic(
+            hidden_states=a,
+            router_logits=logits,
+            expert_map=None,
+            apply_router_weight_on_input=False,
+            routing_sink=None,
+            **common,
+        )
+    _assert_routed_skips_padding(routed, reference, num_real, atol=2e-2, rtol=2e-2)
+
+
 @pytest.mark.parametrize(
     ("activation", "n", "k"),
     [

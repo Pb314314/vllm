@@ -162,3 +162,61 @@ class TrtLlmMxint4ExpertsMonolithic(mk.FusedMoEExpertsMonolithic):
             routing_replay_out=routing_replay_out,
         )
         return result
+
+    def supports_precomputed_routing(self) -> bool:
+        return True
+
+    def apply_routed(
+        self,
+        hidden_states: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        activation: MoEActivation,
+        global_num_experts: int,
+        a1q_scale: torch.Tensor | None,
+        apply_router_weight_on_input: bool,
+    ) -> torch.Tensor:
+        """MxInt4 TRT-LLM experts on vLLM's routing (padding rows carry id -1).
+
+        ``trtllm_mxint4_block_scale_routed_moe`` takes the packed routing
+        contract ``(expert_id << 16) | bf16(weight_bits)``; routing
+        bias/scaling are already folded into vLLM's top-k.
+        """
+        import flashinfer
+
+        assert self.w1_scale is not None
+        assert self.w2_scale is not None
+        # Guaranteed by RoutedExperts.supports_precomputed_routing: the routed
+        # op applies routing scales on the output only.
+        assert not apply_router_weight_on_input
+
+        packed_routing = (topk_ids.to(torch.int32) << 16) | (
+            topk_weights.to(torch.bfloat16).view(torch.int16).to(torch.int32) & 0xFFFF
+        )
+        out = flashinfer.fused_moe.trtllm_mxint4_block_scale_routed_moe(
+            topk_ids=packed_routing,
+            hidden_states=hidden_states,
+            gemm1_weights=w1.data,
+            gemm1_weights_scale=self.w1_scale.data,
+            gemm1_alpha=None,
+            gemm1_beta=None,
+            gemm1_clamp_limit=None,
+            gemm2_weights=w2.data,
+            gemm2_weights_scale=self.w2_scale.data,
+            num_experts=global_num_experts,
+            top_k=self.topk,
+            n_group=0,
+            topk_group=0,
+            intermediate_size=self.intermediate_size_per_partition,
+            local_expert_offset=self.ep_rank * self.local_num_experts,
+            local_num_experts=self.local_num_experts,
+            routed_scaling_factor=None,
+            routing_method_type=1,  # unused: routing is precomputed
+            do_finalize=True,
+            tune_max_num_tokens=8192,
+        )
+        if isinstance(out, (tuple, list)):
+            out = out[0]
+        return out.to(hidden_states.dtype)

@@ -351,3 +351,67 @@ class TrtLlmBf16ExpertsMonolithic(TrtLlmBf16ExpertsBase, mk.FusedMoEExpertsMonol
         if hooked:
             return self._run_post_gemm2_hook(routed_output)
         return routed_output
+
+    def supports_precomputed_routing(self) -> bool:
+        return True
+
+    def apply_routed(
+        self,
+        hidden_states: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        activation: MoEActivation,
+        global_num_experts: int,
+        a1q_scale: torch.Tensor | None,
+        apply_router_weight_on_input: bool,
+    ) -> torch.Tensor | UnfinalizedMoEOutput:
+        """BF16 TRT-LLM experts on vLLM's routing (padding rows carry id -1).
+
+        Mirrors the modular class's ``trtllm_bf16_routed_moe`` call; routing
+        bias/scaling are already folded into vLLM's top-k.
+        """
+        import flashinfer
+        from flashinfer.fused_moe import WeightLayout
+
+        assert self._supports_activation(activation)
+        # Guaranteed by RoutedExperts.supports_precomputed_routing: the routed
+        # op applies routing scales on the output only.
+        assert not apply_router_weight_on_input
+
+        topk_ids = topk_ids.to(dtype=torch.int32)
+        num_tokens = hidden_states.shape[0]
+        hooked = self._uses_post_gemm2_hook(num_tokens)
+        defer = hooked or self.moe_config.should_defer_moe_finalize(num_tokens)
+
+        result = flashinfer.fused_moe.trtllm_bf16_routed_moe(
+            topk_ids=(topk_ids, topk_weights),
+            hidden_states=hidden_states,
+            gemm1_weights=view_as_block_major_k(w1),
+            gemm2_weights=view_as_block_major_k(w2),
+            num_experts=global_num_experts,
+            top_k=topk_ids.size(1),
+            n_group=None,
+            topk_group=None,
+            intermediate_size=self.intermediate_size_per_partition,
+            local_expert_offset=self.ep_rank * self.local_num_experts,
+            local_num_experts=self.local_num_experts,
+            routed_scaling_factor=None,
+            routing_method_type=1,  # unused: routing is precomputed
+            use_shuffled_weight=True,
+            weight_layout=WeightLayout.BlockMajorK,
+            do_finalize=not defer,
+            activation_type=activation_to_flashinfer_int(activation),
+            tune_max_num_tokens=fi_moe_largest_bucket(self.moe_config),
+            **self.gemm1_activation_params,
+        )
+        routed_output = convert_flashinfer_moe_output(
+            result,
+            do_finalize=not defer,
+            num_tokens=num_tokens,
+            top_k=topk_ids.size(1),
+        )
+        if hooked:
+            return self._run_post_gemm2_hook(routed_output)
+        return routed_output

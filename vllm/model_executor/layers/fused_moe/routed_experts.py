@@ -1465,7 +1465,17 @@ class RoutedExperts(PluggableLayer):
     def supports_precomputed_routing(self) -> bool:
         """Whether a monolithic kernel can take vLLM's routing instead."""
         moe_kernel = getattr(self.quant_method, "moe_kernel", None)
-        return moe_kernel is not None and moe_kernel.supports_precomputed_routing()
+        if moe_kernel is None or not moe_kernel.supports_precomputed_routing():
+            return False
+        if self.apply_router_weight_on_input:
+            # The precomputed-routing ops apply routing scales on the output;
+            # layers whose routing applies them on the input (e.g. Llama4)
+            # can only take this path when the kernel supports it.
+            impl = getattr(moe_kernel, "impl", None)
+            experts = getattr(impl, "fused_experts", None)
+            if not (experts is not None and experts.supports_routed_weight_on_input()):
+                return False
+        return True
 
     def forward_monolithic_routed(
         self,
@@ -1485,6 +1495,7 @@ class RoutedExperts(PluggableLayer):
             topk_ids,
             activation=self.activation,
             global_num_experts=self.global_num_experts,
+            apply_router_weight_on_input=self.apply_router_weight_on_input,
             routing_sink=self.routing_sink,
         )
 

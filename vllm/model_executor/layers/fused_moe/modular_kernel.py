@@ -1096,6 +1096,12 @@ class FusedMoEExpertsMonolithic(FusedMoEExperts):
         """Whether ``apply_routed`` is implemented."""
         return False
 
+    def supports_routed_weight_on_input(self) -> bool:
+        """Whether ``apply_routed`` preserves weight-on-input (e.g. Llama4)
+        numerics, i.e. the precomputed-routing op can apply the routing
+        scales on the input instead of the output."""
+        return False
+
     def apply_routed(
         self,
         hidden_states: torch.Tensor,
@@ -1106,6 +1112,7 @@ class FusedMoEExpertsMonolithic(FusedMoEExperts):
         activation: MoEActivation,
         global_num_experts: int,
         a1q_scale: torch.Tensor | None,
+        apply_router_weight_on_input: bool,
     ) -> torch.Tensor | UnfinalizedMoEOutput:
         """Same as ``apply``, but with routing computed by vLLM's router.
 
@@ -1752,6 +1759,7 @@ class FusedMoEKernelMonolithicImpl:
         topk_ids: torch.Tensor,
         activation: MoEActivation,
         global_num_experts: int,
+        apply_router_weight_on_input: bool = False,
         *,
         routing_sink: RoutedExpertsSink | None,
     ) -> torch.Tensor | UnfinalizedMoEOutput:
@@ -1772,6 +1780,7 @@ class FusedMoEKernelMonolithicImpl:
             activation=activation,
             global_num_experts=global_num_experts,
             a1q_scale=a1q_scale,
+            apply_router_weight_on_input=apply_router_weight_on_input,
         )
         if routing_sink is not None:
             routing_sink.capture_fn(topk_ids)
@@ -1926,6 +1935,7 @@ class FusedMoEKernel:
         topk_ids: torch.Tensor,
         activation: MoEActivation,
         global_num_experts: int,
+        apply_router_weight_on_input: bool = False,
         *,
         routing_sink: RoutedExpertsSink | None,
     ) -> torch.Tensor | UnfinalizedMoEOutput:
@@ -1938,6 +1948,7 @@ class FusedMoEKernel:
             topk_ids=topk_ids,
             activation=activation,
             global_num_experts=global_num_experts,
+            apply_router_weight_on_input=apply_router_weight_on_input,
             routing_sink=routing_sink,
         )
 

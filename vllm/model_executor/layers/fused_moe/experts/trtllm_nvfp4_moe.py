@@ -633,3 +633,94 @@ class TrtLlmNvFp4ExpertsMonolithic(
         if hooked:
             return self._run_post_gemm2_hook(routed_output)
         return routed_output
+
+    def supports_precomputed_routing(self) -> bool:
+        return True
+
+    def apply_routed(
+        self,
+        hidden_states: torch.Tensor,
+        w1: torch.Tensor,
+        w2: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        activation: MoEActivation,
+        global_num_experts: int,
+        a1q_scale: torch.Tensor | None,
+        apply_router_weight_on_input: bool,
+    ) -> torch.Tensor | UnfinalizedMoEOutput:
+        """NVFP4 TRT-LLM experts on vLLM's routing (padding rows carry id -1).
+
+        Mirrors ``apply`` but calls the precomputed-routing op; routing
+        bias/scaling are already folded into vLLM's top-k.
+        """
+        import flashinfer
+
+        assert self._supports_activation(activation)
+        assert a1q_scale is not None or self.expects_unquantized_inputs
+        assert self.quant_config.w1_scale is not None
+        assert self.quant_config.w2_scale is not None
+        assert (
+            apply_router_weight_on_input
+            and self.routing_method_type == RoutingMethodType.Llama4
+        ) or (
+            not apply_router_weight_on_input
+            and self.routing_method_type != RoutingMethodType.Llama4
+        )
+
+        # Per-token: input is unquantized, quantize it here (see modular apply).
+        if self.expects_unquantized_inputs:
+            hidden_states, block_scale, per_token_scale = (
+                quantize_nvfp4_per_token_input(hidden_states)
+            )
+        else:
+            block_scale, per_token_scale = a1q_scale, None
+
+        num_tokens = hidden_states.shape[0]
+        hooked = self._uses_post_gemm2_hook(num_tokens)
+        # The runner divides by the token count on the host, so an idle rank's
+        # dummy 0-token forward has to keep the finalized (empty) form.
+        defer = hooked or self.moe_config.should_defer_moe_finalize(num_tokens)
+
+        flashinfer_output = flashinfer.fused_moe.trtllm_fp4_block_scale_routed_moe(
+            topk_ids=(topk_ids, topk_weights),
+            routing_bias=None,
+            hidden_states=hidden_states,
+            hidden_states_scale=block_scale.view(torch.float8_e4m3fn).reshape(
+                *hidden_states.shape[:-1], -1
+            ),
+            gemm1_weights=w1,
+            gemm1_weights_scale=self.quant_config.w1_scale.view(torch.float8_e4m3fn),
+            gemm1_bias=None,
+            gemm1_alpha=self.gemm1_alpha,
+            gemm1_beta=self.gemm1_beta,
+            gemm1_clamp_limit=self.gemm1_clamp_limit,
+            gemm2_weights=w2,
+            gemm2_weights_scale=self.quant_config.w2_scale.view(torch.float8_e4m3fn),
+            gemm2_bias=None,
+            output1_scale_scalar=self.g1_scale_c,
+            output1_scale_gate_scalar=self.quant_config.g1_alphas,
+            output2_scale_scalar=self.quant_config.g2_alphas,
+            num_experts=global_num_experts,
+            top_k=self.topk,
+            n_group=0,
+            topk_group=0,
+            intermediate_size=self.intermediate_size_per_partition,
+            local_expert_offset=self.ep_rank * self.local_num_experts,
+            local_num_experts=self.local_num_experts,
+            routed_scaling_factor=None,
+            routing_method_type=1,  # unused: routing is precomputed
+            do_finalize=not defer,
+            activation_type=activation_to_flashinfer_int(activation),
+            per_token_scale=per_token_scale,
+            tune_max_num_tokens=fi_moe_largest_bucket(self.moe_config),
+        )
+        routed_output = convert_flashinfer_moe_output(
+            flashinfer_output,
+            do_finalize=not defer,
+            num_tokens=num_tokens,
+            top_k=self.topk,
+        )
+        if hooked:
+            return self._run_post_gemm2_hook(routed_output)
+        return routed_output
