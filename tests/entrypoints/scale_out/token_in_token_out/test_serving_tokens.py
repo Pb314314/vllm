@@ -253,6 +253,14 @@ async def test_explicit_null_max_tokens_min_tokens_still_bounded():
     assert "min_tokens" in result.error.message
     mock_engine.generate.assert_not_called()
 
+    # Omitted field: the same server-side fill path, so the same bound
+    # applies (min_tokens=10 > the resolved cap of 8).
+    mock_engine.generate.reset_mock()
+    result = await serving.serve_tokens(_gen_request({"min_tokens": 10}))
+    assert isinstance(result, ErrorResponse)
+    assert "min_tokens" in result.error.message
+    mock_engine.generate.assert_not_called()
+
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(

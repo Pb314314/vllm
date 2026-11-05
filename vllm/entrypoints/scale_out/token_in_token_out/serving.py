@@ -401,9 +401,10 @@ class ServingTokens(GenerateBaseServing):
                 default_sampling_params=self.default_sampling_params,
                 override_max_tokens=self.override_max_tokens,
             )
-            # The engine checks ``min_tokens`` against ``max_tokens`` only
-            # when it fills a ``None`` itself, so re-validate after filling
-            # here (an explicit-null request used to rely on that check).
+            # The server-side fill above happens after ``SamplingParams``
+            # validation ran, so ``min_tokens`` must be re-checked against
+            # the resolved value here rather than relying on downstream
+            # validation to catch it.
             if sampling_params.min_tokens > sampling_params.max_tokens:
                 return self.create_error_response(
                     "min_tokens must be less than or equal to "
