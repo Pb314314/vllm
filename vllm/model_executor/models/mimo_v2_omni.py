@@ -690,15 +690,23 @@ def _video_timestamps_from_metadata(
         return None
     frames_indices = metadata.get("frames_indices")
     fps = metadata.get("fps")
-    if not frames_indices or not fps or fps <= 0:
+    if frames_indices is None or fps is None:
         return None
-    if len(frames_indices) != num_frames:
+    try:
+        fps = float(fps)
+    except (TypeError, ValueError):
+        return None
+    # User-supplied metadata may carry frames_indices as a numpy array or
+    # tensor, not just list[int]; use len()/indexing, never truthiness.
+    if len(frames_indices) != num_frames or num_frames == 0:
+        return None
+    if fps <= 0:
         return None
 
-    start = float(frames_indices[0]) / float(fps)
+    start = float(frames_indices[0]) / fps
     if num_frames == 1:
         return torch.tensor([start], dtype=torch.float32)
-    step = (float(frames_indices[-1]) - float(frames_indices[0])) / float(fps)
+    step = (float(frames_indices[-1]) - float(frames_indices[0])) / fps
     step /= num_frames - 1
     if step <= 0:
         return None

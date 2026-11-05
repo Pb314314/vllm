@@ -1,140 +1,271 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Tests for MiMo-V2 Omni video timestamp construction.
+"""Tests for MiMo-V2 omni video timestamp construction.
 
-Regression tests for https://github.com/vllm-project/vllm/issues/65523:
-the processor used to label sampled frames with ``arange(T) / 1 fps``, so
-every clip's injected timestamps read 00:00..00:30 regardless of the real
-frame times. The timestamps must come from the video loader metadata
+Regression tests for https://github.com/vllm-project/vllm/issues/65523: the
+processor used to label sampled frames with ``arange(T) / 1 fps``, so every
+clip's injected timestamps read 00:00..00:30 regardless of the real frame
+times. The timestamps must come from the video loader metadata
 (``frames_indices / fps``).
+
+Self-contained: synthetic byte-level BPE tokenizer and in-memory config, no
+checkpoint download, runs on CPU anywhere.
 """
 
-from typing import Any
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
+from tokenizers import Tokenizer, decoders, models, pre_tokenizers
+from transformers import TokenizersBackend
 
-from vllm.config.multimodal import MultiModalDummyOptions, VideoDummyOptions
-from vllm.multimodal import MULTIMODAL_REGISTRY
+from vllm.model_executor.models.mimo_v2_omni import (
+    MiMoV2OmniMultiModalDataParser,
+    MiMoV2OmniMultiModalProcessor,
+    _video_timestamps_from_metadata,
+)
+from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
+from vllm.multimodal.parse import MultiModalDataItems, VideoProcessorItems
+from vllm.transformers_utils.processors.mimo_v2_omni import MiMoOmniProcessor
 
-from ...utils import build_model_context
+pytestmark = pytest.mark.cpu_test
+
+SPECIAL_TOKENS = [
+    "<|vision_start|>",
+    "<|image_pad|>",
+    "<|video_pad|>",
+    "<|vision_end|>",
+    "<|video_start|>",
+    "<|video_end|>",
+]
 
 
-def _build_video_mm_data(
-    num_frames: int,
-    fps: float,
-    frames_indices: list[int] | None,
-) -> dict[str, Any]:
-    """A (video, metadata) item as produced by the video loader.
+@pytest.fixture
+def tokenizer():
+    vocab = {
+        token: index
+        for index, token in enumerate(sorted(pre_tokenizers.ByteLevel.alphabet()))
+    }
+    backend = Tokenizer(models.BPE(vocab=vocab, merges=[]))
+    backend.pre_tokenizer = pre_tokenizers.ByteLevel(
+        add_prefix_space=False, use_regex=False
+    )
+    backend.decoder = decoders.ByteLevel()
+    return TokenizersBackend(
+        tokenizer_object=backend,
+        additional_special_tokens=SPECIAL_TOKENS,
+        clean_up_tokenization_spaces=False,
+    )
 
-    ``frames_indices=None`` omits the field entirely (fallback case).
-    """
-    video = np.zeros((num_frames, 56, 56, 3), dtype=np.uint8)
-    total = num_frames if frames_indices is None else frames_indices[-1] + 1
-    metadata: dict[str, Any] = {
+
+@pytest.fixture
+def processor(tokenizer):
+    """A MiMoV2OmniMultiModalProcessor with an in-memory info namespace."""
+    vocab = tokenizer.get_vocab()
+    hf_processor = MiMoOmniProcessor(
+        tokenizer,
+        patch_size=14,
+        merge_size=2,
+        temporal_patch_size=2,
+        temporal_compression_ratio=1,
+        image_token_id=vocab["<|image_pad|>"],
+        video_token_id=vocab["<|video_pad|>"],
+        vision_start_token_id=vocab["<|vision_start|>"],
+        vision_end_token_id=vocab["<|vision_end|>"],
+        video_start_token_id=vocab["<|video_start|>"],
+        video_end_token_id=vocab["<|video_end|>"],
+    )
+    proc = object.__new__(MiMoV2OmniMultiModalProcessor)
+    proc.info = SimpleNamespace(
+        get_tokenizer=lambda: tokenizer,
+        get_hf_config=lambda: SimpleNamespace(
+            vision_config=SimpleNamespace(spatial_merge_size=2)
+        ),
+        get_hf_processor=lambda **kwargs: hf_processor,
+    )
+    return proc
+
+
+def _make_mm_items(videos):
+    """Parse (video, metadata) tuples through the real MiMo data parser."""
+    parser = MiMoV2OmniMultiModalDataParser(
+        2,  # spatial_merge_size
+        target_sr=24000.0,
+        video_needs_metadata=True,
+    )
+    return parser.parse_mm_data({"video": videos})
+
+
+def _video_metadata(frames_indices, fps=25.0):
+    return {
         "fps": fps,
-        "duration": total / fps,
-        "total_num_frames": total,
+        "duration": (frames_indices[-1] + 1) / fps,
+        "total_num_frames": frames_indices[-1] + 1,
+        "frames_indices": frames_indices,
         "video_backend": "opencv",
         "do_sample_frames": False,
     }
-    if frames_indices is not None:
-        metadata["frames_indices"] = frames_indices
-    return {"video": [(video, metadata)]}
 
 
-def _get_temporal_stride(processor) -> int:
-    p = processor.info.get_hf_processor().mimo_processor
-    return p.temporal_patch_size * p.temporal_compression_ratio
+# ---------------------------------------------------------------------------
+# _video_timestamps_from_metadata
+# ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("model_id", ["XiaomiMiMo/MiMo-V2.5-Omni"])
-def test_video_timestamps_use_frame_media_time(model_id: str) -> None:
-    ctx = build_model_context(model_id, limit_mm_per_prompt={"image": 0, "video": 1})
-    processor = MULTIMODAL_REGISTRY.create_processor(ctx.model_config)
+def test_video_timestamps_from_metadata_uniform_sampling():
+    # A 120 s @ 25 fps clip uniformly sampled to 16 frames, 8 s apart.
+    indices = [i * 200 for i in range(16)]
+    ts = _video_timestamps_from_metadata(16, _video_metadata(indices))
+    assert ts is not None
+    torch.testing.assert_close(
+        ts, torch.arange(16, dtype=torch.float32) * 8.0, rtol=0, atol=1e-4
+    )
+
+
+def test_video_timestamps_from_metadata_start_offset():
+    indices = [500 + i * 200 for i in range(8)]  # first frame at t=20 s
+    ts = _video_timestamps_from_metadata(8, _video_metadata(indices))
+    assert ts is not None
+    assert float(ts[0]) == pytest.approx(20.0)
+    assert float(ts[-1]) == pytest.approx(20.0 + 7 * 8.0)
+
+
+def test_video_timestamps_from_metadata_numpy_indices():
+    # User-supplied metadata may carry numpy arrays (offline tuple path);
+    # `not frames_indices` must not raise "truth value of an array is
+    # ambiguous".
+    indices = np.array([i * 200 for i in range(16)])
+    metadata = _video_metadata([0] * 16) | {"frames_indices": indices}
+    ts = _video_timestamps_from_metadata(16, metadata)
+    assert ts is not None
+    assert float(ts[1]) == pytest.approx(8.0)
+
+
+@pytest.mark.parametrize(
+    "num_frames,metadata",
+    [
+        (4, None),  # no metadata
+        (4, "not-a-dict"),
+        (4, {"fps": 25.0}),  # missing frames_indices
+        (4, {"frames_indices": [0, 1, 2, 3]}),  # missing fps
+        (4, {"frames_indices": [0, 1, 2, 3], "fps": 0.0}),  # non-positive fps
+        (4, {"frames_indices": [0, 1, 2, 3], "fps": -25.0}),
+        (4, {"frames_indices": [0, 1, 2], "fps": 25.0}),  # length mismatch
+        (4, {"frames_indices": [], "fps": 25.0}),  # empty
+        (4, {"frames_indices": [3, 2, 1, 0], "fps": 25.0}),  # not increasing
+    ],
+)
+def test_video_timestamps_from_metadata_rejects_unusable(num_frames, metadata):
+    assert _video_timestamps_from_metadata(num_frames, metadata) is None
+
+
+def test_video_timestamps_from_metadata_single_frame():
+    ts = _video_timestamps_from_metadata(1, _video_metadata([100]))
+    assert ts is not None
+    assert ts.tolist() == [4.0]  # 100 / 25 fps
+
+
+# ---------------------------------------------------------------------------
+# _get_hf_mm_inputs: parsed (video, metadata) tuples drive the timestamps
+# ---------------------------------------------------------------------------
+
+
+def _get_video_timestamps(processor, videos):
+    mm_items = _make_mm_items(videos)
+    hf_inputs = processor._get_hf_mm_inputs(mm_items, {})
+    out = hf_inputs.hf_data["videos"]
+    assert len(out) == len(videos)
+    frames, timestamps = out[0]
+    assert frames.ndim == 4 and frames.shape[1] in (1, 3, 4)  # TCHW
+    return timestamps
+
+
+def test_hf_mm_inputs_timestamps_use_frame_media_time(processor):
+    frames = np.zeros((16, 56, 56, 3), dtype=np.uint8)
+    # 8 s between sampled frames -> 16 s per 2-frame grid, not 1 fps.
+    ts = _get_video_timestamps(
+        processor, [(frames, _video_metadata([i * 200 for i in range(16)]))]
+    )
+    torch.testing.assert_close(
+        ts, torch.arange(16, dtype=torch.float32) * 8.0, rtol=0, atol=1e-4
+    )
+
+
+def test_hf_mm_inputs_timestamps_fall_back_to_1fps(processor):
+    frames = np.zeros((16, 56, 56, 3), dtype=np.uint8)
+    metadata = _video_metadata([0] * 16)
+    metadata.pop("frames_indices")
+    ts = _get_video_timestamps(processor, [(frames, metadata)])
+    torch.testing.assert_close(
+        ts, torch.arange(16, dtype=torch.float32), rtol=0, atol=0
+    )
+
+
+def test_hf_mm_inputs_preserve_prebuilt_mimo_tuples(processor):
+    # Already-converted (TCHW, timestamps) tuples pass through untouched.
+    frames = torch.zeros(4, 3, 56, 56)
+    given_ts = torch.tensor([3.0, 5.0, 9.0, 10.0])
+    mm_items = MultiModalDataItems({"video": VideoProcessorItems([(frames, given_ts)])})
+    hf_inputs = processor._get_hf_mm_inputs(mm_items, {})
+    out_frames, out_ts = hf_inputs.hf_data["videos"][0]
+    assert out_frames is frames
+    assert out_ts is given_ts
+
+
+def test_raw_video_without_metadata_raises(processor):
+    # With video_needs_metadata=True, raw arrays must carry metadata
+    # (same contract as Qwen2.5-VL and other metadata-driven models).
+    frames = np.zeros((16, 56, 56, 3), dtype=np.uint8)
+    with pytest.raises(ValueError, match="Video metadata is required"):
+        _make_mm_items([frames])
+
+
+# ---------------------------------------------------------------------------
+# Prompt-update reconstruction: labels in the final prompt carry media time
+# ---------------------------------------------------------------------------
+
+
+def test_prompt_timestamp_labels_match_media_time(processor):
     tokenizer = processor.info.get_tokenizer()
+    vocab = tokenizer.get_vocab()
 
-    stride = _get_temporal_stride(processor)
-
-    # A 120 s @ 25 fps clip uniformly sampled to 16 frames (8 s apart).
-    fps = 25.0
-    num_frames = 16
-    frames_indices = [i * 200 for i in range(num_frames)]
-    mm_data = _build_video_mm_data(num_frames, fps, frames_indices)
-
-    prompt = "<|vision_start|><|video_pad|><|vision_end|>"
-    processed = processor(prompt, mm_items=processor.info.parse_mm_data(mm_data))
-
-    item = processed["mm_kwargs"]["video"][0]
-    assert item is not None
-    data = item.get_data()
-
-    # The real sampling interval is 200/25 = 8 s between frames, so
-    # second_per_grid_ts is 16 s for a temporal patch of 2 frames - not 2 s
-    # as produced by the old hardcoded 1 fps timestamps.
-    temporal_patch_size = (
-        processor.info.get_hf_processor().mimo_processor.temporal_patch_size
+    # 8 grids at 16 s per grid starting at t=4 s (a mid-clip segment).
+    start, spg, t_grid = 4.0, 16.0, 8
+    mm_kwargs = MultiModalKwargsItems.from_hf_inputs(
+        {
+            "video_grid_thw": torch.tensor([[t_grid, 2, 2]]),
+            "second_per_grid_ts": torch.tensor([spg]),
+            "video_start_times": torch.tensor([start]),
+        },
+        {
+            "video_grid_thw": MultiModalFieldConfig.batched("video"),
+            "second_per_grid_ts": MultiModalFieldConfig.batched(
+                "video", keep_on_cpu=True
+            ),
+            "video_start_times": MultiModalFieldConfig.batched(
+                "video", keep_on_cpu=True
+            ),
+        },
     )
-    spg = float(data["second_per_grid_ts"])
-    assert spg == pytest.approx(temporal_patch_size * 200 / fps)
-    assert float(data["video_start_times"]) == pytest.approx(frames_indices[0] / fps)
+    mm_items = _make_mm_items(
+        [(np.zeros((2 * t_grid, 56, 56, 3), dtype=np.uint8), _video_metadata([0]))]
+    )
 
-    # The injected timestamp labels carry the real media time. With the old
-    # 1 fps timestamps every label stayed within 00:00-00:15 for this clip.
-    text = tokenizer.decode(processed["prompt_token_ids"])
-    n_labels = num_frames // stride
-    for j in range(1, n_labels):
-        seconds = int(j * stride * 200 / fps)
+    updates = processor._get_mm_prompt_updates(mm_items, {}, mm_kwargs)
+    prompt = "<|vision_start|><|video_pad|><|vision_end|>"
+    prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    actual_ids, placeholders = processor._apply_prompt_updates(prompt_ids, updates)
+
+    assert len(placeholders["video"]) == 1
+    text = tokenizer.decode(actual_ids)
+
+    # One label per temporal grid, each the real media time.
+    for j in range(t_grid):
+        seconds = int(start + j * spg)
         label = f"{seconds // 60:02d}:{seconds % 60:02d}"
-        assert label in text, f"missing timestamp label {label} in prompt"
+        assert label in text, f"missing timestamp label {label}"
 
-
-@pytest.mark.parametrize("model_id", ["XiaomiMiMo/MiMo-V2.5-Omni"])
-def test_video_timestamps_fall_back_to_1fps_without_frame_indices(
-    model_id: str,
-) -> None:
-    ctx = build_model_context(model_id, limit_mm_per_prompt={"image": 0, "video": 1})
-    processor = MULTIMODAL_REGISTRY.create_processor(ctx.model_config)
-
-    temporal_patch_size = (
-        processor.info.get_hf_processor().mimo_processor.temporal_patch_size
-    )
-
-    num_frames = 16
-    mm_data = _build_video_mm_data(num_frames, fps=25.0, frames_indices=None)
-
-    prompt = "<|vision_start|><|video_pad|><|vision_end|>"
-    processed = processor(prompt, mm_items=processor.info.parse_mm_data(mm_data))
-
-    item = processed["mm_kwargs"]["video"][0]
-    assert item is not None
-    spg = float(item.get_data()["second_per_grid_ts"])
-    assert spg == pytest.approx(temporal_patch_size / 1.0)
-
-
-@pytest.mark.parametrize("model_id", ["XiaomiMiMo/MiMo-V2.5-Omni"])
-def test_dummy_videos_keep_1fps_timestamps(model_id: str) -> None:
-    """Profiling dummies keep 1 fps metadata so memory profiling is unchanged."""
-    ctx = build_model_context(model_id, limit_mm_per_prompt={"image": 0, "video": 1})
-    processor = MULTIMODAL_REGISTRY.create_processor(ctx.model_config)
-
-    temporal_patch_size = (
-        processor.info.get_hf_processor().mimo_processor.temporal_patch_size
-    )
-
-    dummy_inputs = processor.get_dummy_inputs(
-        seq_len=8192,
-        mm_counts={"video": 1},
-        mm_options=MultiModalDummyOptions(
-            {"video": VideoDummyOptions(num_frames=16, width=56, height=56)}
-        ),
-    )
-    processed = processor(
-        dummy_inputs.prompt,
-        mm_items=dummy_inputs.mm_data_items,
-    )
-
-    item = processed["mm_kwargs"]["video"][0]
-    assert item is not None
-    spg = float(item.get_data()["second_per_grid_ts"])
-    assert spg == pytest.approx(temporal_patch_size / 1.0)
+    # The video placeholder still expands to grid tokens.
+    video_pad_id = vocab["<|video_pad|>"]
+    assert actual_ids.count(video_pad_id) == t_grid  # H*W/merge^2 == 1 per grid
