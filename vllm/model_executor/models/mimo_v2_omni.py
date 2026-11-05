@@ -32,7 +32,12 @@ from vllm.model_executor.layers.rotary_embedding import get_rope
 from vllm.model_executor.layers.rotary_embedding.common import ApplyRotaryEmb
 from vllm.model_executor.models.vision import is_vit_use_data_parallel
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
+from vllm.multimodal.inputs import (
+    MediaWithBytes,
+    MultiModalFieldConfig,
+    MultiModalKwargsItems,
+    VideoItem,
+)
 from vllm.multimodal.parse import ImageSize, MultiModalDataItems
 from vllm.multimodal.processing import (
     BaseDummyInputsBuilder,
@@ -43,6 +48,7 @@ from vllm.multimodal.processing import (
     PromptUpdateDetails,
 )
 from vllm.multimodal.processing.processor import HFMultiModalInputs
+from vllm.multimodal.video import DecodedFrames
 from vllm.transformers_utils.configs.mimo_v2_omni import Mimo_VLVisionConfig
 from vllm.transformers_utils.processors.mimo_v2_omni import (
     MiMoOmniProcessor,
@@ -721,6 +727,14 @@ class MiMoV2OmniMultiModalDataParser(Qwen2VLMultiModalDataParser):
     embedding_fields = {
         "image": Qwen2VLMultiModalDataParser.embedding_fields["image"],
     }
+
+    def _get_video_with_metadata(
+        self, video: VideoItem
+    ) -> tuple[DecodedFrames | MediaWithBytes[DecodedFrames], dict[str, Any]]:
+        video, metadata = super()._get_video_with_metadata(video)
+        # Raw frames (ndarray, list of PIL images) carry no timing info:
+        # keep them on the 1 fps fallback instead of rejecting them.
+        return video, {} if metadata is None else metadata
 
 
 class MiMoV2OmniProcessingInfo(BaseProcessingInfo):

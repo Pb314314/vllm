@@ -196,6 +196,23 @@ def test_e2e_video_timestamps_fall_back_to_1fps(e2e_processor):
     assert float(data["second_per_grid_ts"]) == pytest.approx(2.0)
 
 
+def test_e2e_raw_video_without_metadata_keeps_1fps_fallback(e2e_processor):
+    """Raw frames carry no timing info: they keep the pre-PR 1 fps behavior.
+
+    Regression guard: `multi_modal_data={"video": ndarray}` and a list of PIL
+    frames were accepted before this PR and must stay accepted.
+    """
+    from PIL import Image
+
+    ndarray_video = np.zeros((16, 56, 56, 3), dtype=np.uint8)
+    pil_video = [Image.fromarray(frame) for frame in ndarray_video]
+
+    for raw_video in (ndarray_video, pil_video):
+        data, _ = _run_video_e2e(e2e_processor, raw_video)
+        assert float(data["second_per_grid_ts"]) == pytest.approx(2.0)
+        assert float(data["video_start_times"]) == pytest.approx(0.0)
+
+
 # ---------------------------------------------------------------------------
 # _video_timestamps_from_metadata
 # ---------------------------------------------------------------------------
@@ -299,11 +316,3 @@ def test_hf_mm_inputs_preserve_prebuilt_mimo_tuples(processor):
     out_frames, out_ts = hf_inputs.hf_data["videos"][0]
     assert out_frames is frames
     assert out_ts is given_ts
-
-
-def test_raw_video_without_metadata_raises(processor):
-    # With video_needs_metadata=True, raw arrays must carry metadata
-    # (same contract as Qwen2.5-VL and other metadata-driven models).
-    frames = np.zeros((16, 56, 56, 3), dtype=np.uint8)
-    with pytest.raises(ValueError, match="Video metadata is required"):
-        _make_mm_items([frames])
