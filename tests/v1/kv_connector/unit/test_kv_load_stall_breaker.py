@@ -17,6 +17,8 @@ requeue it, which strictly grows the free pool until the head fits.
 
 from collections.abc import Callable
 
+import pytest
+
 from vllm.v1.request import Request, RequestStatus
 
 from .utils import (
@@ -39,6 +41,8 @@ EXTERNAL_TOKENS = 8 * BLOCK_SIZE
 # (e.g. paused streaming sessions holding KV between turns). Chosen so the
 # completed loads' 4-block tails no longer fit: 25 - 8 - 8 - 6 = 3 < 4.
 PINNED_BLOCKS = 6
+
+pytestmark = pytest.mark.cpu_test
 
 
 def _make_hits(
@@ -170,3 +174,114 @@ def test_stall_breaker_does_not_fire_while_running():
 
     # Cleanup.
     block_pool.free_blocks(pinned)
+
+
+def test_breaker_eviction_of_reloaded_request_preserves_resume(monkeypatch):
+    """A breaker victim that ran before its reload must resume, not restart.
+
+    A request that ran, was preempted, and re-parked via an async reload has
+    output tokens and model-runner state. If the stall breaker evicts it, it
+    must later be emitted as RESUMED, never as a NEW request (which MRV1
+    would misread as a streaming update).
+
+    Runs under MRV1 (`VLLM_USE_V2_MODEL_RUNNER=0`): MRV2 intentionally
+    serializes resumed requests as NEW with the complete prefill history.
+    """
+    from vllm.utils.hashing import sha256
+    from vllm.v1.core.kv_cache_utils import get_request_block_hasher
+    from vllm.v1.request import Request
+
+    monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "0")
+    vllm_config = create_vllm_config(
+        max_num_batched_tokens=1024,
+        block_size=BLOCK_SIZE,
+    )
+    assert not vllm_config.use_v2_model_runner
+    # Priority policy so the previously-running victim parks AFTER the head
+    # and becomes the youngest completed load, i.e. the breaker victim.
+    vllm_config.scheduler_config.policy = "priority"
+    scheduler = create_scheduler(vllm_config, num_blocks=NUM_BLOCKS)
+    block_pool = scheduler.kv_cache_manager.block_pool
+
+    # A request that runs and produces output.
+    victim = create_request(num_tokens=11 * BLOCK_SIZE)
+    scheduler.add_request(victim)
+    sched_out = scheduler.schedule()
+    scheduler.update_from_output(
+        sched_out, create_model_runner_output([victim], token_id=123)
+    )
+    assert victim.num_output_tokens == 1
+
+    # Preempt it (as reset_prefix_cache does for running requests).
+    assert scheduler.reset_prefix_cache(reset_running_requests=True)
+    assert victim.status == RequestStatus.PREEMPTED
+    assert victim.num_preemptions == 1
+
+    # A higher-priority request; it is admitted as an async load first.
+    head = Request(
+        request_id="higher-priority",
+        prompt_token_ids=[99] * PROMPT_TOKENS,
+        sampling_params=victim.sampling_params,
+        pooling_params=None,
+        priority=-1,
+        block_hasher=get_request_block_hasher(BLOCK_SIZE, sha256),
+    )
+    scheduler.add_request(head)
+    hits = {
+        victim.request_id: EXTERNAL_TOKENS,
+        head.request_id: EXTERNAL_TOKENS,
+    }
+    scheduler.connector = create_mock_connector()
+    scheduler.connector.get_loaded_kv_cache_group_ids.return_value = (0,)
+    scheduler.connector.get_num_new_matched_tokens.side_effect = _make_hits(hits)
+    scheduler.connector.request_finished.return_value = (False, None)
+    scheduler.connector.take_events.return_value = ()
+    scheduler.connector.has_pending_block_frees.return_value = False
+
+    sched_out = scheduler.schedule()
+    assert head.status == RequestStatus.WAITING_FOR_REMOTE_KVS
+    assert victim.status == RequestStatus.WAITING_FOR_REMOTE_KVS
+    assert block_pool.get_num_free_blocks() == 9
+
+    # Pin blocks (reservation-invisible holders) and complete both loads:
+    # neither tail fits and nothing runs, so the breaker evicts the victim.
+    pinned = block_pool.get_new_blocks(PINNED_BLOCKS)
+    runner_out = create_model_runner_output(
+        [], finished_recving={victim.request_id, head.request_id}
+    )
+    scheduler.update_from_output(sched_out, runner_out)
+    sched_out = scheduler.schedule()
+    assert sched_out.total_num_scheduled_tokens == 0
+    # The victim (youngest completed load) was evicted but must keep its
+    # PREEMPTED status, its preemption count and its output.
+    assert victim.status == RequestStatus.PREEMPTED
+    assert victim.num_preemptions == 1
+    assert victim.num_output_tokens == 1
+    assert victim.num_computed_tokens == 0
+    assert head.status == RequestStatus.WAITING  # promoted, not evicted
+
+    # When it is scheduled again it must be RESUMED, never NEW.
+    saw_resume = False
+    for _ in range(8):
+        sched_out = scheduler.schedule()
+        scheduled = set(sched_out.num_scheduled_tokens)
+        if victim.request_id in scheduled:
+            new_ids = [req.req_id for req in sched_out.scheduled_new_reqs]
+            assert victim.request_id not in new_ids
+            assert victim.request_id in sched_out.scheduled_cached_reqs.resumed_req_ids
+            saw_resume = True
+        still_loading = {
+            r.request_id
+            for r in (victim, head)
+            if r.status == RequestStatus.WAITING_FOR_REMOTE_KVS
+        }
+        runner_out = create_model_runner_output(
+            [r for r in (victim, head) if r.request_id in scheduled],
+            finished_recving=still_loading or None,
+            use_eos=True,
+        )
+        scheduler.update_from_output(sched_out, runner_out)
+    assert saw_resume
+
+    block_pool.free_blocks(pinned)
+    assert_scheduler_empty(scheduler)

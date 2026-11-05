@@ -1998,10 +1998,12 @@ class Scheduler(SchedulerInterface):
         """Free the GPU blocks of a waiting async-KV-load request and requeue
         it at the head of the plain waiting queue.
 
-        Unlike `_preempt_request`, the victim never ran, so it must NOT be
-        marked PREEMPTED: it has no model-runner state to resume or reset,
-        no stale output, and `num_preemptions` stays untouched so a later
-        remote-KV promotion does not surface it as a resumed request.
+        Unlike `_preempt_request`, a victim that never ran must NOT be
+        marked PREEMPTED: it has no model-runner state to resume or reset and
+        no stale output. A victim that ran before its reload (preempted, then
+        re-parked) keeps PREEMPTED so the runner resumes it correctly.
+        `num_preemptions` stays untouched in both cases, so a later
+        remote-KV promotion does not surface a never-ran victim as resumed.
         """
         request_id = request.request_id
         self.kv_holding_waiting.remove_request(request)
@@ -2017,7 +2019,16 @@ class Scheduler(SchedulerInterface):
             # admission. The victim has not finished, so request_finished()
             # (which queues a terminal event) would be wrong here.
             self.aux_output_connector.request_load_aborted(request)
-        request.status = RequestStatus.WAITING
+        request.status = (
+            # A victim that ran before (preempted, then re-parked by its
+            # async reload) must stay PREEMPTED: the model runner still
+            # knows the request and it holds output tokens, so emitting it
+            # as a NEW request would corrupt its runner state. A victim
+            # that never ran becomes plain WAITING (see docstring).
+            RequestStatus.PREEMPTED
+            if request.num_preemptions
+            else RequestStatus.WAITING
+        )
         request.num_computed_tokens = 0
         request.spec_token_ids = []
         if self.log_stats:
