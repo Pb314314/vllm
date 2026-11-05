@@ -1066,8 +1066,23 @@ def profile_cudagraph_memory(runner: "GPUModelRunner") -> int:
             mem_samples: list[int] = []
             manager._capture_mem_samples = mem_samples
 
+            # The real capture needs its peak footprint free, not just the
+            # persistent graph size: with an extensible KV cache, warmup
+            # commits leave only what the reserve holds back (#65868). Measure
+            # the reserved-memory peak across the profiling capture; the
+            # worker uses it for the extensible cache's warmup reserve, while
+            # the persistent estimate below stays the capacity accounting.
+            torch.accelerator.reset_peak_memory_stats()
+            reserved_before = torch.accelerator.memory_stats().get(
+                "reserved_bytes.all.current", 0
+            )
             with capture_outside_cumem_pool():
                 measured = int(runner.capture_model(profile_only=True))
+            capture_peak = (
+                torch.accelerator.memory_stats().get("reserved_bytes.all.peak", 0)
+                - reserved_before
+            )
+            runner.cudagraph_capture_peak_bytes = max(measured, capture_peak)
 
             # The measured delta covers PIECEWISE, encoder and speculator graphs
             # plus the sampled FULL graphs; swap the sampled FULL cost for the

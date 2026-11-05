@@ -574,6 +574,108 @@ def test_extensible_init_defers_the_connector(monkeypatch: pytest.MonkeyPatch):
     assert worker._kv_cache_config is kv_cache_config
 
 
+def test_extensible_init_reserves_profiled_cudagraph_memory(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Warmup commits must leave room for the CUDA graphs captured before the
+    final KV sizing (#65868): the profiled graph estimate is added to the
+    headroom while the warmup commit limit is fixed, then released, so the
+    final sizing does not double-count the captured graphs."""
+    from vllm.v1.worker import gpu_worker
+    from vllm.v1.worker.gpu_worker import Worker
+
+    monkeypatch.setattr(gpu_worker, "ensure_kv_transfer_initialized", lambda *a: None)
+    headroom_at_commit: list[int] = []
+
+    class FakeKVCache:
+        def __init__(self) -> None:
+            self.reserved_headroom_bytes = 0
+            self.warmup_committable_blocks = 0
+
+        def committable_blocks(self) -> int:
+            headroom_at_commit.append(self.reserved_headroom_bytes)
+            return 42
+
+    kv_cache = FakeKVCache()
+    runner = SimpleNamespace(
+        initialize_kv_cache=lambda *args, **kwargs: None,
+        extensible_kv_cache=kv_cache,
+    )
+    kv_cache_config = SimpleNamespace(
+        num_blocks=8,
+        kv_cache_layout=None,
+        needs_kv_cache_zeroing=False,
+        hash_block_size=16,
+        cache_hit_alignment_tokens=16,
+    )
+    worker = SimpleNamespace(
+        cache_config=SimpleNamespace(enable_extensible_kv_cache=True),
+        model_config=SimpleNamespace(enable_return_routed_experts=False),
+        vllm_config=SimpleNamespace(kv_transfer_config=None),
+        model_runner=runner,
+        _maybe_get_memory_pool_context=lambda tag: nullcontext(),
+        _v2_model_runner=lambda: runner,
+        peak_activation_memory=10,
+        cudagraph_warmup_reserve_bytes=7,
+    )
+    monkeypatch.setattr(gpu_worker, "_min_across_ranks", lambda value: value)
+    Worker.initialize_from_config(worker, kv_cache_config)
+    # The commit limit is fixed with the graph reserve included ...
+    assert headroom_at_commit == [10 + 7]
+    assert kv_cache.warmup_committable_blocks == 42
+    # ... and the reserve is released again afterwards.
+    assert kv_cache.reserved_headroom_bytes == 10
+
+
+def test_extensible_init_without_cudagraph_estimate_keeps_activation_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """With no profiled graph estimate (e.g. no graphs, or the profiling env
+    var off), warmup commits hold back just the activation peak, as before."""
+    from vllm.v1.worker import gpu_worker
+    from vllm.v1.worker.gpu_worker import Worker
+
+    monkeypatch.setattr(gpu_worker, "ensure_kv_transfer_initialized", lambda *a: None)
+    headroom_at_commit: list[int] = []
+
+    class FakeKVCache:
+        def __init__(self) -> None:
+            self.reserved_headroom_bytes = 0
+            self.warmup_committable_blocks = 0
+
+        def committable_blocks(self) -> int:
+            headroom_at_commit.append(self.reserved_headroom_bytes)
+            return 42
+
+    kv_cache = FakeKVCache()
+    runner = SimpleNamespace(
+        initialize_kv_cache=lambda *args, **kwargs: None,
+        extensible_kv_cache=kv_cache,
+    )
+    kv_cache_config = SimpleNamespace(
+        num_blocks=8,
+        kv_cache_layout=None,
+        needs_kv_cache_zeroing=False,
+        hash_block_size=16,
+        cache_hit_alignment_tokens=16,
+    )
+    worker = SimpleNamespace(
+        cache_config=SimpleNamespace(enable_extensible_kv_cache=True),
+        model_config=SimpleNamespace(enable_return_routed_experts=False),
+        vllm_config=SimpleNamespace(kv_transfer_config=None),
+        model_runner=runner,
+        _maybe_get_memory_pool_context=lambda tag: nullcontext(),
+        _v2_model_runner=lambda: runner,
+        peak_activation_memory=10,
+        # Attribute intentionally absent: determine_available_memory may not
+        # have run (tests, unusual init orders).
+    )
+    monkeypatch.setattr(gpu_worker, "_min_across_ranks", lambda value: value)
+    Worker.initialize_from_config(worker, kv_cache_config)
+    assert headroom_at_commit == [10]
+    assert kv_cache.reserved_headroom_bytes == 10
+
+
 @pytest.mark.parametrize(
     ("local_reason", "any_rank_unsupported", "expected"),
     [

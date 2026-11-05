@@ -805,6 +805,25 @@ class Worker(WorkerBase):
             if envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
             else 0
         )
+        # With an extensible KV cache, CUDA graphs are captured before the
+        # final KV sizing, which accounts for them through the post-capture
+        # free memory, so the estimate must not shrink the KV capacity.
+        # initialize_from_config holds it back from warmup commits instead,
+        # so the pre-sizing capture still fits (#65868). The reserve is the
+        # profiled capture peak (persistent graphs plus capture transients):
+        # reserving only the persistent estimate still OOMs encoders whose
+        # capture-time working set exceeds it.
+        self.cudagraph_warmup_reserve_bytes = 0
+        if self.cache_config.enable_extensible_kv_cache:
+            # Extensible KV requires the V2 runner (checked when the config
+            # settles the flag), and the V2 runner always defines
+            # cudagraph_capture_peak_bytes (0 until the profiler sets it).
+            if envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:
+                self.cudagraph_warmup_reserve_bytes = max(
+                    cudagraph_memory_estimate_applied,
+                    self._v2_model_runner().cudagraph_capture_peak_bytes,
+                )
+            cudagraph_memory_estimate_applied = 0
 
         init_free_memory = self.init_snapshot.free_memory
         free_gpu_memory = profile_result.after_profile.free_memory
@@ -857,7 +876,9 @@ class Worker(WorkerBase):
             format_gib(self.available_kv_cache_memory_bytes),
         )
 
-        if cudagraph_memory_estimate > 0:
+        if cudagraph_memory_estimate > 0 and (
+            not self.cache_config.enable_extensible_kv_cache
+        ):
             total_mem = self.init_snapshot.total_memory
             current_util = self.cache_config.resolved_gpu_memory_utilization
             cg_util_delta = cudagraph_memory_estimate / total_mem
@@ -1005,13 +1026,25 @@ class Worker(WorkerBase):
                 # peak free for the steps it runs.
                 kv_cache = self._v2_model_runner().extensible_kv_cache
                 assert kv_cache is not None
-                kv_cache.reserved_headroom_bytes = getattr(
-                    self, "peak_activation_memory", 0
-                )
+                activation_peak = getattr(self, "peak_activation_memory", 0)
+                # Hold the profiled CUDA-graph footprint back from warmup
+                # commits: capture_model() runs before the final KV sizing,
+                # so blocks committed past it leave the capture out of memory
+                # (#65868). The reserve is released again right after the
+                # commit limit is fixed: warmup updates the headroom from its
+                # own measured peak, and the final sizing accounts for the
+                # captured graphs through the post-capture free memory.
+                # The getattr default covers callers that skip
+                # determine_available_memory (the unit tests in
+                # tests/v1/worker/test_gpu_worker.py build the worker without
+                # it).
+                graph_reserve = getattr(self, "cudagraph_warmup_reserve_bytes", 0)
+                kv_cache.reserved_headroom_bytes = activation_peak + graph_reserve
                 # Every rank must warm up the same shapes.
                 kv_cache.warmup_committable_blocks = _min_across_ranks(
                     kv_cache.committable_blocks()
                 )
+                kv_cache.reserved_headroom_bytes = activation_peak
             else:
                 self.model_runner.initialize_kv_cache(
                     kv_cache_config, kv_cache_allocation_context=allocation_context

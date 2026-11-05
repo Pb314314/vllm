@@ -350,6 +350,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         self.prompt_logprobs_worker: PromptLogprobsWorker | None = None
         self.structured_outputs_worker: StructuredOutputsWorker | None = None
         self.cudagraph_manager: ModelCudaGraphManager | None = None
+        # Set by profile_cudagraph_memory() (cudagraph_utils): the profiling
+        # capture's peak reserved-memory footprint. The worker holds it back
+        # from extensible-KV warmup commits so the real capture fits (#65868).
+        self.cudagraph_capture_peak_bytes: int = 0
 
         # LoRA-related workers.
         self.lora_state = LoraState(max_num_reqs=self.max_num_reqs)
@@ -1124,8 +1128,15 @@ class GPUModelRunner(LoRAModelRunnerMixin):
     @torch.inference_mode()
     def profile_cudagraph_memory(self) -> int:
         """Estimate the GPU memory required to capture CUDA graphs."""
-        if self.cache_config.enable_extensible_kv_cache:
-            # The extensible KV cache measures the capture footprint after warmup.
+        if (
+            self.cache_config.enable_extensible_kv_cache
+            and not envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
+        ):
+            # The estimate is only used to hold memory back from extensible-KV
+            # warmup commits (the worker applies it in initialize_from_config
+            # so that capture_model(), which runs before the final KV sizing,
+            # still fits, #65868). With the env opt-out nothing consumes the
+            # estimate, so skip the profiling pass as before.
             return 0
         # Runs before the KV cache exists, outside compile_or_warm_up_model.
         with self.eplb.suppress():
