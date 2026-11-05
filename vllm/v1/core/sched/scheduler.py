@@ -2012,12 +2012,20 @@ class Scheduler(SchedulerInterface):
         self._pending_encoder_input_ids.pop(request_id, None)
         self._inflight_prefills.discard(request)
         self._set_kv_fetch_stage(request, None)
+        if self.aux_output_connector is not None:
+            # Release the aux-tier hold that request_loading() placed at
+            # admission. The victim has not finished, so request_finished()
+            # (which queues a terminal event) would be wrong here.
+            self.aux_output_connector.request_load_aborted(request)
         request.status = RequestStatus.WAITING
         request.num_computed_tokens = 0
         request.spec_token_ids = []
         if self.log_stats:
             request.record_event(EngineCoreEventType.PREEMPTED, timestamp)
-        self.waiting.prepend_request(request)
+        # Route through _enqueue_waiting_request so the requeue honours the
+        # --max-num-inflight-kv-loads routing (async_kv_waiting) when the
+        # victim may load async again.
+        self._enqueue_waiting_request(request)
 
     def _update_after_schedule(self, scheduler_output: SchedulerOutput) -> None:
         # Advance the number of computed tokens for the request AFTER
