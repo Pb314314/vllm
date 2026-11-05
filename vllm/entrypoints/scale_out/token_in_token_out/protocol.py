@@ -456,6 +456,19 @@ class GenerateRequest(BaseModel):
             return True
         return name in self._sampling_params_provided_keys
 
+    def is_sampling_param_set(self, name: str) -> bool:
+        """Whether the caller supplied a usable value for `sampling_params.<name>`.
+
+        Unlike `is_sampling_param_provided`, an explicit JSON `null` counts
+        as unset: the key was present (so it is still tracked for serde)
+        but carried no value, so server-side defaulting should apply —
+        matching the OpenAI-compat endpoints, where `null` behaves like an
+        omitted field.
+        """
+        if not self.is_sampling_param_provided(name):
+            return False
+        return getattr(self.sampling_params, name) is not None
+
     def build_tok_params(self, model_config: ModelConfig) -> TokenizeParams:
         return TokenizeParams(
             max_total_tokens=None,
