@@ -16,6 +16,8 @@ config) and runs on CPU anywhere.
 
 from types import SimpleNamespace
 
+from collections import UserList
+
 import numpy as np
 import pytest
 import torch
@@ -316,3 +318,53 @@ def test_hf_mm_inputs_preserve_prebuilt_mimo_tuples(processor):
     out_frames, out_ts = hf_inputs.hf_data["videos"][0]
     assert out_frames is frames
     assert out_ts is given_ts
+
+
+class _FakeVAItems(UserList):
+    """Minimal MultiModalDataItems entry carrying raw video_audio content.
+
+    The vLLM data parser registers no "video_audio" modality (chat-template
+    video_audio content is expanded inside the in-tree MiMoOmniProcessor
+    before parsing), so this exercises the defensive video_audio conversion
+    loop in _get_hf_mm_inputs for direct processor callers.
+    """
+
+    def __init__(self, va_list):
+        super().__init__([None])  # non-empty so the base loop visits it
+        self._va_list = va_list
+
+    def get_processor_data(self):
+        return {"video_audio": self._va_list}
+
+    def get_passthrough_data(self):
+        return {}
+
+    def get_count(self):
+        return len(self._va_list)
+
+
+def _run_video_audio(processor, va_item):
+    mm_items = MultiModalDataItems({"video_audio": _FakeVAItems([va_item])})
+    hf_inputs = processor._get_hf_mm_inputs(mm_items, {})
+    converted = hf_inputs.hf_data["video_audio"]
+    assert len(converted) == 1
+    frames, timestamps = converted[0].video
+    assert frames.shape[0] == timestamps.shape[0]
+    return timestamps
+
+
+def test_video_audio_timestamps_use_frame_media_time(processor):
+    frames = np.zeros((8, 4, 4, 3), dtype=np.uint8)
+    audio = np.zeros(4, dtype=np.float32)
+    # 0.4s-spaced frames: must NOT collapse onto the 1 fps fallback.
+    metadata = _video_metadata([10, 35, 60, 85, 110, 135, 160, 185])
+    ts = _run_video_audio(processor, ((frames, metadata), audio))
+    expect = 0.4 + torch.arange(8, dtype=torch.float32)
+    assert torch.allclose(ts, expect, atol=1e-6)
+
+
+def test_video_audio_raw_frames_fall_back_to_1fps(processor):
+    frames = np.zeros((8, 4, 4, 3), dtype=np.uint8)
+    audio = np.zeros(4, dtype=np.float32)
+    ts = _run_video_audio(processor, (frames, audio))
+    assert torch.allclose(ts, torch.arange(8, dtype=torch.float32) / 1.0)
