@@ -1979,7 +1979,13 @@ class Scheduler(SchedulerInterface):
                 if victim.request_id not in self.finished_recving_kv_req_ids:
                     continue
             elif not (
-                victim in self._inflight_prefills and victim.num_output_tokens == 0
+                # Parked/promoted loads are tracked in `_parked_reservations`
+                # (#65285), with `_inflight_prefills` as HiSparse's fallback.
+                (
+                    victim in self._parked_reservations
+                    or victim in self._inflight_prefills
+                )
+                and victim.num_output_tokens == 0
             ):
                 # Not a parked async KV load (e.g. a paused streaming session
                 # holding its blocks): never preempt it here.
@@ -1996,7 +2002,8 @@ class Scheduler(SchedulerInterface):
 
     def _preempt_kv_holding_request(self, request: Request, timestamp: float) -> None:
         """Free the GPU blocks of a waiting async-KV-load request and requeue
-        it at the head of the plain waiting queue.
+        it through `_enqueue_waiting_request` (honouring the inflight-load
+        routing).
 
         Unlike `_preempt_request`, a victim that never ran must NOT be
         marked PREEMPTED: it has no model-runner state to resume or reset and
@@ -2013,6 +2020,9 @@ class Scheduler(SchedulerInterface):
         self.encoder_cache_manager.free(request)
         self._pending_encoder_input_ids.pop(request_id, None)
         self._inflight_prefills.discard(request)
+        # Release the cached parked-load reservation (#65285) too, or the
+        # freed victim's tail would keep blocking other admissions.
+        self._unreserve_parked(request)
         self._set_kv_fetch_stage(request, None)
         if self.aux_output_connector is not None:
             # Release the aux-tier hold that request_loading() placed at
