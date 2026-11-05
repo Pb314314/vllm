@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, cast
 import torch
 import torch.nn.functional as F
 
+import vllm.envs as envs
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.config.parallel import ExpertPlacementStrategy
 from vllm.distributed import (
@@ -32,6 +33,12 @@ from vllm.model_executor.layers.fused_moe.moe_output import UnfinalizedMoEOutput
 from vllm.model_executor.layers.fused_moe.routed_experts import (
     RoutedExperts,
 )
+from vllm.model_executor.layers.fused_moe.router.base_router import (
+    get_moe_padding_mask,
+    mask_padding_routes,
+    max_num_tokens_across_dp,
+    padding_skip_pays_off,
+)
 from vllm.model_executor.layers.fused_moe.router.fused_moe_router import (
     FusedMoERouter,
 )
@@ -48,6 +55,7 @@ from vllm.model_executor.layers.fused_moe.runner.shared_experts import (
 from vllm.model_executor.layers.utils import dispatch_unquantized_gemm
 from vllm.model_executor.utils import refill_derived
 from vllm.platforms import current_platform
+from vllm.utils.flashinfer import is_flashinfer_autotuning
 from vllm.utils.torch_utils import (
     _USE_LAYERNAME,
     LayerName,
@@ -621,7 +629,48 @@ class MoERunner(MoERunnerInterface):
             shared_experts_input, SharedExpertsOrder.NO_OVERLAP
         )
 
-        if self.routed_experts.quant_method.is_monolithic:
+        if (
+            self.routed_experts.quant_method.is_monolithic
+            and padding_skip_pays_off(
+                max_num_tokens_across_dp(hidden_states.shape[0]),
+                self.moe_config.dp_size,
+                self.moe_config.experts_per_token,
+                self.moe_config.num_experts,
+            )
+            and self.routed_experts.supports_precomputed_routing
+            and get_moe_padding_mask(hidden_states.shape[0]) is not None
+        ):
+            # The kernel's own routing would send padding rows to experts; use
+            # vLLM's top-k, which marks them -1.
+            topk_weights, topk_ids = self.router.select_experts(
+                hidden_states=hidden_states,
+                router_logits=router_logits,
+                topk_indices_dtype=torch.int32,
+                input_ids=input_ids,
+            )
+            if not self.router.masks_padding:
+                topk_ids = mask_padding_routes(topk_ids)
+            fused_out = self.routed_experts.forward_monolithic_routed(
+                hidden_states, topk_weights, topk_ids
+            )
+        elif self.routed_experts.quant_method.is_monolithic:
+            if (
+                envs.VLLM_MOE_SKIP_PADDING
+                and self.moe_config.dp_size > 1
+                and self.routed_experts.supports_precomputed_routing
+                and is_flashinfer_autotuning()
+            ):
+                # Tuning runs large batches only; also tune the routed op that
+                # small padded DP batches take above.
+                topk_weights, topk_ids = self.router.select_experts(
+                    hidden_states=hidden_states,
+                    router_logits=router_logits,
+                    topk_indices_dtype=torch.int32,
+                    input_ids=input_ids,
+                )
+                self.routed_experts.forward_monolithic_routed(
+                    hidden_states, topk_weights, topk_ids
+                )
             # Monolithic kernels: pass router_logits to routed_experts
             router_logits = self.router.prepare_monolithic_logits(router_logits)
             fused_out = self.routed_experts.forward_monolithic(

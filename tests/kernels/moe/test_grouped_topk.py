@@ -16,6 +16,9 @@ from vllm.config import (
     set_current_vllm_config,
 )
 from vllm.forward_context import set_forward_context
+from vllm.model_executor.layers.fused_moe.router.base_router import (
+    mask_padding_routes,
+)
 from vllm.model_executor.layers.fused_moe.router.grouped_topk_router import (
     GroupedTopk,
     GroupedTopKRouter,
@@ -102,9 +105,14 @@ def test_kimi_grouped_topk_masks_padding_when_enabled(
         topk_weights, topk_ids = router._compute_routing(
             hidden_states, gating_output, torch.int32
         )
+        # The monolithic routed path masks whatever the router left unmasked.
+        routed_ids = mask_padding_routes(topk_ids)
 
     torch.testing.assert_close(topk_weights[0], baseline_weights[0], rtol=0, atol=0)
     assert torch.equal(topk_ids[0], baseline_ids[0])
+    assert router.masks_padding is skip_padding
+    assert torch.equal(routed_ids[0], baseline_ids[0])
+    assert torch.all(routed_ids[1] == -1)
     if skip_padding:
         assert torch.all(topk_ids[1] == -1)
         assert torch.all(topk_weights[1] == 0)

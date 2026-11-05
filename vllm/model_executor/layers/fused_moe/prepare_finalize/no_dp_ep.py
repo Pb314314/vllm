@@ -107,6 +107,9 @@ class MoEPrepareAndFinalizeNoDPEPMonolithic(mk.FusedMoEPrepareAndFinalizeMonolit
     def supports_deferred_moe_finalize(self) -> bool:
         return True
 
+    def supports_precomputed_routing(self) -> bool:
+        return True
+
     @property
     def activation_format(self) -> mk.FusedMoEActivationFormat:
         return mk.FusedMoEActivationFormat.Standard
@@ -132,6 +135,17 @@ class MoEPrepareAndFinalizeNoDPEPMonolithic(mk.FusedMoEPrepareAndFinalizeMonolit
     ) -> mk.PrepareMonolithicResultType:
         a1q, a1q_scale = _quantize_input(a1, quant_config, defer_input_quant)
         return a1q, a1q_scale, router_logits
+
+    def prepare_routed(
+        self,
+        a1: torch.Tensor,
+        topk_weights: torch.Tensor,
+        topk_ids: torch.Tensor,
+        quant_config: FusedMoEQuantConfig,
+        defer_input_quant: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor, torch.Tensor]:
+        a1q, a1q_scale = _quantize_input(a1, quant_config, defer_input_quant)
+        return a1q, a1q_scale, topk_weights, topk_ids
 
     def finalize(
         self,

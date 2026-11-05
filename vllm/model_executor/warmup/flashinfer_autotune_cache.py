@@ -35,6 +35,12 @@ def flashinfer_autotune_cache_hash(runner: "GPUModelRunner") -> str:
     if cache_config is not vllm_config.cache_config:
         vllm_config = replace(vllm_config, cache_config=cache_config)
     config_hash = vllm_config.compute_hash(include_version=False)
+    # DP runs also tune TRT-LLM MoE's precomputed-routing ops; a cache from
+    # before lacks them, and a hit skips all tuning.
+    if vllm_config.parallel_config.data_parallel_size > 1 and (
+        envs.VLLM_MOE_SKIP_PADDING
+    ):
+        config_hash += "|moe_routed"
     return hashlib.sha256(config_hash.encode()).hexdigest()
 
 

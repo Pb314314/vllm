@@ -142,6 +142,39 @@ def get_moe_padding_mask(num_tokens: int) -> torch.Tensor | None:
     return None
 
 
+def mask_padding_routes(topk_ids: torch.Tensor) -> torch.Tensor:
+    """Expert id -1 for padding rows, for routers that cannot fuse the mask."""
+    is_padding = get_moe_padding_mask(topk_ids.shape[0])
+    if is_padding is None:
+        return topk_ids
+    return topk_ids.masked_fill(is_padding.unsqueeze(1), -1)
+
+
+def max_num_tokens_across_dp(num_tokens: int) -> int:
+    """The largest batch on any DP rank (``num_tokens`` without DP)."""
+    if is_forward_context_available():
+        dp_metadata = get_forward_context().dp_metadata
+        if dp_metadata is not None:
+            return int(dp_metadata.num_tokens_across_dp_cpu.max())
+    return num_tokens
+
+
+def padding_skip_pays_off(
+    max_num_tokens: int, dp_size: int, top_k: int, num_experts: int
+) -> bool:
+    """Whether skipping padded rows with vLLM's top-k beats the kernel's routing.
+
+    It costs one extra top-k launch per layer and saves only the experts that
+    padded rows alone select. Only DP pads in bulk (every rank to the DP max),
+    and once the batch's picks outnumber the experts twice over, real rows
+    already select nearly every expert.
+
+    ``max_num_tokens`` is the largest batch on any DP rank: every rank must
+    decide alike, since the two paths dispatch different tensors.
+    """
+    return dp_size > 1 and max_num_tokens * dp_size * top_k <= 2 * num_experts
+
+
 class BaseRouter(FusedMoERouter):
     """Base class providing common functionality for all router implementations.
 
