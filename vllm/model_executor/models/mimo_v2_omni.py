@@ -683,8 +683,8 @@ def _video_timestamps_from_metadata(
     from the first to the last sampled frame. With dropped frames or
     frame_recovery, ``frames_indices`` can be non-uniform; the even spacing is
     then an approximation, which is required because ``get_video_replacement``
-    rebuilds the timestamp labels as arithmetic ``start + j *
-    ``second_per_grid_ts`` steps and the two must agree.
+    rebuilds the timestamp labels as arithmetic steps (``start`` plus
+    ``j * second_per_grid_ts``) and the two must agree.
 
     Returns None if the metadata cannot provide the frame times.
     """
