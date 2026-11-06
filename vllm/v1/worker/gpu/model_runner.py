@@ -1135,10 +1135,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # With an extensible KV cache the estimate is not subtracted from
             # the KV memory; the worker holds it back from warmup commits so
             # the encoder CUDA-graph capture, which runs before the final KV
-            # sizing, still fits (#65868). Only encoder graphs need the
-            # reserve: they are GiB-scale, while decoder graphs fit in the
-            # activation headroom (no reported failures), so decoder-only and
-            # text-only deployments keep the old fast path (no profiling pass).
+            # sizing, still fits (#65868). The reserve is sized on the encoder
+            # capture only: it is the GiB-scale, configurable-budget term and
+            # the issue's failure stage. Decoder-capture transients are not
+            # separately reserved (not the reported failure); they indirectly
+            # get more room because the commit limit itself leaves the reserve
+            # uncommitted. Decoder-only and text-only deployments keep the old
+            # fast path (no profiling pass).
             capture_encoder = (
                 self.model_state.supports_mm_inputs
                 and self.model_state.encoder_runner.has_cudagraph()
