@@ -12,9 +12,11 @@ Verify: `git cat-file blob <blob-id> | sha256sum` against the sha256 column.
 
 # Resolved binary wheel (recovered by hash match)
 
-The precompiled install resolved to the published nightly wheel
+The wheel below is hash-identical to the extracted/loaded extensions; it is the published
+nightly build at commit `b2094acc88a7f76b49332ebc91a34887272e36c8` (default variant; note this
+commit is a *descendant* of the worktree base — the resolver's exact search path was not
+logged, so the binding here is by content hash, not by resolver trace):
 `vllm-0.33.0rc1.dev946+gb2094acc8-cp38-abi3-manylinux_2_28_aarch64.whl`
-(commit `b2094acc88a7f76b49332ebc91a34887272e36c8`, default variant):
 https://wheels.vllm.ai/b2094acc88a7f76b49332ebc91a34887272e36c8/vllm-0.33.0rc1.dev946%2Bgb2094acc8-cp38-abi3-manylinux_2_28_aarch64.whl
 
 `wheel/wheel-ext-manifest.txt` has sha256 of every `.abi3.so` in that wheel;
