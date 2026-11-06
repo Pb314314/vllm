@@ -11,7 +11,7 @@ import threading
 import time
 import weakref
 from collections.abc import Sized
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from multiprocessing import shared_memory
 from pickle import PickleBuffer
@@ -401,11 +401,14 @@ class ShmRingBuffer:
             if self.is_creator:
                 # The segment may already have been unlinked by an external
                 # cleaner (e.g. systemd-logind RemoveIPC, observed purging
-                # /dev/shm mid-startup); nothing left to do then. Raising
-                # here would only produce "Exception ignored in __del__"
-                # noise.
-                with suppress(FileNotFoundError):
+                # /dev/shm mid-startup); nothing left to do then.
+                # NB: try/except, not contextlib.suppress — at interpreter
+                # teardown module globals may already be None, so a bare-name
+                # reference (suppress included) can itself raise TypeError.
+                try:  # noqa: SIM105
                     self.shared_memory.unlink()
+                except FileNotFoundError:
+                    pass
 
     @contextmanager
     def get_data(self, current_idx: int):
