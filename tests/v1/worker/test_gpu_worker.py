@@ -10,6 +10,7 @@ import pytest
 import torch
 
 from tests.utils import create_new_process_for_each_test
+from vllm import envs
 from vllm.platforms import current_platform
 from vllm.utils.mem_constants import GiB_bytes
 from vllm.v1.worker import gpu_worker, startup_plan
@@ -572,6 +573,105 @@ def test_extensible_init_defers_the_connector(monkeypatch: pytest.MonkeyPatch):
     assert runner.extensible_kv_cache.warmup_committable_blocks == 40
     assert log == ["initialize_kv_cache"]
     assert worker._kv_cache_config is kv_cache_config
+
+
+def _worker_for_determine_available_memory(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    extensible: bool,
+    estimate: int,
+    capture_peak: int,
+):
+    """A Worker stand-in for determine_available_memory: real profiling
+    replaced by fixed numbers. The V2 runner stub reports `estimate` from
+    profile_cudagraph_memory and carries `capture_peak` as the profiled
+    capture peak (cudagraph_capture_peak_bytes)."""
+    from vllm.v1.worker import gpu_worker
+    from vllm.v1.worker.gpu_worker import Worker
+
+    runner = SimpleNamespace(
+        model_memory_usage=10,
+        profile_run=lambda **kwargs: None,
+        profile_cudagraph_memory=lambda: estimate,
+        cudagraph_capture_peak_bytes=capture_peak,
+    )
+    profile_result = SimpleNamespace(
+        total_consumed=100,
+        transient_peak_headroom=7,
+        non_kv_cache_memory=300,
+        after_profile=SimpleNamespace(free_memory=900),
+    )
+    worker = SimpleNamespace(
+        cache_config=SimpleNamespace(
+            enable_extensible_kv_cache=extensible,
+            kv_cache_memory_bytes=None,
+            resolved_gpu_memory_utilization=0.9,
+        ),
+        model_config=SimpleNamespace(multimodal_config=None),
+        parallel_config=SimpleNamespace(_api_process_count=1),
+        vllm_config=SimpleNamespace(),
+        model_runner=runner,
+        use_v2_model_runner=True,
+        init_snapshot=SimpleNamespace(free_memory=1000, total_memory=10000),
+        requested_memory=800,
+        randomize_dummy_inputs=False,
+        _scoped_allocator_max_split=lambda **kwargs: nullcontext(),
+        _v2_model_runner=lambda: runner,
+    )
+    monkeypatch.setattr(gpu_worker, "maybe_apply_startup_plan", lambda w: None)
+    monkeypatch.setattr(
+        gpu_worker, "memory_profiling", lambda *a, **k: nullcontext(profile_result)
+    )
+    monkeypatch.setattr(gpu_worker, "set_current_vllm_config", lambda *a: nullcontext())
+    monkeypatch.setattr(
+        gpu_worker,
+        "current_platform",
+        SimpleNamespace(
+            is_cuda_alike=lambda: True, is_xpu=lambda: False, is_rocm=lambda: False
+        ),
+    )
+    monkeypatch.setattr(gpu_worker, "reserve_mm_ipc_gpu_memory", lambda b, *a, **k: b)
+    monkeypatch.setattr(envs, "VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS", True)
+    return Worker, worker
+
+
+@pytest.mark.parametrize("extensible", [True, False])
+def test_determine_available_memory_routes_graph_memory_for_extensible_cache(
+    monkeypatch: pytest.MonkeyPatch, extensible: bool
+):
+    """#65868: with an extensible KV cache the profiled graph memory (peak of
+    the profiling capture, not just the persistent estimate) becomes the
+    warmup reserve and must NOT shrink the KV capacity; with a standard cache
+    it is subtracted from the available KV memory, as before."""
+    Worker, worker = _worker_for_determine_available_memory(
+        monkeypatch, extensible=extensible, estimate=100, capture_peak=150
+    )
+    returned = Worker.determine_available_memory(worker)
+    if extensible:
+        # 800 requested - 300 non-KV; the graph memory (100) is NOT subtracted.
+        assert worker.available_kv_cache_memory_bytes == 500
+        assert returned == 500
+        # The reserve is the profiled capture peak.
+        assert worker.cudagraph_warmup_reserve_bytes == 150
+        # The activation peak is not inflated by graph memory.
+        assert worker.peak_activation_memory == 7
+    else:
+        # Standard cache: the estimate is subtracted from the KV memory.
+        assert worker.available_kv_cache_memory_bytes == 400
+        assert worker.cudagraph_warmup_reserve_bytes == 0
+        assert worker.peak_activation_memory == 7 + 100
+
+
+def test_determine_available_memory_reserve_uses_estimate_when_larger(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The reserve is max(estimate, capture peak): a persistent estimate above
+    the measured peak (e.g. extrapolated FULL graphs) still wins."""
+    Worker, worker = _worker_for_determine_available_memory(
+        monkeypatch, extensible=True, estimate=200, capture_peak=150
+    )
+    Worker.determine_available_memory(worker)
+    assert worker.cudagraph_warmup_reserve_bytes == 200
 
 
 def test_extensible_init_reserves_profiled_cudagraph_memory(

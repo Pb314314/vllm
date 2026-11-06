@@ -1128,16 +1128,20 @@ class GPUModelRunner(LoRAModelRunnerMixin):
     @torch.inference_mode()
     def profile_cudagraph_memory(self) -> int:
         """Estimate the GPU memory required to capture CUDA graphs."""
-        if (
-            self.cache_config.enable_extensible_kv_cache
-            and not envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS
-        ):
-            # The estimate is only used to hold memory back from extensible-KV
-            # warmup commits (the worker applies it in initialize_from_config
-            # so that capture_model(), which runs before the final KV sizing,
-            # still fits, #65868). With the env opt-out nothing consumes the
-            # estimate, so skip the profiling pass as before.
-            return 0
+        if self.cache_config.enable_extensible_kv_cache:
+            # With an extensible KV cache the estimate is not subtracted from
+            # the KV memory; the worker holds it back from warmup commits so
+            # the encoder CUDA-graph capture, which runs before the final KV
+            # sizing, still fits (#65868). Only encoder graphs need the
+            # reserve: they are GiB-scale, while decoder graphs fit in the
+            # activation headroom (no reported failures), so decoder-only and
+            # text-only deployments keep the old fast path (no profiling pass).
+            capture_encoder = (
+                self.model_state.supports_mm_inputs
+                and self.model_state.encoder_runner.has_cudagraph()
+            )
+            if not capture_encoder or not envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:
+                return 0
         # Runs before the KV cache exists, outside compile_or_warm_up_model.
         with self.eplb.suppress():
             return _profile_cudagraph_memory(self)

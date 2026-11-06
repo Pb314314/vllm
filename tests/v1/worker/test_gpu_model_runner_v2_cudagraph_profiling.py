@@ -19,6 +19,7 @@ import pytest
 import torch
 
 from tests.utils import create_new_process_for_each_test
+from vllm import envs
 from vllm.compilation.counter import compilation_counter
 from vllm.config.compilation import CUDAGraphMode
 from vllm.v1.worker.gpu import cudagraph_utils as cgu
@@ -255,16 +256,31 @@ def test_profile_cudagraph_memory_restores_compilation_counters(monkeypatch):
 
 
 @pytest.mark.parametrize("extensible", [False, True])
-def test_model_runner_delegates_to_cudagraph_utils(monkeypatch, extensible):
-    """The extensible KV cache measures the capture footprint after warmup
-    instead of estimating it."""
+@pytest.mark.parametrize("profiling_enabled", [False, True])
+@pytest.mark.parametrize("encoder_graphs", [False, True])
+def test_model_runner_delegates_to_cudagraph_utils(
+    monkeypatch, extensible, profiling_enabled, encoder_graphs
+):
+    """With a standard KV cache the runner always profiles. With an extensible
+    KV cache it profiles only when encoder CUDA graphs will be captured (their
+    capture must fit the memory warmup leaves behind, #65868) and the profiling
+    opt-out env var is on; decoder-only and text-only deployments keep the old
+    fast path."""
     runner = mrv2.GPUModelRunner.__new__(mrv2.GPUModelRunner)
     runner.cache_config = SimpleNamespace(enable_extensible_kv_cache=extensible)
     runner.eplb = EPLBController(
         SimpleNamespace(enable_eplb=False), torch.device("cpu")
     )
+    runner.model_state = SimpleNamespace(
+        supports_mm_inputs=encoder_graphs,
+        encoder_runner=SimpleNamespace(has_cudagraph=lambda: encoder_graphs),
+    )
+    monkeypatch.setattr(
+        envs, "VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS", profiling_enabled
+    )
     monkeypatch.setattr(mrv2, "_profile_cudagraph_memory", lambda r: 42)
-    assert runner.profile_cudagraph_memory() == (0 if extensible else 42)
+    profiles = not extensible or (profiling_enabled and encoder_graphs)
+    assert runner.profile_cudagraph_memory() == (42 if profiles else 0)
 
 
 def test_extrapolate_full_graph_memory():
