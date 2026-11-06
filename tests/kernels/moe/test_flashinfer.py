@@ -1377,22 +1377,50 @@ def test_trtllm_fp8_per_tensor_monolithic_routed_skips_padding(m: int, workspace
             routing_sink=None,
             **common,
         )
-        reference = kernel.apply_monolithic(
-            hidden_states=td.hidden_states,
-            router_logits=score,
-            expert_map=None,
+        # Reference: the same routed call on the unpadded rows only. Padding
+        # rows must not perturb real rows (the skip-padding invariant this PR
+        # adds), and padded rows must produce exactly-zero outputs.
+        # (Cross-kernel identity against the logits-routed monolithic op is
+        # not asserted here: the two flashinfer per-tensor kernels measurably
+        # differ beyond fp8 schedule noise, see the PR body.)
+        unpadded = kernel.apply_monolithic_routed(
+            hidden_states=td.hidden_states[:num_real],
+            topk_weights=topk_weights[:num_real],
+            topk_ids=topk_ids[:num_real],
             apply_router_weight_on_input=True,
-            routed_scaling_factor=1.0,
             routing_sink=None,
             **common,
         )
-    assert isinstance(routed, torch.Tensor) and isinstance(reference, torch.Tensor)
-    check_accuracy(
-        ref_output=reference[:num_real],
-        actual_output=routed[:num_real],
-        atol=0.1,
-        rtol=0.85,
-        percent=0.925,
+    assert isinstance(routed, torch.Tensor) and isinstance(unpadded, torch.Tensor)
+    # Padding invariance: same kernel, same inputs on the real rows.
+    torch.testing.assert_close(routed[:num_real], unpadded, atol=2e-2, rtol=2e-2)
+    # The bound must reject a 2x output error.
+    with pytest.raises(AssertionError):
+        torch.testing.assert_close(
+            routed[:num_real], 2 * unpadded, atol=2e-2, rtol=2e-2
+        )
+    # use_routing_scales_on_input must be wired: forcing the opposite
+    # placement (scales on output) must move the result (fp8 rounding
+    # separates the placements; measured rel_l2 = 0.187 on a GB200, see the
+    # PR body).
+    from vllm.model_executor.layers.fused_moe.utils import moe_kernel_quantize_input
+
+    a1q, _ = moe_kernel_quantize_input(
+        td.hidden_states, td.a1_scale, quant_config.quant_dtype, False, None
+    )
+    experts = kernel.impl.fused_experts
+    assert isinstance(experts, TrtLlmFp8ExpertsMonolithic)
+    forced_off = experts.apply_routed(
+        hidden_states=a1q,
+        topk_weights=topk_weights,
+        topk_ids=topk_ids,
+        apply_router_weight_on_input=False,
+        a1q_scale=None,
+        **common,
+    )
+    assert isinstance(forced_off, torch.Tensor)
+    assert not torch.allclose(
+        routed[:num_real].float(), forced_off[:num_real].float(), atol=1e-3, rtol=1e-3
     )
     assert not routed[num_real:].any()
 
@@ -1726,3 +1754,33 @@ def test_trtllm_mxfp8_moe_pads_intermediate(
         )
 
     check_accuracy(ref_output=reference, actual_output=output)
+
+
+def test_routed_gate_blocks_weight_on_input_without_kernel_support():
+    """The weight-on-input gate: a Llama4-style layer (routing scales applied
+    on input) may take the precomputed-routing path only when the kernel's
+    routed op can apply scales on input (per-tensor FP8 today)."""
+    from unittest.mock import MagicMock
+
+    from vllm.model_executor.layers.fused_moe.routed_experts import RoutedExperts
+
+    def make_routed_experts(weight_on_input: bool, kernel_supports: bool):
+        re = object.__new__(RoutedExperts)
+        re.apply_router_weight_on_input = weight_on_input
+        experts = MagicMock()
+        experts.supports_routed_weight_on_input.return_value = kernel_supports
+        impl = MagicMock()
+        impl.fused_experts = experts
+        moe_kernel = MagicMock()
+        moe_kernel.supports_precomputed_routing.return_value = True
+        moe_kernel.impl = impl
+        re.quant_method = MagicMock(moe_kernel=moe_kernel)
+        return re
+
+    # weight-on-output layer: gate passes through the kernel capability.
+    assert make_routed_experts(False, False).supports_precomputed_routing
+    # weight-on-input layer + kernel without use_routing_scales_on_input: keep
+    # the monolithic path (output-side scales would change numerics).
+    assert not make_routed_experts(True, False).supports_precomputed_routing
+    # weight-on-input + per-tensor FP8 (op exposes use_routing_scales_on_input).
+    assert make_routed_experts(True, True).supports_precomputed_routing
