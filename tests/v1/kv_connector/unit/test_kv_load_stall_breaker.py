@@ -210,7 +210,7 @@ def test_stall_breaker_ignores_transient_final_output_wait():
 
     # Both loads park (16 blocks); a two-block consumer with max_tokens=2 is
     # admitted and prefilled. Its first sampled token is delivered below.
-    s1 = scheduler.schedule()
+    scheduler.schedule()
     assert block_pool.get_num_free_blocks() == 9
     consumer = create_request(num_tokens=2 * BLOCK_SIZE, max_tokens=2)
     scheduler.add_request(consumer)
@@ -240,6 +240,7 @@ def test_stall_breaker_ignores_transient_final_output_wait():
     # Transient idle step: the consumer is skipped (its outstanding sample
     # reaches max_tokens), nothing else fits, yet the breaker must not fire.
     s4 = scheduler.schedule()
+    assert not s4.num_scheduled_tokens  # the transient idle step
     assert consumer.status == RequestStatus.RUNNING
     assert load1.num_computed_tokens == EXTERNAL_TOKENS
     assert load2.num_computed_tokens == EXTERNAL_TOKENS
