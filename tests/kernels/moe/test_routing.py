@@ -9,6 +9,7 @@ import torch
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.distributed.eplb.eplb_state import EplbLayerState
 from vllm.model_executor.layers.fused_moe.config import RoutingMethodType
+from vllm.model_executor.layers.fused_moe.router import base_router
 from vllm.model_executor.layers.fused_moe.router.base_router import (
     eplb_map_to_physical_and_record,
 )
@@ -614,6 +615,41 @@ def test_fused_grouped_topk_accepts_idle_rank(scoring_func):
     weights, ids = ops.grouped_topk(scores, 2, 1, 2, True, 1.0, bias, scoring_func)
     torch.testing.assert_close(weights, scores.new_empty((0, 2)))
     torch.testing.assert_close(ids, scores.new_empty((0, 2), dtype=torch.int32))
+
+
+@pytest.mark.parametrize("num_tokens,num_real", [(40, 13), (40, 40), (40, 0), (1, 0)])
+def test_padding_rows_route_like_real_rows(num_tokens, num_real):
+    """Padding rows must only select experts some real row already selects, so
+    logits-routed kernels load no extra experts; real rows stay untouched."""
+    if not current_platform.is_cuda():
+        pytest.skip("CUDA required")
+    logits = torch.randn(num_tokens, 256, device="cuda", dtype=torch.bfloat16)
+    expected_real = logits[:num_real].clone()
+    is_padding = torch.arange(num_tokens, device="cuda") >= num_real
+    with patch.object(base_router, "get_moe_padding_mask", lambda n: is_padding[:n]):
+        out = base_router.route_padding_like_real_rows(logits)
+
+    torch.testing.assert_close(out[:num_real], expected_real, atol=0, rtol=0)
+    experts = out.topk(8, dim=-1).indices
+    real_experts = set(experts[: max(num_real, 1)].flatten().tolist())
+    assert set(experts.flatten().tolist()) == real_experts
+
+
+def test_padding_rows_route_like_real_rows_interleaved_mask():
+    """A mask that is not one trailing block (e.g. gathered per-rank chunks) must
+    leave real rows untouched and only copy real rows' logits."""
+    if not current_platform.is_cuda():
+        pytest.skip("CUDA required")
+    is_padding = torch.tensor([0, 0, 1, 1, 0, 0, 0, 1, 1, 1] * 4, device="cuda").bool()
+    logits = torch.randn(is_padding.shape[0], 64, device="cuda")
+    orig = logits.clone()
+    with patch.object(base_router, "get_moe_padding_mask", lambda n: is_padding[:n]):
+        out = base_router.route_padding_like_real_rows(logits)
+
+    torch.testing.assert_close(out[~is_padding], orig[~is_padding], atol=0, rtol=0)
+    real_rows = {tuple(r) for r in orig[~is_padding].tolist()}
+    for i in is_padding.nonzero().flatten().tolist():
+        assert torch.equal(out[i], orig[i]) or tuple(out[i].tolist()) in real_rows
 
 
 @pytest.mark.parametrize("m,k", MK_S)
