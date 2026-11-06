@@ -1028,18 +1028,25 @@ def test_message_queue_survives_external_unlink_after_attach():
         reader.shutdown()
 
 
-def _attach_order_child(handle, attach_after_load: bool, result_q) -> None:
-    """Child process playing a multiproc worker: attach to the writer's ring,
-    with a stand-in model-load delay before or after the attach, then dequeue."""
+def _attach_order_child(handle, attach_after_load, child_ready, purge_done, result_q):
+    """Child process playing a multiproc worker. Synchronization is explicit:
+    the child signals when it has attached (new order) or entered the load
+    phase (old order), and the parent unlinks the segment only after that.
+    No sleeps: the attach/purge ordering is established by events."""
     if attach_after_load:
-        time.sleep(3)  # the parent unlinks the segment during this window
+        # Old order: signal the load phase, then wait out the purge that an
+        # external cleaner could do during it, and only then attach.
+        child_ready.set()
+        purge_done.wait(timeout=30)
     try:
         mq = MessageQueue.create_from_handle(handle, rank=0)
     except RuntimeError as e:
         result_q.put(("raise", str(e)))
         return
     if not attach_after_load:
-        time.sleep(3)  # model-load window happens after the early attach
+        # New order: signal the completed attach, then wait out the purge.
+        child_ready.set()
+        purge_done.wait(timeout=30)
     try:
         result_q.put(("dequeued", mq.dequeue(timeout=10)))
     except Exception as e:
@@ -1047,13 +1054,16 @@ def _attach_order_child(handle, attach_after_load: bool, result_q) -> None:
 
 
 @pytest.mark.parametrize("attach_after_load", [False, True])
+@pytest.mark.filterwarnings("error::pytest.PytestUnraisableExceptionWarning")
 def test_attach_before_model_load_survives_mid_load_unlink(attach_after_load):
     """Regression test for the multiproc startup attach race (worker side).
     An external cleaner (e.g. systemd-logind RemoveIPC) can unlink the ring's
     segment during a long model load. Attaching before the load (current
     WorkerProc order) keeps a live mapping and the message is still delivered;
     attaching after it (old order) must fail fast with the clear RuntimeError
-    from create_from_handle, not a deferred AttributeError at first dequeue."""
+    from create_from_handle, not a deferred AttributeError at first dequeue.
+    The unraisable-warning error filter also fails this test if teardown of
+    an externally-unlinked ring ever raises from __del__ again."""
     writer = MessageQueue(
         n_reader=1,
         n_local_reader=1,
@@ -1062,22 +1072,118 @@ def test_attach_before_model_load_survives_mid_load_unlink(attach_after_load):
         connect_ip="127.0.0.1",
     )
     result_q = mp.Queue()
+    child_ready = mp.Event()
+    purge_done = mp.Event()
     child = mp.Process(
         target=_attach_order_child,
-        args=(writer.export_handle(), attach_after_load, result_q),
+        args=(
+            writer.export_handle(),
+            attach_after_load,
+            child_ready,
+            purge_done,
+            result_q,
+        ),
     )
     child.start()
-    time.sleep(1)  # let the early-attaching child attach before the purge
-    os.unlink(os.path.join("/dev/shm", writer.buffer.shared_memory.name))
-    writer.enqueue(b"payload")
-    kind, detail = result_q.get(timeout=30)
-    child.join(timeout=30)
-    writer.shutdown()
+    try:
+        assert child_ready.wait(timeout=30), "child never reached attach/load"
+        # The purge an external cleaner could do during model load: unlink
+        # only this test's own segment.
+        os.unlink(os.path.join("/dev/shm", writer.buffer.shared_memory.name))
+        purge_done.set()
+        writer.enqueue(b"payload")
+        kind, detail = result_q.get(timeout=30)
+    finally:
+        purge_done.set()
+        child.join(timeout=30)
+        if child.is_alive():
+            child.kill()
+        writer.shutdown()
     if attach_after_load:
         assert kind == "raise", (kind, detail)
         assert "could not attach" in detail
     else:
         assert (kind, detail) == ("dequeued", b"payload")
+
+
+def test_worker_proc_init_attaches_input_mq_before_model_load():
+    """Run the real WorkerProc.__init__ with only the Worker object stubbed,
+    while the stub's load_model() performs the external purge. With the fix,
+    the input MQ is attached before init_device()/load_model(), so the
+    mid-load unlink is harmless and a message still dequeues. Moving the
+    attach back after load_model makes the real initializer raise the
+    fail-fast RuntimeError here."""
+    from vllm.v1.executor import multiproc_executor
+    from vllm.v1.executor.multiproc_executor import WorkerProc
+
+    events: list[str] = []
+    writer = MessageQueue(
+        n_reader=1,
+        n_local_reader=1,
+        max_chunk_bytes=1024,
+        max_chunks=4,
+        connect_ip="127.0.0.1",
+    )
+    shm_path = os.path.join("/dev/shm", writer.buffer.shared_memory.name)
+
+    class _FakeWorker:
+        def __init__(self, rpc_rank, global_rank):
+            self.rank = rpc_rank
+
+        def init_worker(self, all_kwargs):
+            pass
+
+        def init_device(self):
+            events.append("init_device")
+
+        def load_model(self):
+            events.append("load_model")
+            # The purge an external cleaner (e.g. systemd-logind RemoveIPC)
+            # can do while the model is loading.
+            os.unlink(shm_path)
+
+    orig_attach = WorkerProc._attach_input_mq
+
+    def _spy_attach(self, *args, **kwargs):
+        events.append("attach_input_mq")
+        return orig_attach(self, *args, **kwargs)
+
+    cfg = SimpleNamespace(
+        parallel_config=SimpleNamespace(
+            world_size=1,
+            nnodes_within_dp=1,
+            enable_expert_parallel=False,
+        ),
+        scheduler_config=SimpleNamespace(async_scheduling=False),
+    )
+    with (
+        mock.patch.object(multiproc_executor, "WorkerWrapperBase", _FakeWorker),
+        mock.patch.object(WorkerProc, "_attach_input_mq", _spy_attach),
+        mock.patch.object(
+            multiproc_executor.current_platform,
+            "update_block_size_for_backend",
+            lambda vllm_config: None,
+        ),
+    ):
+        proc = WorkerProc(
+            vllm_config=cfg,
+            local_rank=0,
+            rank=0,
+            distributed_init_method="file:///dev/null",
+            input_shm_handle=writer.export_handle(),
+            shared_worker_lock=None,
+            is_driver_worker=True,
+        )
+
+    try:
+        assert events == ["attach_input_mq", "init_device", "load_model"]
+        # The early-attached mapping survived the mid-load purge.
+        writer.enqueue(b"payload")
+        assert proc.rpc_broadcast_mq.dequeue(timeout=5) == b"payload"
+    finally:
+        proc.rpc_broadcast_mq.shutdown()
+        proc.worker_response_mq.shutdown()
+        writer.shutdown()
 
 
 def test_multiproc_worker_attaches_input_mq_exactly_once_early():
