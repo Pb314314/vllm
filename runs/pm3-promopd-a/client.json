@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 42,
+   "prompt_tokens": 1443,
+   "completion_tail": "he crop for 00:34.\nCrop 5 shows 00:31 and 00:34. Both look green/blue.\nCrop 6 shows 00:38 and 00:42. Both look green/blue.\n\nLet me reconsider the \"solid red\" description. Maybe it's a very dark red? Or a very bright red?\nOr maybe I am missing a frame entirely.\nLet me check the timestamps again. 00:0"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 34,
+   "prompt_tokens": 1443,
+   "completion_tail": "5 (4s)\n00:15 -> 00:19 (4s)\n00:19 -> 00:23 (4s)\n00:23 -> 00:27 (4s)\n00:27 -> 00:31 (4s)\n00:31 -> 00:34 (3s)\n00:34 -> 00:38 (4s)\n00:38 -> 00:42 (4s)\n00:42 -> 00:46 (4s)\n00:46 -> 00:50 (4s)\n00:50 -> 00:54 (4s)\n00:54 -> 00:58 (4s)\n\nThe gap between 00:31 and 00:34 is 3 seconds. The others are 4 seconds.\n"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 116,
+   "prompt_tokens": 1443,
+   "completion_tail": "e try to find a frame that is different.\nAll frames look identical in style (gradient).\nMaybe the \"solid red\" frame is the one *after* the last timestamp? No, \"preceded by a timestamp label\".\nMaybe the \"solid red\" frame is the one *before* the first timestamp? No.\n\nLet's look at the timestamps again"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 58,
+   "prompt_tokens": 1443,
+   "completion_tail": "2:05.\n\nLet's look at the image after 01:56.\nLet's look at the image after 01:46.\n\nLet's look at the image after 01:36.\nLet's look at the image after 01:27.\n\nLet's look at the image after 01:17.\nLet's look at the image after 01:07.\n\nLet's look at the image after 00:58.\nLet's look at the image after 0"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 67,
+   "prompt_tokens": 1443,
+   "completion_tail": "7\n01:17\n01:27\n01:36\n01:46\n01:56\n02:05\n02:15\n02:25\n\nIs it possible the frame at 02:25 is actually solid blue and the green is just a reflection or something? No, it's a digital gradient.\n\nLet me check the *crop* images.\nCrop 1: 00:00, 00:09, 00:19, 00:29.\nCrop 2: 00:38, 00:48, 00:58, 01:07.\nCrop 3: 0"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 29,
+   "prompt_tokens": 1443,
+   "completion_tail": "t 01:27. It looks like the others.\nLet me check the image at 00:29. It looks like the others.\n\nWait, let me look at the image *content* again.\nMaybe the \"solid yellow\" frame is not in the list of images I see, but implied? No, \"Each frame of this video is preceded by a timestamp label... Exactly one"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 348,
+   "prompt_tokens": 1443,
+   "completion_tail": "\nCrop 16 (09:41): Cyan/Blue.\n\nWait, I might be misinterpreting the \"solid red\" part. Maybe it's a \"solid red\" *label*? No, \"frame is solid red\".\nMaybe the video is a test pattern and one frame is red.\nLet me look at the timestamps again.\n00:00\n00:38\n01:17\n01:56\n02:35\n03:13\n03:52\n04:31\n05:10\n05:48\n06"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 0,
+   "prompt_tokens": 1443,
+   "completion_tail": "ot shown.\nIf the timestamp `09:41` precedes the solid green frame, then the image below `09:41` should be solid green. It is not.\n\nLet's look at the image for `00:00`.\nIs it possible the solid green frame is the *first* one?\nNo, `00:00` precedes the abstract pattern.\n\nLet's look at the image for `09"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 426,
+   "prompt_tokens": 1443,
+   "completion_tail": "rompt. It's a single image file. It contains 16 sub-images.\nLet me check the sub-images one by one.\n1. 00:00: Grid.\n2. 00:38: Grid.\n3. 01:17: Grid.\n4. 01:56: Grid.\n5. 02:35: Grid.\n6. 03:13: Grid.\n7. 03:52: Grid.\n8. 04:31: Grid.\n9. 05:10: Grid.\n10. 05:48: Grid.\n11. 06:27: Grid.\n12. 07:06: Grid.\n13. 0"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 348,
+   "prompt_tokens": 1443,
+   "completion_tail": "es.\nMaybe the \"solid yellow\" frame is hidden in the sequence?\nLet's look at the timestamps again.\n00:00\n00:38\n01:17\n01:56\n02:35\n03:13\n03:52\n04:31\n05:10\n05:48\n06:27\n07:06\n07:45\n08:23\n09:02\n09:41\n\nLet's look at the image at 05:48.\nWait, I see the image at 05:48 in the list.\nLet me check the image at 0"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 581,
+   "prompt_tokens": 1445,
+   "completion_tail": "Left: Cyan/Blue\nTop Right: Green\nBottom Left: Blue\nBottom Right: Green\nIt seems to be a test pattern.\n\nIs there any text in the images? No.\n\nLet's look at the timestamps again.\n00:00\n00:38\n01:17\n01:56\n02:35\n03:13\n03:52\n04:31\n05:10\n05:48\n06:27\n07:06\n07:45\n08:23\n09:02\n09:41\n\nIs it possible the magenta"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 193,
+   "prompt_tokens": 1443,
+   "completion_tail": "ific timestamp?\nLet's look at the timestamps again.\n00:00\n00:38\n01:17\n01:56\n02:35\n03:13\n03:52\n04:31\n05:10\n05:48\n06:27\n07:06\n07:45\n08:23\n09:02\n09:41\n\nIs there any anomaly in the timestamps?\n00:00 to 00:38 is 38s.\n00:38 to 01:17 is 39s.\n01:17 to 01:56 is 39s.\n01:56 to 02:35 is 39s.\n02:35 to 03:13 is 3"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The capital of France is Paris.</think>The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**<think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**<think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **1",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into glucose (energy) and oxygen.<think>Photosynthesis is the process by which plants, algae, and some bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen. (One sentence!)",
+   "<think>A haiku is 5-7-5 syllables.\n\nLet me write one about the ocean:\n\nWaves crash on the shore (5)\nEndless blue stretches beyond (7)\nSalt wind fills my lungs (5)\n\nLet me count:\n- Waves crash on the shore: Waves(1) crash(2) on(3) the(4) shore(5) \u2713\n- Endless blue stretches beyond: End(1)-less(2) blue(3) stretch(4)-es(5) be(6)-yond(7) \u2713\n- Salt wind fills my lungs: Salt(1",
+   "<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**<think>1"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. The shape is a circle (a perfect round circle), and the color is a bright red (dark red, solid red circle on a light background). I need to state that clearly.</think>In this image, the shape is a **circle (perfectly round, solid circular form)**, and its color is **bright, solid red (dark red)**, set against a light, off-white background.<think>In this image, the shape is a **solid, perfectly round circle**, and its color is **bright, deep red**, placed on a light, pale off-white",
+    "ptok": 118
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. It's a square (a four-sided, equal-sided shape, a square) that's blue (dark blue, solid blue color). Let me confirm: the shape is a square (square/rectangular, specifically a square, since all sides are equal), and the color is blue (dark blue, solid blue fill). Yep, that's it.</think>This image shows a **blue (dark solid blue) square** (a four-sided, equal-length-sided shape, a square, with straight, right-angle corners).<think>This image contains a **solid dark blue square",
+    "ptok": 118
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 9.097052335739136,
+   "ttft_p50": 0.24398231506347656,
+   "ttft_max": 0.57366943359375,
+   "e2e_p50": 1.0245903730392456,
+   "tpot_ms": 6.1465201415414885,
+   "throughput_tok_s": 112.56393414128907,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 3.1008331775665283,
+   "ttft_p50": 0.5743159055709839,
+   "ttft_max": 0.6207640171051025,
+   "e2e_p50": 1.4979181289672852,
+   "tpot_ms": 7.2724584519393805,
+   "throughput_tok_s": 330.23382470501514,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "estamps:**\n*   Frame 1: `00:00`\n*   Frame 2: `00:03`\n*   Frame 3: `00:07`\n*   Frame 4: `00:11`\n*   Frame 5: `00:15`\n*   Frame 6: `00:19`\n*   Frame 7: `00:23`\n*   Frame 8: `00:27`\n*   Frame 9: `00:31`\n*   Frame 10: `00:34`\n*   Frame 11: `00:38`\n*   Frame 12: `00:42`\n*   Frame 13: `00:46`\n*   Frame 14",
+  "prompt_tokens": 1436
+ }
+}

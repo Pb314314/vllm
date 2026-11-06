@@ -1,0 +1,32 @@
+d60c4404e2b5c4ffb54873fb18e06a335e1f2a94
+AFTER=0 MODEL=XiaomiMiMo/MiMo-V2.6-Flash-RL EXTRA=
+GPU 0: NVIDIA GB200 (UUID: GPU-3a761940-9fbd-39c7-4147-1e7766414aea)
+GPU 1: NVIDIA GB200 (UUID: GPU-89d38ac8-a01c-c0d0-6cfc-d876f56bc8e3)
+GPU 2: NVIDIA GB200 (UUID: GPU-86ba0590-9564-2498-e289-e73f246c32ae)
+GPU 3: NVIDIA GB200 (UUID: GPU-84e96afc-119f-12c0-ed33-aa6c9718363a)
+=== overlay diff vs worktree base (empty on Baseline)
+=== encoder-DP markers in the effective model file
+1
+1
+  Created wheel for vllm: filename=vllm-0.33.0rc1.dev872+gd60c4404e.precompiled-0.editable-cp312-cp312-linux_aarch64.whl size=14185 sha256=fba8a703a687adac2983029554def458efd26b68966a03a8957ccccdb0bbff9b
+  Stored in directory: $WORKDIR/pip-ephem-wheel-cache-0wbtfdc8/wheels/55/be/5b/374f87feb9637dcdd46d3463e1273f8d33a02e0f5f1d6df274
+Successfully installed vllm-0.33.0rc1.dev872+gd60c4404e.precompiled
+vllm.__file__: $WORKDIR/wt/vllm/__init__.py
+W1106 08:40:25.077000 2507675 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 08:40:25.078000 2507675 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 08:40:25.079000 2507675 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+module: $WORKDIR/wt/vllm/model_executor/models/mimo_v2_omni.py
+marker=False
+python 3.12.3
+torch 2.16.0.dev20261009+cu134
+transformers 5.22.1
+=== compiled extensions in worktree:
+-rwxr-xr-x 1 user user 85757488 Nov  6 08:40 $WORKDIR/wt/vllm/_C_stable_libtorch.abi3.so
+-rwxr-xr-x 1 user user  4346976 Nov  6 08:40 $WORKDIR/wt/vllm/_deepselect_C.abi3.so
+-rwxr-xr-x 1 user user  5961184 Nov  6 08:40 $WORKDIR/wt/vllm/_flashkda_C.abi3.so
+-rwxr-xr-x 1 user user  3799576 Nov  6 08:40 $WORKDIR/wt/vllm/_flashmla_C.abi3.so
+-rwxr-xr-x 1 user user   300336 Nov  6 08:40 $WORKDIR/wt/vllm/_flashmla_extension_C.abi3.so
+-rwxr-xr-x 1 user user 28950480 Nov  6 08:40 $WORKDIR/wt/vllm/_moe_C_stable_libtorch.abi3.so
+-rwxr-xr-x 1 user user   204792 Nov  6 08:40 $WORKDIR/wt/vllm/cumem_allocator.abi3.so
+-rwxr-xr-x 1 user user   205040 Nov  6 08:40 $WORKDIR/wt/vllm/fs_io_C.abi3.so
+-rwxr-xr-x 1 user user   202544 Nov  6 08:40 $WORKDIR/wt/vllm/spinloop.abi3.so

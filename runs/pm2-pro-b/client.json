@@ -1,0 +1,49 @@
+{
+ "model": "mimo",
+ "grounding": {},
+ "collateral": {
+  "text": [
+   "<think>The capital of France is Paris.</think>The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**These are numbers greater than 1 that have no divisors other than 1 and themselves.Note that **2** is the only even prime number.",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and some bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen.<think>Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into glucose (energy) and oxygen.**Photosynthesis** is the process by which plants, algae, and certain bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen.**Photosynthesis** is the process by which plants, algae, and",
+   "<think>A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nEndless blue stretches beyond (7)\nSalt wind fills my lungs (5)\n\nThat works!</think>Waves crash on the shore\nEndless blue stretches beyond\nSalt wind fills my lungs",
+   "<think>17 * 23 = 391</think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**Thinking step by step:\n\n17 \u00d7 23 = 17 \u00d7 20 + 17 \u00d7 3 = 340 + 51 = **391**17 \u00d7 23 = **391**17 \u00d7 23 = **391**17 \u00d7 23 = **391**17 \u00d7 23"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. The shape is a circle (a round, circular shape), and the color is red (a solid red fill, with a thin white outline around it, on a light background). I need to state that clearly.</think>In this image:\n- **Shape**: A circle (a perfect round, circular form, with a thin white border around it)\n- **Color**: Solid red (the main fill of the circle is bright red, set against a light off-white background)<think>In this image:\n- **Shape**: A circle (a perfect round, circular form, with",
+    "ptok": 118
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. It's a square (a square shape, four equal sides, right angles) and it's blue (dark blue, solid blue color). Let me confirm: the shape is a square (or a square/rectangular square, specifically a square, since all sides are equal here), and the color is blue (dark blue, solid fill). Yep, that's it.</think>This image shows a **square (a four-sided, equal-length, right-angled shape)** that is **solid dark blue (blue) in color**.<think>This image contains a **square",
+    "ptok": 118
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 8.357677936553955,
+   "ttft_p50": 0.24051117897033691,
+   "ttft_max": 0.5789916515350342,
+   "e2e_p50": 0.9792853593826294,
+   "tpot_ms": 5.817119530805453,
+   "throughput_tok_s": 122.52206985882212,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.9274051189422607,
+   "ttft_p50": 0.5238863229751587,
+   "ttft_max": 0.6098001003265381,
+   "e2e_p50": 1.4173349142074585,
+   "tpot_ms": 7.035028277419683,
+   "throughput_tok_s": 349.79784430041406,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  }
+ }
+}

@@ -1,0 +1,5 @@
+mm_data video item type: MediaWithBytes | inner: tuple
+frames shape: (32, 240, 320, 3)
+frames_indices len: 32 fps: 25.0 backend: opencv sampled: False
+helper direct: T= 32 -> [0.0, 1.93419349193573, 59.959999084472656]
+labels: ['00:00', '00:03', '00:07', '00:11', '00:15', '00:19'] ... ['00:50', '00:54', '00:58']

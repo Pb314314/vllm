@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 22,
+   "prompt_tokens": 1443,
+   "completion_tail": "e image for 00:28. It's patterned.\n\nWait, let's look at the image for 00:14. It's patterned.\nLet's look at the image for 00:22. It's patterned.\nLet's look at the image for 00:28. It's patterned.\n\nWait, let's look at the image for 00:14. It's patterned.\nLet's look at the image for 00:22. It's pattern"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 16,
+   "prompt_tokens": 1443,
+   "completion_tail": "erpreting the images.\nLet's look at the image for 00:08. It's a pattern.\nLet's look at the image for 00:10. It's a pattern.\nLet's look at the image for 00:12. It's a pattern.\nLet's look at the image for 00:14. It's a pattern.\nLet's look at the image for 00:16. It's a pattern.\nLet's look at the image"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 5,
+   "prompt_tokens": 1443,
+   "completion_tail": "00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n00:05\n"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 18,
+   "prompt_tokens": 1443,
+   "completion_tail": "00:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:1800:18"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 10,
+   "prompt_tokens": 1443,
+   "completion_tail": "ight is black.\n\nWait, they are all the same? No, they are slightly different.\nLet's look at the colors.\n00:00: Green, Green, Blue, Black.\n00:02: Green, Green, Blue, Black.\n00:04: Green, Green, Blue, Black.\n00:06: Green, Green, Blue, Black.\n00:08: Green, Green, Blue, Black.\n00:10: Green, Green, Blue,"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 4,
+   "prompt_tokens": 1443,
+   "completion_tail": "0:14. It's a gradient.\nLet's look at the image for 00:12. It's a gradient.\nLet's look at the image for 00:10. It's a gradient.\nLet's look at the image for 00:08. It's a gradient.\nLet's look at the image for 00:06. It's a gradient.\nLet's look at the image for 00:04. It's a gradient.\nLet's look at the"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 6,
+   "prompt_tokens": 1443,
+   "completion_tail": "f the prompt again.\n\"Each frame of this video is preceded by a timestamp label like 00:09. Exactly one frame is solid red.\"\nIs it possible the red frame is one of these?\nLet me look at the colors again.\n00:00: Blue, Green, Black\n00:02: Blue, Green, Black\n00:04: Blue, Green, Black\n00:06: Blue, Green,"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 28,
+   "prompt_tokens": 1443,
+   "completion_tail": "ed.\n\nWait, let's look at the images again.\n00:00: Patterned.\n00:02: Patterned.\n00:04: Patterned.\n00:06: Patterned.\n00:08: Patterned.\n00:10: Patterned.\n00:12: Patterned.\n00:14: Patterned.\n00:16: Patterned.\n00:18: Patterned.\n00:20: Patterned.\n00:22: Patterned.\n00:24: Patterned.\n00:26: Patterned.\n00:28"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 14,
+   "prompt_tokens": 1443,
+   "completion_tail": "30: Patterned.\n9.  **Is there a solid blue frame?** Let me look at the frames again.\n    *   00:00: Patterned.\n    *   00:02: Patterned.\n    *   00:04: Patterned.\n    *   00:06: Patterned.\n    *   00:08: Patterned.\n    *   00:10: Patterned.\n    *   00:12: Patterned.\n    *   00:14: Patterned.\n    *  "
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 12,
+   "prompt_tokens": 1443,
+   "completion_tail": ":06: Grid.\n00:08: Grid.\n00:10: Grid.\n00:12: Grid.\n00:14: Grid.\n00:16: Grid.\n00:18: Grid.\n00:20: Grid.\n00:22: Grid.\n00:24: Grid.\n00:26: Grid.\n00:28: Grid.\n00:30: Grid.\n\nWait, let's look at the images again.\n00:00: Grid.\n00:02: Grid.\n00:04: Grid.\n00:06: Grid.\n00:08: Grid.\n00:10: Grid.\n00:12: Grid.\n00:"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 24,
+   "prompt_tokens": 1445,
+   "completion_tail": "e, Green, Black\n- 00:06: Blue, Green, Black\n- 00:08: Blue, Green, Black\n- 00:10: Blue, Green, Black\n- 00:12: Blue, Green, Black\n- 00:14: Blue, Green, Black\n- 00:16: Blue, Green, Black\n- 00:18: Blue, Green, Black\n- 00:20: Blue, Green, Black\n- 00:22: Blue, Green, Black\n- 00:24: Blue, Green, Black\n- 00"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 18,
+   "prompt_tokens": 1443,
+   "completion_tail": "dient.\n43. **Let me look at the image at 00:18.** It's a colorful gradient.\n44. **Let me look at the image at 00:24.** It's a colorful gradient.\n45. **Let me look at the image at 00:30.** It's a colorful gradient.\n46. **Let me look at the image at 00:18.** It's a colorful gradient.\n47. **Let me look"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The capital of France is Paris.</think>The capital of France is **Paris**.h1>Paris</h1>h1>Paris</h1>",
+   "<think>The first five prime numbers are: 2, 3, 5, 7, 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**5<think>The user just sent \"5\". This is a bit ambiguous. They might be:\n\n1. Testing me\n2. Continuing a conversation\n3. Just sending a number\n\nI'll respond simply and ask if they need something specific.</think>It looks like you've sent the number **5**. Could you let me know",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into glucose (chemical energy) and oxygen.cosystem<think>The user seems to have sent a partial or garbled message. It looks like they started with \"Explain photosynthesis in one sentence.\" and then there's some text that says \"ecosystem\" which might be a continuation or a new question. Let me just answer the original question about photosynthesis in one sentence.</think>Photosynthesis is the process by which plants,",
+   "<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.</think>Waves crash on the shore,\nSalt air fills the endless blue,\nTides whisper their song.<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.</think>Waves crash on the shore,\nSalt air fills the endless blue,\nTides whisper their song.",
+   "<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>**17 \u00d7 23 = 391** multiplication<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>**17 \u00d7 23 = 391**17 * 23 = 17 * 20 + 17 *"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. First, the shape: it's a circle (a round, curved shape, a perfect circle here). The color is red (a solid, bright red, with a slight darker red outline maybe, but the main color is red, the shape is a circle).</think>The image contains a **red circle** (a solid, bright red circular shape, with a subtle darker red border/edge, set against a white background).A solid, bright red circle (with a faint darker red outline) is present, on a white background.The shape is a circle, and",
+    "ptok": 118
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. First, the shape is a square (a four-sided, equal-sided shape, a square/rectangle but it's a square, a solid square). The color is blue (a dark, royal blue, a solid blue square). Let me confirm: the image shows a solid blue square, so the shape is a square (four-sided, right-angled, equal sides) and the color is blue (dark blue/royal blue).</think>This image contains a **solid blue square**:\n- Shape: A square (a four-sided, right-angled shape with equal side lengths",
+    "ptok": 118
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 6.181235074996948,
+   "ttft_p50": 0.2434830665588379,
+   "ttft_max": 0.6511108875274658,
+   "e2e_p50": 0.6966578960418701,
+   "tpot_ms": 3.5683057439608836,
+   "throughput_tok_s": 165.66268513910313,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.2716422080993652,
+   "ttft_p50": 0.5213372707366943,
+   "ttft_max": 0.5953209400177002,
+   "e2e_p50": 1.111203908920288,
+   "tpot_ms": 4.644619198296014,
+   "throughput_tok_s": 450.77521290501073,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "ame 3: Label is `00:04`.\n*   ...\n*   Last Frame: Label is `00:30`.\n\n3.  **Identify the required labels:**\n*   First three: `00:00`, `00:02`, `00:04`.\n*   Last label: `00:30`.\n\n4.  **Format the output:**\n*   `00:00, 00:02, 00:04, 00:30`\n\n5.  **Final check:**\n*   \"exactly as printed\": Yes, `00:00`, `0",
+  "prompt_tokens": 1436
+ }
+}

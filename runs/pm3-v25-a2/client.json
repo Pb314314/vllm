@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 15,
+   "prompt_tokens": 1460,
+   "completion_tail": "00:15"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 11,
+   "prompt_tokens": 1460,
+   "completion_tail": "t the timestamp label. So, the answer is \"00:11\".\nThe user wants me to identify the timestamp label that immediately precedes a solid blue frame in the provided video frames.\n\n1.  **Analyze the input:** I have a sequence of images representing video frames. Each frame has a timestamp label (e.g., \"0"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 145,
+   "prompt_tokens": 1460,
+   "completion_tail": "02:25"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 87,
+   "prompt_tokens": 1460,
+   "completion_tail": "01:27"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 145,
+   "prompt_tokens": 1460,
+   "completion_tail": "econsider the visual data. Maybe I am blind to a specific frame.\nLet's look at the frames one by one.\nFrame 1: Green/Blue.\nFrame 2: Blue/Green.\nFrame 3: Blue/Green.\nFrame 4: Blue/Green.\nFrame 5: Blue/Green.\nFrame 6: Blue/Green.\nFrame 7: Blue/Green.\nFrame 8: Blue/Green.\nFrame 9: Blue/Green.\nFrame 10:"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 77,
+   "prompt_tokens": 1460,
+   "completion_tail": " yellow though.\n\nLet's look at the 5th frame `00:38`. It has a bit of a yellowish-green hue in the top right.\n\nLet's look at the 11th frame `01:36`. It has a bright cyan/green.\n\nWait, I might be missing a frame in the sequence.\nThe sequence is:\n00:00\n00:09\n00:19\n00:29\n00:38\n00:48\n00:58\n01:07\n01:17\n0"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 581,
+   "prompt_tokens": 1460,
+   "completion_tail": "23 (38s)\n08:23 -> 09:02 (39s)\n09:02 -> 09:41 (39s)\n\nThe intervals are roughly 38-39 seconds.\n\nIs it possible that the \"solid red\" frame is actually one of these, but the color is distorted? No, they are clearly blue/green/black.\n\nLet me re-read the prompt. \"Exactly one frame is solid red.\"\nMaybe the"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 116,
+   "prompt_tokens": 1460,
+   "completion_tail": "\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56\n01:56"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 465,
+   "prompt_tokens": 1460,
+   "completion_tail": "distinct and arguably \"blue-ish\" in a glitchy way (like a blue screen), it is the most likely candidate.\nThe question asks for the timestamp label *preceding* that frame.\nThe label before 07:45 is 07:06.\n\nLet me double check the frame at 07:45. It has vertical lines. It's not a solid color. But it's"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 310,
+   "prompt_tokens": 1460,
+   "completion_tail": "10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:10\n05:"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 581,
+   "prompt_tokens": 1462,
+   "completion_tail": "ossible the magenta frame is the one at `00:00`? No.\n\nLet me check if there is a frame that is just a solid color.\nI am looking at the provided images. They are all complex gradients.\nWait, let me look at the very last image provided in the prompt.\nThe last image is `09:41`.\nIs there an image *after"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 9,
+   "prompt_tokens": 1460,
+   "completion_tail": "stamp, then the timestamp before it would be 09:41.\nHowever, usually, the white frame is one of the frames *with* a timestamp, or the timestamp is the label for the frame itself.\n\"Each frame of this video is preceded by a timestamp label like 00:09.\"\nThis means the label is *before* the frame.\nSo if"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The user is asking a straightforward factual question.</think>The capital of France is **Paris**. EOT",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11** 2 is the only even prime number, and all the others listed are odd.",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and some bacteria convert sunlight, carbon dioxide, and water into glucose (food energy) and oxygen, using chlorophyll in their cells.",
+   "<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nSalt and foam dance in the light (7)\nThe sea never sleeps (5)\n\nThat works well.</think>Waves crash on the shore\nSalt and foam dance in the light\nThe sea never sleeps",
+   "<think>17 * 23 = 391</think>17 \u00d7 23 = **391**"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>The user wants to identify the color and shape in the provided image.\n\n1.  **Analyze the image:**\n*   **Shape:** The object is perfectly round with no corners or edges. It is a circle.\n*   **Color:** The object is filled with a solid, vibrant red color. It looks like a standard red, perhaps slightly dark or crimson, but definitely red.\n*   **Background:** The background is white or very light gray.\n\n2.  **Formulate the answer:**\n*   State the shape clearly: Circle.\n*   State the color clearly: Red.\n*   Combine them into a",
+    "ptok": 135
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>The user wants to identify the color and shape in the provided image.\n\n1.  **Analyze the image:**\n*   The image shows a single geometric object against a white background.\n*   **Shape:** It has four equal sides and four right angles. It looks like a square.\n*   **Color:** The color is a shade of blue. It's a solid, vibrant blue, perhaps royal blue or a standard blue.\n\n2.  **Formulate the answer:**\n*   State the color: Blue.\n*   State the shape: Square.\n\n3.  **Construct the final response:**\n*   \"",
+    "ptok": 135
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 6.561433553695679,
+   "ttft_p50": 0.24064338207244873,
+   "ttft_max": 0.5344629287719727,
+   "e2e_p50": 0.7577850818634033,
+   "tpot_ms": 4.071981888117753,
+   "throughput_tok_s": 156.06345650231262,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.355973243713379,
+   "ttft_p50": 0.4319206476211548,
+   "ttft_max": 0.5215082168579102,
+   "e2e_p50": 1.110061526298523,
+   "tpot_ms": 5.339691958089513,
+   "throughput_tok_s": 434.6399105899935,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "The text is `00:07`. This is the third label.\n*   **Frame 4:** The text is `00:11`.\n*   **Frame 5:** The text is `00:15`.\n*   **Frame 6:** The text is `00:19`.\n*   **Frame 7:** The text is `00:23`.\n*   **Frame 8:** The text is `00:27`.\n*   **Frame 9:** The text is `00:31`.\n*   **Frame 10:** The text",
+  "prompt_tokens": 1453
+ }
+}

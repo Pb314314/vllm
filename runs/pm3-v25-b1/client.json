@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 2,
+   "prompt_tokens": 1460,
+   "completion_tail": "e timestamp label *printed just before* that solid red frame.\nIf the red frame is at 00:01 (between 00:00 and 00:02), the label would be 00:00.\nBut the frames provided are labeled 00:00, 00:02, etc. This suggests the video is sampled every 2 seconds or the labels are just markers.\n\nLet's look at the"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 6,
+   "prompt_tokens": 1460,
+   "completion_tail": "he frame *before* that frame in the sequence is 00:06.\nBut the question says \"timestamp label printed just before that solid blue frame\".\nThis phrasing usually refers to the label associated with the frame itself, or the label of the previous frame.\nLet's re-read carefully: \"Each frame of this video"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 30,
+   "prompt_tokens": 1460,
+   "completion_tail": "similar (blue/green gradients).\nThere is no red frame here.\n\nIs it possible the question is a trick and the answer is \"None\"? No, the prompt asks for a specific timestamp label.\n\nLet me search for any subtle red.\nMaybe in the dark areas? No.\n\nOkay, let's think about the metadata or the nature of the"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 8,
+   "prompt_tokens": 1460,
+   "completion_tail": "e and green. Not solid green.\n*   **00:02:** Shows a gradient of blue and green. Not solid green.\n*   **00:04:** Shows a gradient of blue and green. Not solid green.\n*   **00:06:** Shows a gradient of blue and green. Not solid green.\n*   **00:08:** Shows a gradient of blue and green. Not solid green"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 20,
+   "prompt_tokens": 1460,
+   "completion_tail": "ame where the green is missing?\n- 00:00: Green present.\n- 00:02: Green present.\n- 00:04: Green present.\n- 00:06: Green present.\n- 00:08: Green present.\n- 00:10: Green present.\n- 00:12: Green present.\n- 00:14: Green present.\n- 00:16: Green present.\n- 00:18: Green present.\n- 00:20: Green present.\n- 00"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 30,
+   "prompt_tokens": 1460,
+   "completion_tail": " provided as `image` objects.\nLet me check the color histograms in my mind (simulated).\nAll images are dominated by Blue (0,0,255) and Green (0,255,0) and Cyan (0,255,255).\nYellow is (255,255,0). None of these are yellow.\n\nCould the \"solid yellow\" frame be a mistake in the prompt description, and it"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 24,
+   "prompt_tokens": 1460,
+   "completion_tail": "ed but the thumbnail is misleading? No, I see the colors.\nIs it possible that the image for 00:24 is red? It has a pinkish line.\n\nLet's reconsider the prompt. \"Exactly one frame is solid red.\"\nMaybe the frame *is* the timestamp label itself? No, \"Each frame... is preceded by a timestamp label\".\n\nLet"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 10,
+   "prompt_tokens": 1460,
+   "completion_tail": "nk about the nature of these \"video\" inputs. Sometimes they are generated or synthetic.\nIs it possible that the frame at 00:08 is considered \"solid green\" in some context? It has a large green area.\nOr maybe 00:10?\nOr maybe the frame *after* a timestamp is the one to look at?\nThe prompt says: \"Reply"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 18,
+   "prompt_tokens": 1460,
+   "completion_tail": "of blue (cyan, dark blue).\nBut they also have green and black.\n\nLet's look for a frame that is *different* from the others.\n00:04 is different (red/orange).\nIs there another one?\nLet's check 00:00 vs 00:02 vs 00:06... they look very similar.\nLet's check 00:10, 00:12, 00:14... similar.\n00:16, 00:18, "
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 8,
+   "prompt_tokens": 1460,
+   "completion_tail": "04` again. It has a reddish/orange vertical stripe on the left side. Is that yellow? It's more orange/red.\nLet me look at `00:24`. It has a purple vertical stripe.\nLet me look at `00:08`. It has a bright cyan vertical stripe.\n\nIs it possible the question is a trick? Or maybe the \"solid yellow\" frame"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 30,
+   "prompt_tokens": 1462,
+   "completion_tail": "Similar.\nImage 11 (00:20): Similar.\nImage 12 (00:22): Similar.\nImage 13 (00:24): Similar.\nImage 14 (00:26): Similar.\nImage 15 (00:28): Similar.\nImage 16 (00:30): Similar.\n\nOkay, I am stuck. None of the frames are solid magenta.\nIs it possible the prompt is a trick? Or maybe the \"solid magenta\" frame"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 10,
+   "prompt_tokens": 1460,
+   "completion_tail": "p? No.\n\nIs it possible that the \"solid white\" frame is actually the *background* of the text? No, the text is overlaid on the image or before it. The prompt says \"preceded by a timestamp label\".\n\nLet's look at the images again. Is there one that is significantly lighter?\n00:02, 00:06, 00:08, 00:10, "
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The user is asking a straightforward factual question.</think>The capital of France is **Paris**. EOT",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11** 2 is the only even prime number, and all the others listed are odd.",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and some bacteria convert sunlight, carbon dioxide, and water into glucose (food energy) and oxygen, using chlorophyll in their cells.",
+   "<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nSalt and foam dance in the light (7)\nThe sea never sleeps (5)\n\nThat works well.</think>Waves crash on the shore\nSalt and foam dance in the light\nThe sea never sleeps",
+   "<think>17 * 23 = 391</think>17 \u00d7 23 = **391**"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>The user wants to identify the color and shape in the provided image.\n\n1.  **Analyze the image:**\n*   **Shape:** The object is perfectly round with no corners or edges. It is a circle.\n*   **Color:** The object is filled with a solid, vibrant red color. It looks like a standard red, perhaps slightly dark or crimson, but definitely red.\n*   **Background:** The background is white or very light gray.\n\n2.  **Formulate the answer:**\n*   State the shape clearly: Circle.\n*   State the color clearly: Red.\n*   Combine them into a",
+    "ptok": 135
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>The user wants to identify the color and shape in the provided image.\n\n1.  **Analyze the image:**\n*   The image shows a single geometric object against a white background.\n*   **Shape:** It has four equal sides and four right angles. It looks like a square.\n*   **Color:** The color is a shade of blue. It's a solid, vibrant blue, perhaps royal blue or a standard blue.\n\n2.  **Formulate the answer:**\n*   State the color: Blue.\n*   State the shape: Square.\n\n3.  **Construct the final response:**\n*   \"",
+    "ptok": 135
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 6.7891457080841064,
+   "ttft_p50": 0.2634711265563965,
+   "ttft_max": 0.5810959339141846,
+   "e2e_p50": 0.7843430042266846,
+   "tpot_ms": 4.1013533674825835,
+   "throughput_tok_s": 150.8289914562715,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.4366559982299805,
+   "ttft_p50": 0.5498371124267578,
+   "ttft_max": 0.6198558807373047,
+   "e2e_p50": 1.1720703840255737,
+   "tpot_ms": 4.899474579518236,
+   "throughput_tok_s": 420.2480779986372,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "0:04`.\n*   **Frame 4:** The text is `00:06`.\n*   **Frame 5:** The text is `00:08`.\n*   **Frame 6:** The text is `00:10`.\n*   **Frame 7:** The text is `00:12`.\n*   **Frame 8:** The text is `00:14`.\n*   **Frame 9:** The text is `00:16`.\n*   **Frame 10:** The text is `00:18`.\n*   **Frame 11:** The text",
+  "prompt_tokens": 1453
+ }
+}

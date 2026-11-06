@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 9,
+   "prompt_tokens": 1443,
+   "completion_tail": "8 to 00:10. 00:09 is in between.\n    The prompt says \"Each frame of this video is preceded by a timestamp label like 00:09.\"\n    This implies the labels are 00:00, 00:01, 00:02... or similar.\n    But the provided images are spaced by 2 seconds.\n    Maybe the \"solid red\" frame is at 00:09?\n    If the"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "n the answer is 00:30.\n\nLet's check if any frame is *mostly* blue.\n00:00: 50% green, 50% blue.\n00:02: 50% green, 50% blue.\n...\n00:30: 50% green, 50% blue.\n\nIs it possible the prompt implies the frame *labeled* 00:30 is the one before the solid blue frame?\nOr is there a frame *between* the timestamps"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 32,
+   "prompt_tokens": 1443,
+   "completion_tail": "s `00:32`.\nWait, \"Reply with only the timestamp label printed just before that solid red frame.\"\nIf the red frame is preceded by a label, say `00:32`, then the answer is `00:32`.\nBut if the red frame is the *content* of the frame at 00:32, the label preceding it is `00:32`.\nHowever, if the red frame"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "00:30<think>00:30"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "missing something obvious. Let me look at the *last* image again. The one after 00:30.\n    *   Wait, is it possible the *last* image is actually solid blue and the previous ones are gradients? No, they all look the same.\n    *   Is it possible the *first* image is solid blue? No.\n    *   Let me look"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "d by a timestamp label like 00:09.\"\n    The images provided are:\n    00:00\n    00:02\n    00:04\n    00:06\n    00:08\n    00:10\n    00:12\n    00:14\n    00:16\n    00:18\n    00:20\n    00:22\n    00:24\n    00:26\n    00:28\n    00:30\n\n    Let me look at the image content again. Is there a frame that is solid"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "00:30"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "00:1400:0000:02## 00:04## 00:06## 00:08## 00:10## 00:12## 00:14## 00:16## 00:18## 00:20## 00:22## 00:24## 00:26## 00:28## 00:30"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "imilar but stylized? No, it's the same glitch art style.\n\nLet's look at the image at `00:30` again. Wait, I might be misinterpreting the image content.\nLet's look at the image at `00:30` in the prompt.\nThe image at `00:30` is the last one.\nIs it possible the image at `00:30` is actually a solid blue"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 12,
+   "prompt_tokens": 1443,
+   "completion_tail": "t `00:18` again. It is a blue/green abstract pattern.\n    *   Let me look at the image at `00:16`. It is a blue/green abstract pattern.\n    *   Let me look at the image at `00:14`. It is a blue/green abstract pattern.\n    *   Let me look at the image at `00:12`. It is a blue/green abstract pattern.\n"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 18,
+   "prompt_tokens": 1445,
+   "completion_tail": " at the image at `00:08`.\nLet me look at the image at `00:28`.\n\nLet's look at the image at `00:18`.\nWait, I see the image at `00:18` is `https://i.imgur.com/8Qj8j8j.jpg` (placeholder).\nLet me look at the image at `00:08`.\nLet me look at the image at `00:28`.\n\nLet's look at the image at `00:18`.\nWait"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 30,
+   "prompt_tokens": 1443,
+   "completion_tail": "ge at **00:30**. It is the last one.\n    *   Let me look at the image at **00:00**.\n\n    *   Let's look at the image at **00:30**. It is the last one.\n    *   Let me look at the image at **00:00**.\n\n    *   Let's look at the image at **00:30**. It is the last one.\n    *   Let me look at the image at"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The capital of France is Paris.</think>The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**These are numbers greater than 1 that have no divisors other than 1 and themselves.Note that **2** is the only even prime number.",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and some bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen.<think>Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into glucose (energy) and oxygen.**Photosynthesis** is the process by which plants, algae, and certain bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen.**Photosynthesis** is the process by which plants, algae, and",
+   "<think>A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nEndless blue stretches beyond (7)\nSalt wind fills my lungs (5)\n\nThat works!</think>Waves crash on the shore\nEndless blue stretches beyond\nSalt wind fills my lungs",
+   "<think>17 * 23 = 391</think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**Thinking step by step:\n\n17 \u00d7 23 = 17 \u00d7 20 + 17 \u00d7 3 = 340 + 51 = **391**17 \u00d7 23 = **391**17 \u00d7 23 = **391**17 \u00d7 23 = **391**17 \u00d7 23"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. The shape is a circle (a round, circular shape), and the color is red (a solid red fill, with a thin white outline around it, on a light background). I need to state that clearly.</think>In this image:\n- **Shape**: A circle (a perfect round, circular form, with a thin white border around it)\n- **Color**: Solid red (the main fill of the circle is bright red, set against a light off-white background)<think>In this image:\n- **Shape**: A circle (a perfect round, circular form, with",
+    "ptok": 118
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. It's a square (a square shape, four equal sides, right angles) and it's blue (dark blue, solid blue color). Let me confirm: the shape is a square (or a square/rectangular square, specifically a square, since all sides are equal here), and the color is blue (dark blue, solid fill). Yep, that's it.</think>This image shows a **square (a four-sided, equal-length, right-angled shape)** that is **solid dark blue (blue) in color**.<think>This image contains a **square",
+    "ptok": 118
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 8.709485292434692,
+   "ttft_p50": 0.24560821056365967,
+   "ttft_max": 0.5734562873840332,
+   "e2e_p50": 1.0244863033294678,
+   "tpot_ms": 6.132898368234709,
+   "throughput_tok_s": 117.57296391435159,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.680143117904663,
+   "ttft_p50": 0.4324420690536499,
+   "ttft_max": 0.5023314952850342,
+   "e2e_p50": 1.2815816402435303,
+   "tpot_ms": 6.68613835582583,
+   "throughput_tok_s": 382.0691489044673,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": " Looking at the first image: The timestamp is `00:00`.\n    *   Looking at the second image: The timestamp is `00:02`.\n    *   Looking at the third image: The timestamp is `00:04`.\n    *   Looking at the fourth image: The timestamp is `00:06`.\n    *   Looking at the fifth image: The timestamp is `00:",
+  "prompt_tokens": 1436
+ }
+}

@@ -1,0 +1,236 @@
+d60c4404e2b5c4ffb54873fb18e06a335e1f2a94
+AFTER=1 MODEL=XiaomiMiMo/MiMo-V2.6-Flash-RL EXTRA=
+GPU 0: NVIDIA GB200 (UUID: GPU-3a761940-9fbd-39c7-4147-1e7766414aea)
+GPU 1: NVIDIA GB200 (UUID: GPU-89d38ac8-a01c-c0d0-6cfc-d876f56bc8e3)
+GPU 2: NVIDIA GB200 (UUID: GPU-86ba0590-9564-2498-e289-e73f246c32ae)
+GPU 3: NVIDIA GB200 (UUID: GPU-84e96afc-119f-12c0-ed33-aa6c9718363a)
+=== overlay diff vs worktree base (empty on Baseline)
+ vllm/model_executor/models/mimo_v2_omni.py | 121 +++++++++++++++++++++++++----
+ 1 file changed, 108 insertions(+), 13 deletions(-)
+diff --git a/vllm/model_executor/models/mimo_v2_omni.py b/vllm/model_executor/models/mimo_v2_omni.py
+index 01bb17818..94ad31464 100644
+--- a/vllm/model_executor/models/mimo_v2_omni.py
++++ b/vllm/model_executor/models/mimo_v2_omni.py
+@@ -32,8 +32,14 @@ from vllm.model_executor.layers.rotary_embedding import get_rope
+ from vllm.model_executor.layers.rotary_embedding.common import ApplyRotaryEmb
+ from vllm.model_executor.models.vision import is_vit_use_data_parallel
+ from vllm.multimodal import MULTIMODAL_REGISTRY
+-from vllm.multimodal.inputs import MultiModalFieldConfig, MultiModalKwargsItems
++from vllm.multimodal.inputs import (
++    MediaWithBytes,
++    MultiModalFieldConfig,
++    MultiModalKwargsItems,
++    VideoItem,
++)
+ from vllm.multimodal.parse import ImageSize, MultiModalDataItems
++from vllm.multimodal.video import DecodedFrames
+ from vllm.multimodal.processing import (
+     BaseDummyInputsBuilder,
+     BaseMultiModalProcessor,
+@@ -678,6 +684,48 @@ class MiMoVisionTransformer(nn.Module):
+         return loader.load_weights(weights, mapper=self.hf_to_vllm_mapper)
+ 
+ 
++def _video_timestamps_from_metadata(
++    num_frames: int,
++    metadata: object,
++) -> torch.Tensor | None:
++    """Media time (s) of each sampled frame, from the video loader's metadata.
++
++    The loader samples frames (near-)uniformly, so return evenly spaced times
++    from the first to the last sampled frame. With dropped frames or
++    frame_recovery, ``frames_indices`` can be non-uniform; the even spacing is
++    then an approximation, which is required because ``get_video_replacement``
++    rebuilds the timestamp labels as arithmetic steps (``start`` plus
++    ``j * second_per_grid_ts``) and the two must agree.
++
++    Returns None if the metadata cannot provide the frame times.
++    """
++    if not isinstance(metadata, dict):
++        return None
++    frames_indices = metadata.get("frames_indices")
++    fps = metadata.get("fps")
++    if frames_indices is None or fps is None:
++        return None
++    try:
++        fps = float(fps)
++    except (TypeError, ValueError):
++        return None
++    # User-supplied metadata may carry frames_indices as a numpy array or
++    # tensor, not just list[int]; use len()/indexing, never truthiness.
++    if len(frames_indices) != num_frames or num_frames == 0:
++        return None
++    if fps <= 0:
++        return None
++
++    start = float(frames_indices[0]) / fps
++    if num_frames == 1:
++        return torch.tensor([start], dtype=torch.float32)
++    step = (float(frames_indices[-1]) - float(frames_indices[0])) / fps
++    step /= num_frames - 1
++    if step <= 0:
++        return None
++    return start + step * torch.arange(num_frames, dtype=torch.float32)
++
++
+ class MiMoV2OmniMultiModalDataParser(Qwen2VLMultiModalDataParser):
+     # Video stays raw: get_video_replacement also reads second_per_grid_ts and
+     # video_start_times, which a metadata-only rewrite would not carry.
+@@ -685,6 +733,14 @@ class MiMoV2OmniMultiModalDataParser(Qwen2VLMultiModalDataParser):
+         "image": Qwen2VLMultiModalDataParser.embedding_fields["image"],
+     }
+ 
++    def _get_video_with_metadata(
++        self, video: VideoItem
++    ) -> tuple[DecodedFrames | MediaWithBytes[DecodedFrames], dict[str, Any]]:
++        video, metadata = super()._get_video_with_metadata(video)
++        # Raw frames (ndarray, list of PIL images) carry no timing info:
++        # keep them on the 1 fps fallback instead of rejecting them.
++        return video, {} if metadata is None else metadata
++
+ 
+ class MiMoV2OmniProcessingInfo(BaseProcessingInfo):
+     def get_supported_mm_limits(self) -> Mapping[str, int | None]:
+@@ -710,6 +766,7 @@ class MiMoV2OmniProcessingInfo(BaseProcessingInfo):
+         return MiMoV2OmniMultiModalDataParser(
+             self.get_hf_config().vision_config.spatial_merge_size,
+             target_sr=24000.0,
++            video_needs_metadata=True,
+             expected_hidden_size=self._get_expected_hidden_size(),
+             allow_missing_mm_embeddings=self.allow_missing_mm_embeddings,
+         )
+@@ -917,9 +974,8 @@ class MiMoV2OmniMultiModalProcessor(BaseMultiModalProcessor[MiMoV2OmniProcessing
+       regenerate the exact same timestamp token IDs.
+     """
+ 
+-    # fps assumed for vllm-decoded video (numpy T,H,W,C arrays).
+-    # The video loader samples ~32 frames; treat each frame as 1 s apart so
+-    # MiMoVLProcessor sees 1 fps input and resamples internally.
++    # Fallback fps when the video metadata has no usable frames_indices/fps.
++    # With metadata, timestamps come from the sampled frames' media time.
+     _INPUT_FPS: float = 1.0
+ 
+     def _get_mm_fields_config(
+@@ -971,6 +1027,14 @@ class MiMoV2OmniMultiModalProcessor(BaseMultiModalProcessor[MiMoV2OmniProcessing
+                     assert isinstance(va_item, (list, tuple)) and len(va_item) == 2
+                     vid, audio_src = va_item
+                     va_item = VideoAudioInput(video=vid, audio=audio_src)
++                # A (video, metadata) tuple carries the loader's metadata
++                metadata = None
++                if (
++                    isinstance(vid, tuple)
++                    and len(vid) == 2
++                    and isinstance(vid[1], dict)
++                ):
++                    vid, metadata = vid
+                 # Convert video frames to (TCHW, timestamps) if needed
+                 if (
+                     isinstance(vid, tuple)
+@@ -991,7 +1055,11 @@ class MiMoV2OmniMultiModalProcessor(BaseMultiModalProcessor[MiMoV2OmniProcessing
+                     else:
+                         frames = frames.float()
+                     T = frames.shape[0]
+-                    timestamps = torch.arange(T, dtype=torch.float32) / self._INPUT_FPS
++                    timestamps = _video_timestamps_from_metadata(T, metadata)
++                    if timestamps is None:
++                        timestamps = (
++                            torch.arange(T, dtype=torch.float32) / self._INPUT_FPS
++                        )
+                     va_converted.append(
+                         VideoAudioInput(
+                             video=(frames, timestamps),
+@@ -1005,6 +1073,15 @@ class MiMoV2OmniMultiModalProcessor(BaseMultiModalProcessor[MiMoV2OmniProcessing
+             videos = mm_data["videos"]
+             assert isinstance(videos, Sequence)
+             for video in videos:
++                # With video_needs_metadata=True the parser passes
++                # (video, metadata) tuples through.
++                metadata = None
++                if (
++                    isinstance(video, tuple)
++                    and len(video) == 2
++                    and isinstance(video[1], dict)
++                ):
++                    video, metadata = video
+                 if (
+                     isinstance(video, tuple)
+                     and len(video) == 2
+@@ -1029,7 +1106,11 @@ class MiMoV2OmniMultiModalProcessor(BaseMultiModalProcessor[MiMoV2OmniProcessing
+                         frames = frames.float()
+ 
+                     T = frames.shape[0]
+-                    timestamps = torch.arange(T, dtype=torch.float32) / self._INPUT_FPS
++                    timestamps = _video_timestamps_from_metadata(T, metadata)
++                    if timestamps is None:
++                        timestamps = (
++                            torch.arange(T, dtype=torch.float32) / self._INPUT_FPS
++                        )
+                     converted.append((frames, timestamps))
+ 
+             mm_data["videos"] = converted
+@@ -1216,13 +1297,27 @@ class MiMoV2OmniDummyInputsBuilder(BaseDummyInputsBuilder[MiMoV2OmniProcessingIn
+                 num_images=mm_counts.get("image", 0),
+                 overrides=mm_options.get("image"),
+             ),
+-            "video": self._get_dummy_videos(
+-                width=target_width,
+-                height=target_height,
+-                num_frames=target_num_frames,
+-                num_videos=mm_counts.get("video", 0),
+-                overrides=mm_options.get("video"),
+-            ),
++            "video": [
++                # Keep dummy videos at 1 fps so memory profiling is unchanged.
++                (
++                    video,
++                    {
++                        "fps": 1.0,
++                        "frames_indices": list(range(len(video))),
++                        "total_num_frames": len(video),
++                        "duration": float(len(video)),
++                        "video_backend": "opencv",
++                        "do_sample_frames": False,
++                    },
++                )
++                for video in self._get_dummy_videos(
++                    width=target_width,
++                    height=target_height,
++                    num_frames=target_num_frames,
++                    num_videos=mm_counts.get("video", 0),
++                    overrides=mm_options.get("video"),
++                )
++            ],
+         }
+ 
+ 
+=== encoder-DP markers in the effective model file
+1
+1
+  Created wheel for vllm: filename=vllm-0.33.0rc1.dev872+gd60c4404e.precompiled-0.editable-cp312-cp312-linux_aarch64.whl size=14186 sha256=c45ec74691a8dc6383c75112da9e81cf55f8c22dfd15d69c4b7e9bea7ec3e705
+  Stored in directory: $WORKDIR/pip-ephem-wheel-cache-kwtxpno6/wheels/d6/0f/c7/65350900a751b9353c33982ff25b98d70491d8a0831eedce3a
+Successfully installed vllm-0.33.0rc1.dev872+gd60c4404e.precompiled
+vllm.__file__: $WORKDIR/wt/vllm/__init__.py
+W1106 17:32:54.899000 2773289 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 17:32:54.901000 2773289 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 17:32:54.902000 2773289 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+module: $WORKDIR/wt/vllm/model_executor/models/mimo_v2_omni.py
+marker=True
+python 3.12.3
+torch 2.16.0.dev20261009+cu134
+transformers 5.22.1
+=== compiled extensions in worktree:
+-rwxr-xr-x 1 user user 85757488 Nov  6 17:32 $WORKDIR/wt/vllm/_C_stable_libtorch.abi3.so
+-rwxr-xr-x 1 user user  4346976 Nov  6 17:32 $WORKDIR/wt/vllm/_deepselect_C.abi3.so
+-rwxr-xr-x 1 user user  5961184 Nov  6 17:32 $WORKDIR/wt/vllm/_flashkda_C.abi3.so
+-rwxr-xr-x 1 user user  3799576 Nov  6 17:32 $WORKDIR/wt/vllm/_flashmla_C.abi3.so
+-rwxr-xr-x 1 user user   300336 Nov  6 17:32 $WORKDIR/wt/vllm/_flashmla_extension_C.abi3.so
+-rwxr-xr-x 1 user user 28950480 Nov  6 17:32 $WORKDIR/wt/vllm/_moe_C_stable_libtorch.abi3.so
+-rwxr-xr-x 1 user user   204792 Nov  6 17:32 $WORKDIR/wt/vllm/cumem_allocator.abi3.so
+-rwxr-xr-x 1 user user   205040 Nov  6 17:32 $WORKDIR/wt/vllm/fs_io_C.abi3.so
+-rwxr-xr-x 1 user user   202544 Nov  6 17:32 $WORKDIR/wt/vllm/spinloop.abi3.so
+Traceback (most recent call last):
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'vllm._C'
+C digest unavailable
+Fetching 1 files:   0%|          | 0/1 [00:00<?, ?it/s]Fetching 1 files: 100%|██████████| 1/1 [00:00<00:00, 1376.99it/s]
+checkpoint revision: f657ba2f7d24c9adc5730675baaa2d34de878a49

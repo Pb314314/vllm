@@ -1,0 +1,3 @@
+Filesystem     1G-blocks  Used Available Use% Mounted on
+/dev/root          1983G  903G     1081G  46% /
+/dev/md0          11998G 1832G    10166G  16% /mnt/data

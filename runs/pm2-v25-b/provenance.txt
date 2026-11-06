@@ -1,0 +1,15 @@
+d60c4404e2b5c4ffb54873fb18e06a335e1f2a94
+AFTER=0 MODEL=XiaomiMiMo/MiMo-V2.5 EXTRA=
+GPU 0: NVIDIA GB200 (UUID: GPU-84099ce1-c625-6df2-f6b8-571547b75243)
+GPU 1: NVIDIA GB200 (UUID: GPU-d9014acc-365b-2593-1d7f-09e15596ef41)
+GPU 2: NVIDIA GB200 (UUID: GPU-8996bef8-98a9-5e33-a593-fdd9a7c6e0b2)
+GPU 3: NVIDIA GB200 (UUID: GPU-cbc6c668-949e-5c8e-48f1-5f4fff7b5aba)
+  Created wheel for vllm: filename=vllm-0.33.0rc1.dev872+gd60c4404e.precompiled-0.editable-cp312-cp312-linux_aarch64.whl size=14186 sha256=dc1770e94b89f9cc24d6062ddef822bda1206ddd3af98b3eba0ea6954d2c9b81
+  Stored in directory: $WORKDIR/pip-ephem-wheel-cache-9ckx0736/wheels/54/e7/53/52eb034e8866624f1240b9913b5fad76f2972f764a4c49f156
+Successfully installed vllm-0.33.0rc1.dev872+gd60c4404e.precompiled
+vllm.__file__: $WORKDIR/wt/vllm/__init__.py
+W1106 05:52:25.067000 3143128 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 05:52:25.068000 3143128 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 05:52:25.069000 3143128 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+module: $WORKDIR/wt/vllm/model_executor/models/mimo_v2_omni.py
+marker=False

@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 58,
+   "prompt_tokens": 1460,
+   "completion_tail": ".\nFrame 16: Label 00:58, Image Green/Blue.\nIs there a Frame 17?\nIf the video cuts to red right after the 00:58 frame, then the label preceding it is 00:58.\n\nLet's look at the visual evidence again.\nThe last image in the sequence is 00:58.\nThe prompt asks for the timestamp label printed *just before*"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 7,
+   "prompt_tokens": 1460,
+   "completion_tail": " timestamps again.\n00:00\n00:03\n00:07\n00:11\n00:15\n00:19\n00:23\n00:27\n00:31\n00:34\n00:38\n00:42\n00:46\n00:50\n00:54\n00:58\n\nLet's look at the frame at 00:00. It's a gradient.\nLet's look at the frame at 00:03. It's a gradient.\nLet's look at the frame at 00:07. It's a gradient.\nLet's look at the frame at 00:1"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 1373,
+   "prompt_tokens": 1460,
+   "completion_tail": "ient.\n*   21:35: Blue/Green gradient.\n*   21:45: Blue/Green gradient.\n*   21:55: Blue/Green gradient.\n*   22:05: Blue/Green gradient.\n*   22:14: Blue/Green gradient.\n*   22:24: Blue/Green gradient.\n*   22:34: Blue/Green gradient.\n*   22:44: Blue/Green gradient.\n*   22:53: Blue/Green gradient.\n*   23"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 0,
+   "prompt_tokens": 1460,
+   "completion_tail": "e solid color often comes at the end.\nThe last timestamp shown is 02:25.\nIf the video continues after 02:25 and turns solid green, the label \"just before\" it would be 02:25.\n\nLet's look for any other clues.\nIs there a frame that is *different*?\nLet's look at the crop images.\nCrop 1: 00:00\nCrop 2: 00"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 145,
+   "prompt_tokens": 1460,
+   "completion_tail": " blue/green.\n    *   02:25: Gradient blue/green.\n    *   02:35: **Solid Blue**.\n\n3.  **Identify the preceding label:** The solid blue frame appears at the end. The label immediately before it is 02:25.\n\n4.  **Formulate the answer:** The requested output is just the timestamp label. So, \"02:25\".02:25"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 1373,
+   "prompt_tokens": 1460,
+   "completion_tail": "dient.\n*   21:35: Blue/Green gradient.\n*   21:45: Blue/Green gradient.\n*   21:55: Blue/Green gradient.\n*   22:05: Blue/Green gradient.\n*   22:14: Blue/Green gradient.\n*   22:24: Blue/Green gradient.\n*   22:34: Blue/Green gradient.\n*   22:44: Blue/Green gradient.\n*   22:53: Blue/Green gradient.\n*   2"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 3336,
+   "prompt_tokens": 1460,
+   "completion_tail": ":43 - 52:22: Still the blue/green pattern.\n*   52:22 - 53:01: Still the blue/green pattern.\n*   53:01 - 53:39: Still the blue/green pattern.\n*   53:39 - 54:18: Still the blue/green pattern.\n*   54:18 - 54:57: Still the blue/green pattern.\n*   54:57 - 55:36: Still the blue/green pattern.\n*   55:36 - "
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 870,
+   "prompt_tokens": 1460,
+   "completion_tail": "30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:30:00\n2024-05-20 14:"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 155,
+   "prompt_tokens": 1460,
+   "completion_tail": "eo format is [Frame with Label], then the label \"07:45\" is *on* the blue frame.\n*   If the question asks for the label \"printed just before\", and the label is on the frame, maybe it means the label of the *previous* frame?\n*   Let's look at the timestamps again. 00:00, 00:38, 01:17, 01:56, 02:35, 03"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 4012,
+   "prompt_tokens": 1460,
+   "completion_tail": "- 62:19: Patterns continue.\n*   62:19 - 62:58: Patterns continue.\n*   62:58 - 63:37: Patterns continue.\n*   63:37 - 64:16: Patterns continue.\n*   64:16 - 64:55: Patterns continue.\n*   64:55 - 65:34: Patterns continue.\n*   65:34 - 66:13: Patterns continue.\n*   66:13 - 66:52: Patterns continue.\n*   66"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 426,
+   "prompt_tokens": 1462,
+   "completion_tail": "t would be 07:06.\n*   \"Just before\" could mean \"physically located before\". If the label is an overlay, it's on top.\n*   Let's look at the phrasing again. \"Each frame of this video is preceded by a timestamp label\". This is a statement of fact about the video structure. It implies: [Label] -> [Frame"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 620,
+   "prompt_tokens": 1460,
+   "completion_tail": "his confirms the structure: Label -> Frame.\n*   We have a sequence: ... -> Label(09:41) -> Frame(Colorful) -> Label(10:20) -> Frame(White).\n*   The question asks for the label printed *just before* the solid white frame.\n*   The label immediately preceding the white frame is Label(10:20).\n*   So the"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The user is asking a straightforward geography question.</think>The capital of France is **Paris**. population of Paris?<think>The user is asking about the population of Paris.</think>The population of Paris depends on how you measure it:\n\n- **City of Paris (commune):** Approximately **2.1 million** people (as of recent estimates).\n- **Paris metropolitan area (\u00cele-de-France region):** Approximately **12.2 million** people, making it one of the most populous metro areas in Europe. user user: What is the population of Paris?\n\nThe user is asking about the population of",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**\n<think>The user is asking for the first five prime numbers.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**\nThe first five prime numbers are:\n\n1",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and certain bacteria convert sunlight, water, and carbon dioxide into glucose (chemical energy) and oxygen, using chlorophyll as a catalyst.\n<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and certain bacteria convert sunlight, water, and carbon dioxide into glucose (chemical energy) and oxygen, using chlorophyll as a catalyst.",
+   "<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nSalt and mist fill the cool air (7)\nThe sea never sleeps (5)\n\nThat works well.</think>Waves crash on the shore\nSalt and mist fill the cool air\nThe sea never sleeps\n5-7-5\nThe sea never sleeps\n5\nThe sea never sleeps\n5\nThe sea never sleeps\n5\nThe sea never sleeps\n5\nThe sea",
+   "<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>**17 \u00d7 23 = 391**"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. The shape is a circle (a solid, filled circle, a round shape), and the color is bright red (a deep, vivid red, like a crimson or bright red circle on a white background). I need to state that clearly.</think>The image contains a **solid bright red circle**, a perfectly round, filled circular shape, set against a plain white background.\n- Color: Bright, deep red, a vivid crimson-like red\n- Shape: A filled, perfect circle, a round, closed curved shape with no edges or corners\n```\n```",
+    "ptok": 135
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. There's a **blue (dark blue/royal blue) square (square shape, a four-sided, equal-length, right-angle shape)** in the upper right area of the white background.</think>In this image, there is a **dark blue (royal blue) square** (a four-sided, right-angled, equal-length shape) positioned on a plain white background. square\nGot it, let's look at the image. The shape is a square, and its color is a deep blue (like royal blue or dark blue). I need to state that",
+    "ptok": 135
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 6.652652740478516,
+   "ttft_p50": 0.2486635446548462,
+   "ttft_max": 0.5518124103546143,
+   "e2e_p50": 0.76911461353302,
+   "tpot_ms": 4.098039912426565,
+   "throughput_tok_s": 153.92356101339888,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.5726819038391113,
+   "ttft_p50": 0.5193227529525757,
+   "ttft_max": 0.6333112716674805,
+   "e2e_p50": 1.2362271547317505,
+   "tpot_ms": 5.644916549442321,
+   "throughput_tok_s": 398.0282204620499,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "  Frame 1: `00:00`\n*   Frame 2: `00:03`\n*   Frame 3: `00:07`\n*   Frame 4: `00:11`\n*   Frame 5: `00:15`\n*   Frame 6: `00:19`\n*   Frame 7: `00:23`\n*   Frame 8: `00:27`\n*   Frame 9: `00:31`\n*   Frame 10: `00:34`\n*   Frame 11: `00:38`\n*   Frame 12: `00:42`\n*   Frame 13: `00:46`\n*   Frame 14: `00:50`\n*  ",
+  "prompt_tokens": 1453
+ }
+}

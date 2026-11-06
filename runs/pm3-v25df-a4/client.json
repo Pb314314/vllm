@@ -1,0 +1,186 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": null,
+   "prompt_tokens": 1460,
+   "finish_reason": "length",
+   "unfinished": true,
+   "completion_tail": "e/Green\n*   38:58: Blue/Green\n*   39:02: Blue/Green\n*   39:06: Blue/Green\n*   39:10: Blue/Green\n*   39:14: Blue/Green\n*   39:18: Blue/Green\n*   39:22: Blue/Green\n*   39:26: Blue/Green\n*   39:30: Blue/Green\n*   39:34: Blue/Green\n*   39:38: Blue/Green\n*   39:42: Blue/Green\n*   39:46: Blue/Green\n*   39",
+   "full_text_file": "full_responses/g60.mp4_red.txt"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": null,
+   "prompt_tokens": 1460,
+   "finish_reason": "length",
+   "unfinished": true,
+   "completion_tail": "What if the \"green\" part is actually blue in one of them?\nNo, it's green.\n\nWhat if the \"blue\" part is actually green in one of them?\nNo, it's blue.\n\nWhat if the frame is *solid* blue, meaning the whole frame is blue?\nNone of the frames are solid blue.\n\nIs it possible that the frame labeled **00:58**",
+   "full_text_file": "full_responses/g60.mp4_blue.txt"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 155,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "02:35",
+   "full_text_file": "full_responses/g150.mp4_red.txt"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 145,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "02:25",
+   "full_text_file": "full_responses/g150.mp4_green.txt"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 145,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "02:25",
+   "full_text_file": "full_responses/g150.mp4_blue.txt"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": null,
+   "prompt_tokens": 1460,
+   "finish_reason": "length",
+   "unfinished": true,
+   "completion_tail": "9:27, 59:37, 59:46, 59:56.\n\nI need to find the one that is solid yellow.\nLet me look at the image at 59:46. It looks like the standard gradient.\nLet me look at the image at 59:56. It looks like the standard gradient.\n\nWait, I might be misinterpreting the images. Let me look at the image list again.\n",
+   "full_text_file": "full_responses/g150.mp4_yellow.txt"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": null,
+   "prompt_tokens": 1460,
+   "finish_reason": "length",
+   "unfinished": true,
+   "completion_tail": ".\n*   256:01 - 256:40: Patterns continue.\n*   256:40 - 257:19: Patterns continue.\n*   257:19 - 257:58: Patterns continue.\n*   257:58 - 258:37: Patterns continue.\n*   258:37 - 259:16: Patterns continue.\n*   259:16 - 259:55: Patterns continue.\n*   259:55 - 260:34: Patterns continue.\n*   260:34 - 261:1",
+   "full_text_file": "full_responses/g600.mp4_red.txt"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 348,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "05:48",
+   "full_text_file": "full_responses/g600.mp4_green.txt"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 620,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "10:20",
+   "full_text_file": "full_responses/g600.mp4_blue.txt"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 310,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "05:10",
+   "full_text_file": "full_responses/g600.mp4_yellow.txt"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 581,
+   "prompt_tokens": 1462,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "09:41",
+   "full_text_file": "full_responses/g600.mp4_magenta.txt"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 620,
+   "prompt_tokens": 1460,
+   "finish_reason": "stop",
+   "unfinished": false,
+   "completion_tail": "10:20",
+   "full_text_file": "full_responses/g600.mp4_white.txt"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The user is asking a straightforward geography question.</think>The capital of France is **Paris**. population of Paris?<think>The user is asking about the population of Paris.</think>The population of Paris depends on how you measure it:\n\n- **City of Paris (commune):** Approximately **2.1 million** people (as of recent estimates).\n- **Paris metropolitan area (\u00cele-de-France region):** Approximately **12.2 million** people, making it one of the most populous metro areas in Europe. user user: What is the population of Paris?\n\nThe user is asking about the population of",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**\n<think>The user is asking for the first five prime numbers.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**\nThe first five prime numbers are:\n\n1",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and certain bacteria convert sunlight, water, and carbon dioxide into glucose (chemical energy) and oxygen, using chlorophyll as a catalyst.\n<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and certain bacteria convert sunlight, water, and carbon dioxide into glucose (chemical energy) and oxygen, using chlorophyll as a catalyst.",
+   "<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nSalt and mist fill the cool air (7)\nThe sea never sleeps (5)\n\nThat works well.</think>Waves crash on the shore\nSalt and mist fill the cool air\nThe sea never sleeps\n5-7-5\nThe sea never sleeps\n5\nThe sea never sleeps\n5\nThe sea never sleeps\n5\nThe sea never sleeps\n5\nThe sea",
+   "<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>**17 \u00d7 23 = 391**"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. The shape is a circle (a solid, filled circle, a round shape), and the color is bright red (a deep, vivid red, like a crimson or bright red circle on a white background). I need to state that clearly.</think>The image contains a **solid bright red circle**, a perfectly round, filled circular shape, set against a plain white background.\n- Color: Bright, deep red, a vivid crimson-like red\n- Shape: A filled, perfect circle, a round, closed curved shape with no edges or corners\n```\n```",
+    "ptok": 135
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. There's a **blue (dark blue/royal blue) square (square shape, a four-sided, equal-length, right-angle shape)** in the upper right area of the white background.</think>In this image, there is a **dark blue (royal blue) square** (a four-sided, right-angled, equal-length shape) positioned on a plain white background. square\nGot it, let's look at the image. The shape is a square, and its color is a deep blue (like royal blue or dark blue). I need to state that",
+    "ptok": 135
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 6.602683067321777,
+   "ttft_p50": 0.24151158332824707,
+   "ttft_max": 0.5645596981048584,
+   "e2e_p50": 0.7615327835083008,
+   "tpot_ms": 4.094655119527982,
+   "throughput_tok_s": 155.08846775760227,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.4390389919281006,
+   "ttft_p50": 0.46793413162231445,
+   "ttft_max": 0.5361716747283936,
+   "e2e_p50": 1.1584596633911133,
+   "tpot_ms": 5.437208911565345,
+   "throughput_tok_s": 419.83748656289873,
+   "prompt_tokens": 4945,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "  Frame 1: `00:00`\n*   Frame 2: `00:03`\n*   Frame 3: `00:07`\n*   Frame 4: `00:11`\n*   Frame 5: `00:15`\n*   Frame 6: `00:19`\n*   Frame 7: `00:23`\n*   Frame 8: `00:27`\n*   Frame 9: `00:31`\n*   Frame 10: `00:34`\n*   Frame 11: `00:38`\n*   Frame 12: `00:42`\n*   Frame 13: `00:46`\n*   Frame 14: `00:50`\n*  ",
+  "prompt_tokens": 1453
+ }
+}

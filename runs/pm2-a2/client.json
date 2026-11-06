@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 7,
+   "prompt_tokens": 1443,
+   "completion_tail": "he timestamps.\n00:00, 00:03, 00:07, 00:11, 00:15, 00:19, 00:23, 00:27, 00:31, 00:34, 00:38, 00:42, 00:46, 00:50, 00:54, 00:58.\nLet's look at the frames again.\nIs there a red frame?\nWait, I see a red frame in the image!\nLet's look at the frames again.\n00:00: Blue/Green\n00:03: Blue/Green\n00:07: Blue/G"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 54,
+   "prompt_tokens": 1443,
+   "completion_tail": "radient.\nLet's look at the image for 00:54. It's a gradient.\nLet's look at the image for 00:58. It's a gradient.\n\nLet's look at the image for 00:46. It's a gradient.\nLet's look at the image for 00:50. It's a gradient.\nLet's look at the image for 00:54. It's a gradient.\nLet's look at the image for 00"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 38,
+   "prompt_tokens": 1443,
+   "completion_tail": " at the image again.\nAh, I see it. It's the frame labeled 00:38? No, 00:38 is green/blue.\nWait, let me look at the image provided in the prompt.\nI see a red frame. It's the one after 00:29.\nLet's re-examine:\n00:00: Green/Blue\n00:09: Green/Blue\n00:19: Green/Blue\n00:29: Green/Blue\n00:38: Solid Red? No"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 145,
+   "prompt_tokens": 1443,
+   "completion_tail": "\nLet's look at the image for 01:46. It's a gradient.\nLet's look at the image for 01:56. It's a gradient.\nLet's look at the image for 02:05. It's a gradient.\nLet's look at the image for 02:15. It's a gradient.\nLet's look at the image for 02:25. It's a gradient.\n\nWait, let's look at the image for 01:2"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 77,
+   "prompt_tokens": 1443,
+   "completion_tail": "preceded by a timestamp label like 00:09.\"\nSo the label 00:09 is *before* the frame.\nLabel 00:00 -> Frame 1\nLabel 00:09 -> Frame 2\nLabel 00:19 -> Frame 3\nLabel 00:29 -> Frame 4\nLabel 00:38 -> Frame 5\nLabel 00:48 -> Frame 6\nLabel 00:58 -> Frame 7\nLabel 01:07 -> Frame 8\nLabel 01:17 -> Frame 9\nLabel 01"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 145,
+   "prompt_tokens": 1443,
+   "completion_tail": "** It's green/blue.\n28. **Let me look at the image for 00:09 again.** It's green/blue.\n29. **Let me look at the image for 00:00 again.** It's green/blue.\n30. **Is there a frame *after* 02:25?** The prompt says \"Each frame... is preceded by a timestamp label\". If there's a solid yellow frame, it must"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 581,
+   "prompt_tokens": 1443,
+   "completion_tail": "k at the frames again.\n- 00:00: Pattern\n- 00:38: Pattern\n- 01:17: Pattern\n- 01:56: Pattern\n- 02:35: Pattern\n- 03:13: Pattern\n- 03:52: Pattern\n- 04:31: Pattern\n- 05:10: Pattern\n- 05:48: Pattern\n- 06:27: Pattern\n- 07:06: Pattern\n- 07:45: Pattern\n- 08:23: Pattern\n- 09:02: Pattern\n- 09:41: Pattern\n\nWait"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 348,
+   "prompt_tokens": 1443,
+   "completion_tail": "05:48"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 581,
+   "prompt_tokens": 1443,
+   "completion_tail": "?\nThis looks like a frame from a video.\nLet's look at the timestamps. They are roughly 38-39 seconds apart.\n00:00, 00:38, 01:17 (39s), 01:56 (39s), 02:35 (39s), 03:13 (38s), 03:52 (39s), 04:31 (39s), 05:10 (39s), 05:48 (38s), 06:27 (39s), 07:06 (39s), 07:45 (39s), 08:23 (38s), 09:02 (39s), 09:41 (39"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 271,
+   "prompt_tokens": 1443,
+   "completion_tail": " Let me find it.\nLooking at the 11th image (06:27) - wait, that's a grid.\nLooking at the 10th image (05:48) - wait, that's a grid.\nLooking at the 12th image (07:06) - wait, that's a grid.\n\nLet me re-examine the whole set.\n1. 00:00\n2. 00:38\n3. 01:17\n4. 01:56\n5. 02:35\n6. 03:13\n7. 03:52\n8. 04:31\n9. 05:"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 193,
+   "prompt_tokens": 1445,
+   "completion_tail": "n. It's a gradient.\nLet me look at the 10th image (05:48) again. It's a gradient.\nLet me look at the 9th image (05:10) again. It's a gradient.\nLet me look at the 8th image (04:31) again. It's a gradient.\nLet me look at the 7th image (03:52) again. It's a gradient.\nLet me look at the 6th image (03:13"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 77,
+   "prompt_tokens": 1443,
+   "completion_tail": "   *   07:06 - Pattern\n    *   07:45 - Pattern\n    *   08:23 - Pattern\n    *   09:02 - Pattern\n    *   09:41 - Pattern\n    *   Wait, I might be blind. Let me look at the very last one again. 09:41.\n    *   Actually, let me look at the frames again.\n    *   00:00\n    *   00:38\n    *   01:17\n    *   0"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The capital of France is Paris.</think>The capital of France is **Paris**.h1>Paris</h1>h1>Paris</h1>",
+   "<think>The first five prime numbers are: 2, 3, 5, 7, 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**5<think>The user just sent \"5\". This is a bit ambiguous. They might be:\n\n1. Testing me\n2. Continuing a conversation\n3. Just sending a number\n\nI'll respond simply and ask if they need something specific.</think>It looks like you've sent the number **5**. Could you let me know",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into glucose (chemical energy) and oxygen.cosystem<think>The user seems to have sent a partial or garbled message. It looks like they started with \"Explain photosynthesis in one sentence.\" and then there's some text that says \"ecosystem\" which might be a continuation or a new question. Let me just answer the original question about photosynthesis in one sentence.</think>Photosynthesis is the process by which plants,",
+   "<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.</think>Waves crash on the shore,\nSalt air fills the endless blue,\nTides whisper their song.<think>The user wants a haiku about the ocean. A haiku follows the 5-7-5 syllable pattern.</think>Waves crash on the shore,\nSalt air fills the endless blue,\nTides whisper their song.",
+   "<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>**17 \u00d7 23 = 391** multiplication<think>17 * 23 = 17 * 20 + 17 * 3 = 340 + 51 = 391</think>**17 \u00d7 23 = 391**17 * 23 = 17 * 20 + 17 *"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. First, the shape: it's a circle (a round, curved shape, a perfect circle, actually two overlapping circles? Wait no, it's a red circle, a circular shape, solid red, on a white background. So the color is red (bright, solid red), the shape is a circle (a round, circular shape, specifically a filled red circle, with a slight overlap making it look like a double circle but the main shape is a circle). Let me confirm: the image has a solid red circular (round) shape, on a white background. Yep,",
+    "ptok": 118
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. It's a **blue (dark blue/royal blue) square (a perfect square shape, with four equal sides and right angles)**. Yep, that's it: the color is blue (specifically a deep, solid blue), and the shape is a square (a four-sided, equilateral, right-angled shape).</think>The image contains a **solid dark blue square**, a four-sided shape with equal-length sides and right-angle corners, in a deep, uniform blue color.\n\n<think>Got it, let's look at the image. It",
+    "ptok": 118
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 6.266843557357788,
+   "ttft_p50": 0.25978946685791016,
+   "ttft_max": 0.5360159873962402,
+   "e2e_p50": 0.7139360904693604,
+   "tpot_ms": 3.5759576662318913,
+   "throughput_tok_s": 163.39964299854591,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.19185471534729,
+   "ttft_p50": 0.4918152093887329,
+   "ttft_max": 0.5451886653900146,
+   "e2e_p50": 1.0472108125686646,
+   "tpot_ms": 4.3731937258262334,
+   "throughput_tok_s": 467.1842494075852,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": "y the last label:**\n*   I need to look at the very last frame in the sequence.\n*   The last frame shows `00:58`.\n\n4.  **Format the output:**\n*   The user requested: \"List the FIRST three and the LAST label exactly as printed, comma-separated, nothing else.\"\n*   Labels: `00:00`, `00:03`, `00:07`, `00",
+  "prompt_tokens": 1436
+ }
+}

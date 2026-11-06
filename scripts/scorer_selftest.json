@@ -1,0 +1,28 @@
+{
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "answer_s": 15,
+   "true_s": 15,
+   "unfinished": false,
+   "finish_reason": "stop",
+   "prompt_tokens": 5000
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "answer_s": 1,
+   "true_s": 30,
+   "unfinished": false,
+   "finish_reason": "stop",
+   "prompt_tokens": 5000
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "answer_s": null,
+   "true_s": 45,
+   "unfinished": true,
+   "finish_reason": "length",
+   "prompt_tokens": 5000
+  }
+ }
+}

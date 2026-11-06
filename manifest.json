@@ -1,0 +1,103 @@
+{
+ "clips": [
+  {
+   "file": "$TASKDIR/clips2/g60.mp4",
+   "duration_s": 60,
+   "fps": 25.0,
+   "num_sampled": 32,
+   "frame_step_s": 1.92,
+   "events": [
+    {
+     "color": "red",
+     "frame_index": 435,
+     "time_s": 17.4,
+     "sampled_position": 9
+    },
+    {
+     "color": "blue",
+     "frame_index": 1063,
+     "time_s": 42.52,
+     "sampled_position": 22
+    }
+   ]
+  },
+  {
+   "file": "$TASKDIR/clips2/g150.mp4",
+   "duration_s": 150,
+   "fps": 25.0,
+   "num_sampled": 32,
+   "frame_step_s": 4.8,
+   "events": [
+    {
+     "color": "red",
+     "frame_index": 725,
+     "time_s": 29.0,
+     "sampled_position": 6
+    },
+    {
+     "color": "green",
+     "frame_index": 1451,
+     "time_s": 58.04,
+     "sampled_position": 12
+    },
+    {
+     "color": "blue",
+     "frame_index": 2297,
+     "time_s": 91.88,
+     "sampled_position": 19
+    },
+    {
+     "color": "yellow",
+     "frame_index": 3144,
+     "time_s": 125.76,
+     "sampled_position": 26
+    }
+   ]
+  },
+  {
+   "file": "$TASKDIR/clips2/g600.mp4",
+   "duration_s": 600,
+   "fps": 10.0,
+   "num_sampled": 32,
+   "frame_step_s": 19.3,
+   "events": [
+    {
+     "color": "red",
+     "frame_index": 774,
+     "time_s": 77.4,
+     "sampled_position": 4
+    },
+    {
+     "color": "green",
+     "frame_index": 1741,
+     "time_s": 174.1,
+     "sampled_position": 9
+    },
+    {
+     "color": "blue",
+     "frame_index": 2709,
+     "time_s": 270.9,
+     "sampled_position": 14
+    },
+    {
+     "color": "yellow",
+     "frame_index": 3676,
+     "time_s": 367.6,
+     "sampled_position": 19
+    },
+    {
+     "color": "magenta",
+     "frame_index": 4644,
+     "time_s": 464.4,
+     "sampled_position": 24
+    },
+    {
+     "color": "white",
+     "frame_index": 5418,
+     "time_s": 541.8,
+     "sampled_position": 28
+    }
+   ]
+  }
+ ]
+}

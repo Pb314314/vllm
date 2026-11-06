@@ -1,0 +1,150 @@
+{
+ "model": "mimo",
+ "grounding": {
+  "g60.mp4:red": {
+   "clip": "g60.mp4",
+   "color": "red",
+   "true_s": 17.4,
+   "answer_s": 38,
+   "prompt_tokens": 1443,
+   "completion_tail": "green/blue.\n    Let me look at the frame at 00:38. It is green/blue.\n\n    Let me look at the frame at 00:34. It is green/blue.\n    Let me look at the frame at 00:38. It is green/blue.\n\n    Let me look at the frame at 00:34. It is green/blue.\n    Let me look at the frame at 00:38. It is green/blue.\n\n"
+  },
+  "g60.mp4:blue": {
+   "clip": "g60.mp4",
+   "color": "blue",
+   "true_s": 42.52,
+   "answer_s": 58,
+   "prompt_tokens": 1443,
+   "completion_tail": "d all 16 look like gradients... am I colorblind? No.\nMaybe the last frame is solid blue? The image after `00:58` is a gradient.\nMaybe the image after `00:58` is the one? No, it's a gradient.\n\nLet me reconsider the \"solid blue\" description.\nMaybe the image after `00:58` is actually solid blue and the"
+  },
+  "g150.mp4:red": {
+   "clip": "g150.mp4",
+   "color": "red",
+   "true_s": 29.0,
+   "answer_s": 96,
+   "prompt_tokens": 1443,
+   "completion_tail": "d mean the frame *after* the label `01:36` is red. But the image shown after `01:36` is green/blue.\nIs it possible the red frame is the one *preceded* by `01:46`? The image shown after `01:46` is green/blue.\n\nLet me look at the image at `01:36` again. Wait. The image at `01:36` is the one *preceded*"
+  },
+  "g150.mp4:green": {
+   "clip": "g150.mp4",
+   "color": "green",
+   "true_s": 58.04,
+   "answer_s": 116,
+   "prompt_tokens": 1443,
+   "completion_tail": "itchy pattern.\nLet's look at the image at `02:05`. It looks like a glitchy pattern.\n\nLet's try to find a frame that is distinct.\nAll frames seem to be variations of the same abstract image.\nWait, let me look at the image at `01:56` again. It looks like a glitchy pattern.\nLet's look at the image at `"
+  },
+  "g150.mp4:blue": {
+   "clip": "g150.mp4",
+   "color": "blue",
+   "true_s": 91.88,
+   "answer_s": 87,
+   "prompt_tokens": 1443,
+   "completion_tail": "eft: Blue/Cyan. Right: Green.\n00:29. Left: Blue/Cyan. Right: Green.\n00:38. Left: Blue/Cyan. Right: Green.\n00:48. Left: Blue/Cyan. Right: Green.\n00:58. Left: Blue/Cyan. Right: Green.\n01:07. Left: Blue/Cyan. Right: Green.\n01:17. Left: Blue/Cyan. Right: Green.\n01:27. Left: Blue/Cyan. Right: Green.\n01:3"
+  },
+  "g150.mp4:yellow": {
+   "clip": "g150.mp4",
+   "color": "yellow",
+   "true_s": 125.76,
+   "answer_s": 145,
+   "prompt_tokens": 1443,
+   "completion_tail": " is not in the provided images, I cannot answer.\nHowever, if the solid yellow frame *is* one of the provided images, I must have missed it.\nLet me look at the images again. Is there any yellow?\nThe green is quite bright. The blue is dark.\nMaybe the frame at 02:25 is yellow? No.\n\nLet's reconsider the"
+  },
+  "g600.mp4:red": {
+   "clip": "g600.mp4",
+   "color": "red",
+   "true_s": 77.4,
+   "answer_s": 581,
+   "prompt_tokens": 1443,
+   "completion_tail": "ack.\nFrame 2: Blue, Green, Cyan, Black.\nFrame 3: Blue, Green, Cyan, Black.\nFrame 4: Blue, Green, Cyan, Black.\nFrame 5: Blue, Green, Cyan, Black.\nFrame 6: Blue, Green, Cyan, Black.\nFrame 7: Blue, Green, Cyan, Black.\nFrame 8: Blue, Green, Cyan, Black.\nFrame 9: Blue, Green, Cyan, Black.\nFrame 10: Blue,"
+  },
+  "g600.mp4:green": {
+   "clip": "g600.mp4",
+   "color": "green",
+   "true_s": 174.1,
+   "answer_s": 348,
+   "prompt_tokens": 1443,
+   "completion_tail": "05:48<think>05:48"
+  },
+  "g600.mp4:blue": {
+   "clip": "g600.mp4",
+   "color": "blue",
+   "true_s": 270.9,
+   "answer_s": 9,
+   "prompt_tokens": 1443,
+   "completion_tail": "lue frame is one of the frames in the sequence.\nLet's look at the images again. Are any of the grid images actually solid blue? No, they are all grids of green and blue squares.\nIs the solid blue bar at the bottom a frame? Yes, it looks like a frame.\nDoes it have a label preceding it?\nThe label `09:"
+  },
+  "g600.mp4:yellow": {
+   "clip": "g600.mp4",
+   "color": "yellow",
+   "true_s": 367.6,
+   "answer_s": 348,
+   "prompt_tokens": 1443,
+   "completion_tail": "oking at the image at `05:48`... it's blue and green.\n\nLet me look at the image at `05:48` again. Wait, looking at the image at `05:48`... it's blue and green.\n\nLet me look at the image at `05:48` again. Wait, looking at the image at `05:48`... it's blue and green.\n\nLet me look at the image at `05:4"
+  },
+  "g600.mp4:magenta": {
+   "clip": "g600.mp4",
+   "color": "magenta",
+   "true_s": 464.4,
+   "answer_s": 348,
+   "prompt_tokens": 1445,
+   "completion_tail": "t's look at the image at **05:48**.\nLet's look at the image at **03:52**.\n\nLet's look at the image at **05:48**.\nLet's look at the image at **03:52**.\n\nLet's look at the image at **05:48**.\nLet's look at the image at **03:52**.\n\nLet's look at the image at **05:48**.\nLet's look at the image at **03:5"
+  },
+  "g600.mp4:white": {
+   "clip": "g600.mp4",
+   "color": "white",
+   "true_s": 541.8,
+   "answer_s": 348,
+   "prompt_tokens": 1443,
+   "completion_tail": "03:13\n03:52\n04:31\n05:10\n05:48\n06:27\n07:06\n07:45\n08:23\n09:02\n09:41\n\nIs there a gap in the sequence?\n00:00 to 00:38 is 38s.\n00:38 to 01:17 is 39s.\n01:17 to 01:56 is 39s.\n01:56 to 02:35 is 39s.\n02:35 to 03:13 is 38s.\n03:13 to 03:52 is 39s.\n03:52 to 04:31 is 39s.\n04:31 to 05:10 is 39s.\n05:10 to 05:48 is"
+  }
+ },
+ "collateral": {
+  "text": [
+   "<think>The capital of France is Paris.</think>The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.The capital of France is **Paris**.",
+   "<think>The first five prime numbers are 2, 3, 5, 7, and 11.</think>The first five prime numbers are:\n\n1. **2**\n2. **3**\n3. **5**\n4. **7**\n5. **11**These are numbers greater than 1 that have no divisors other than 1 and themselves.Note that **2** is the only even prime number.",
+   "<think>The user wants a one-sentence explanation of photosynthesis.</think>Photosynthesis is the process by which green plants, algae, and some bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen.<think>Photosynthesis is the process by which plants, algae, and some bacteria convert sunlight, water, and carbon dioxide into glucose (energy) and oxygen.**Photosynthesis** is the process by which plants, algae, and certain bacteria use sunlight, water, and carbon dioxide to produce glucose (energy) and oxygen.**Photosynthesis** is the process by which plants, algae, and",
+   "<think>A haiku follows the 5-7-5 syllable pattern.\n\nLet me write one:\n\nWaves crash on the shore (5)\nEndless blue stretches beyond (7)\nSalt wind fills my lungs (5)\n\nThat works!</think>Waves crash on the shore\nEndless blue stretches beyond\nSalt wind fills my lungs",
+   "<think>17 * 23 = 391</think>17 \u00d7 23 = **391**<think>17 \u00d7 23 = **391**Thinking step by step:\n\n17 \u00d7 23 = 17 \u00d7 20 + 17 \u00d7 3 = 340 + 51 = **391**17 \u00d7 23 = **391**17 \u00d7 23 = **391**17 \u00d7 23 = **391**17 \u00d7 23"
+  ],
+  "image": [
+   {
+    "subject": "red-circle",
+    "answer": "<think>Got it, let's look at the image. The shape is a circle (a round, circular shape), and the color is red (a solid red fill, with a thin white outline around it, on a light background). I need to state that clearly.</think>In this image:\n- **Shape**: A circle (a perfect round, circular form, with a thin white border around it)\n- **Color**: Solid red (the main fill of the circle is bright red, set against a light off-white background)<think>In this image:\n- **Shape**: A circle (a perfect round, circular form, with",
+    "ptok": 118
+   },
+   {
+    "subject": "blue-square",
+    "answer": "<think>Got it, let's look at the image. It's a square (a square shape, four equal sides, right angles) and it's blue (dark blue, solid blue color). Let me confirm: the shape is a square (or a square/rectangular square, specifically a square, since all sides are equal here), and the color is blue (dark blue, solid fill). Yep, that's it.</think>This image shows a **square (a four-sided, equal-length, right-angled shape)** that is **solid dark blue (blue) in color**.<think>This image contains a **square",
+    "ptok": 118
+   }
+  ]
+ },
+ "perf": {
+  "c1": {
+   "n": 8,
+   "wall": 8.957188606262207,
+   "ttft_p50": 0.2557523250579834,
+   "ttft_max": 0.5947339534759521,
+   "e2e_p50": 1.0346643924713135,
+   "tpot_ms": 6.133165885144331,
+   "throughput_tok_s": 114.3215851549776,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  },
+  "c4": {
+   "n": 8,
+   "wall": 2.8367292881011963,
+   "ttft_p50": 0.50948166847229,
+   "ttft_max": 0.5249724388122559,
+   "e2e_p50": 1.37811279296875,
+   "tpot_ms": 6.839615153515433,
+   "throughput_tok_s": 360.9791051600234,
+   "prompt_tokens": 4928,
+   "prompt_tokens_all_same": true
+  }
+ },
+ "label_readout": {
+  "text": " text representation.\n*   Let's look at the text representation of the frames provided in the prompt:\n*   Frame 1: `00:00`\n*   Frame 2: `00:03`\n*   Frame 3: `00:07`\n*   Frame 4: `00:11`\n*   Frame 5: `00:15`\n*   Frame 6: `00:19`\n*   Frame 7: `00:23`\n*   Frame 8: `00:27`\n*   Frame 9: `00:31`\n*   Frame",
+  "prompt_tokens": 1436
+ }
+}

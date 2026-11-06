@@ -1,0 +1,70 @@
+d60c4404e2b5c4ffb54873fb18e06a335e1f2a94
+AFTER=0 MODEL=XiaomiMiMo/MiMo-V2.6-Flash-RL EXTRA=
+GPU 0: NVIDIA GB200 (UUID: GPU-84099ce1-c625-6df2-f6b8-571547b75243)
+GPU 1: NVIDIA GB200 (UUID: GPU-d9014acc-365b-2593-1d7f-09e15596ef41)
+GPU 2: NVIDIA GB200 (UUID: GPU-8996bef8-98a9-5e33-a593-fdd9a7c6e0b2)
+GPU 3: NVIDIA GB200 (UUID: GPU-cbc6c668-949e-5c8e-48f1-5f4fff7b5aba)
+=== overlay diff vs worktree base (empty on Baseline)
+=== encoder-DP markers in the effective model file
+1
+1
+  Created wheel for vllm: filename=vllm-0.33.0rc1.dev872+gd60c4404e.precompiled-0.editable-cp312-cp312-linux_aarch64.whl size=14185 sha256=54602f12a46488e887b963389288fc59a8288e675233a415ff27cf3d1062fb19
+  Stored in directory: $WORKDIR/pip-ephem-wheel-cache-xrneh11z/wheels/ee/ba/71/5d5107c460895e373bb23c8ed3a73910edd73af0b404d9bf2d
+Successfully installed vllm-0.33.0rc1.dev872+gd60c4404e.precompiled
+vllm.__file__: $WORKDIR/wt/vllm/__init__.py
+W1106 18:18:41.839000 3432851 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 18:18:41.840000 3432851 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 18:18:41.841000 3432851 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+module: $WORKDIR/wt/vllm/model_executor/models/mimo_v2_omni.py
+marker=False
+python 3.12.3
+torch 2.16.0.dev20261009+cu134
+transformers 5.22.1
+=== compiled extensions in worktree:
+-rwxr-xr-x 1 user user 85757488 Nov  6 18:18 $WORKDIR/wt/vllm/_C_stable_libtorch.abi3.so
+-rwxr-xr-x 1 user user  4346976 Nov  6 18:18 $WORKDIR/wt/vllm/_deepselect_C.abi3.so
+-rwxr-xr-x 1 user user  5961184 Nov  6 18:18 $WORKDIR/wt/vllm/_flashkda_C.abi3.so
+-rwxr-xr-x 1 user user  3799576 Nov  6 18:18 $WORKDIR/wt/vllm/_flashmla_C.abi3.so
+-rwxr-xr-x 1 user user   300336 Nov  6 18:18 $WORKDIR/wt/vllm/_flashmla_extension_C.abi3.so
+-rwxr-xr-x 1 user user 28950480 Nov  6 18:18 $WORKDIR/wt/vllm/_moe_C_stable_libtorch.abi3.so
+-rwxr-xr-x 1 user user   204792 Nov  6 18:18 $WORKDIR/wt/vllm/cumem_allocator.abi3.so
+-rwxr-xr-x 1 user user   205040 Nov  6 18:18 $WORKDIR/wt/vllm/fs_io_C.abi3.so
+-rwxr-xr-x 1 user user   202544 Nov  6 18:18 $WORKDIR/wt/vllm/spinloop.abi3.so
+loaded native: _hashlib /usr/lib/python3.12/lib-dynload/_hashlib.cpython-312-aarch64-linux-gnu.so
+loaded native: _ctypes /usr/lib/python3.12/lib-dynload/_ctypes.cpython-312-aarch64-linux-gnu.so
+loaded native: _bz2 /usr/lib/python3.12/lib-dynload/_bz2.cpython-312-aarch64-linux-gnu.so
+loaded native: _lzma /usr/lib/python3.12/lib-dynload/_lzma.cpython-312-aarch64-linux-gnu.so
+loaded native: _json /usr/lib/python3.12/lib-dynload/_json.cpython-312-aarch64-linux-gnu.so
+loaded native: _contextvars /usr/lib/python3.12/lib-dynload/_contextvars.cpython-312-aarch64-linux-gnu.so
+loaded native: numpy._core._multiarray_umath /usr/local/lib/python3.12/dist-packages/numpy/_core/_multiarray_umath.cpython-312-aarch64-linux-gnu.so
+loaded native: numpy.linalg._umath_linalg /usr/local/lib/python3.12/dist-packages/numpy/linalg/_umath_linalg.cpython-312-aarch64-linux-gnu.so
+loaded native: torch._C /usr/local/lib/python3.12/dist-packages/torch/_C.cpython-312-aarch64-linux-gnu.so
+loaded native: mmap /usr/lib/python3.12/lib-dynload/mmap.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings._internal.utils /usr/local/lib/python3.12/dist-packages/cuda/bindings/_internal/utils.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings._internal.driver /usr/local/lib/python3.12/dist-packages/cuda/bindings/_internal/driver.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings.cydriver /usr/local/lib/python3.12/dist-packages/cuda/bindings/cydriver.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings.driver /usr/local/lib/python3.12/dist-packages/cuda/bindings/driver.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings._internal.runtime_ptds /usr/local/lib/python3.12/dist-packages/cuda/bindings/_internal/runtime_ptds.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings._internal.runtime /usr/local/lib/python3.12/dist-packages/cuda/bindings/_internal/runtime.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings.cyruntime /usr/local/lib/python3.12/dist-packages/cuda/bindings/cyruntime.cpython-312-aarch64-linux-gnu.so
+loaded native: cuda.bindings.runtime /usr/local/lib/python3.12/dist-packages/cuda/bindings/runtime.cpython-312-aarch64-linux-gnu.so
+loaded native: _queue /usr/lib/python3.12/lib-dynload/_queue.cpython-312-aarch64-linux-gnu.so
+loaded native: torch._C._distributed_c10d /usr/local/lib/python3.12/dist-packages/torch/_C.cpython-312-aarch64-linux-gnu.so
+loaded native: torch._C._distributed_rpc /usr/local/lib/python3.12/dist-packages/torch/_C.cpython-312-aarch64-linux-gnu.so
+loaded native: torch._C._distributed_autograd /usr/local/lib/python3.12/dist-packages/torch/_C.cpython-312-aarch64-linux-gnu.so
+loaded native: torch._C._autograd /usr/local/lib/python3.12/dist-packages/torch/_C.cpython-312-aarch64-linux-gnu.so
+loaded native: _ssl /usr/lib/python3.12/lib-dynload/_ssl.cpython-312-aarch64-linux-gnu.so
+loaded native: _multiprocessing /usr/lib/python3.12/lib-dynload/_multiprocessing.cpython-312-aarch64-linux-gnu.so
+loaded native: _posixshmem /usr/lib/python3.12/lib-dynload/_posixshmem.cpython-312-aarch64-linux-gnu.so
+loaded native: _asyncio /usr/lib/python3.12/lib-dynload/_asyncio.cpython-312-aarch64-linux-gnu.so
+worktree so: _C_stable_libtorch.abi3.so bde5ab0b2f3b19b8
+worktree so: _deepselect_C.abi3.so b348addeaeb75a13
+worktree so: _flashkda_C.abi3.so 99072da4d6729c79
+worktree so: _flashmla_C.abi3.so 82ba5adec3983e96
+worktree so: _flashmla_extension_C.abi3.so 9ff54f4b308f067c
+worktree so: _moe_C_stable_libtorch.abi3.so 1878f70280b15d2c
+worktree so: cumem_allocator.abi3.so 02760bd7a9018e24
+worktree so: fs_io_C.abi3.so 9a30fcf4fe3ec71b
+worktree so: spinloop.abi3.so 3b65016974af6fe3
+Fetching 1 files:   0%|          | 0/1 [00:00<?, ?it/s]Fetching 1 files: 100%|██████████| 1/1 [00:00<00:00, 1380.61it/s]
+checkpoint revision: f657ba2f7d24c9adc5730675baaa2d34de878a49
