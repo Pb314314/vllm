@@ -1,0 +1,38 @@
+[INFO] Extracting squashfs filesystem...
+Parallel unsquashfs: Using 140 processors
+176961 inodes (341684 blocks) to write
+
+
+created 175566 files
+created 21301 directories
+created 1390 symlinks
+created 0 devices
+created 0 fifos
+created 0 sockets
+created 5 hardlinks
+T1 PASS (silent deferred failure for bare buffer)
+T2 PASS (fail-fast RuntimeError): Rank 0 is a local reader but could not attach to shared memory ring buffer 'vllm-test-x'. The writer created the segment ...
+T3a PASS (roundtrip survives external unlink)
+T3b PASS (late attach fails fast)
+RESULT-1: ALL PASS
+T4(new-order) PASS
+T4(old-order) PASS
+W1106 04:35:28.116000 1424046 usr/local/lib/python3.12/dist-packages/torch/utils/cpp_extension.py:183] No CUDA runtime is found, using CUDA_HOME='/usr/local/cuda'
+T5 PASS (real __init__ attaches before load; survives mid-load purge)
+T6 SKIP (ray not installed)
+RESULT-2: ALL PASS
+Exception ignored in: <function ShmRingBuffer.__del__ at 0x57dd446791c0>
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.12/dist-packages/vllm/distributed/device_communicators/shm_broadcast.py", line 404, in __del__
+TypeError: 'NoneType' object is not callable
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 4 leaked shared_memory objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_4525bfba': [Errno 2] No such file or directory: '/psm_4525bfba'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_39ac4392': [Errno 2] No such file or directory: '/psm_39ac4392'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_0567af0c': [Errno 2] No such file or directory: '/psm_0567af0c'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_b060725e': [Errno 2] No such file or directory: '/psm_b060725e'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))
+unit exit: 0

@@ -1,0 +1,5 @@
+/home/agent-v/.profile: line 28: /home/agent-v/v/27ba87f8/rust/cargo/env: No such file or directory
+W1106 13:50:00.674000 2693304 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 13:50:00.676000 2693304 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 13:50:00.677000 2693304 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+PROVENANCE vllm.__file__= /tmp/d3c25120/final-46332/wt/vllm/__init__.py marker= True arm=after

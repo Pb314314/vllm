@@ -1,0 +1,38 @@
+=== node gb200-rack1-08 job 45915; image /home/agent-v/v/2d0f499c/images/vllm-nightly-cu134-arm64-latest.sqsh
+[INFO] Extracting squashfs filesystem...
+Parallel unsquashfs: Using 140 processors
+176961 inodes (341684 blocks) to write
+
+
+created 175566 files
+created 21301 directories
+created 1390 symlinks
+created 0 devices
+created 0 fifos
+created 0 sockets
+created 5 hardlinks
+=== image vllm version:
+0.33.0rc1.dev573+g40941f2c4.d20261103.cu134
+=== unit test (patched overlay)
+W1106 01:38:26.746000 2974808 usr/local/lib/python3.12/dist-packages/torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:38:26.747000 2974808 usr/local/lib/python3.12/dist-packages/torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:38:26.747000 2974808 usr/local/lib/python3.12/dist-packages/torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+T1 PASS (silent deferred failure for bare buffer)
+T2 PASS (fail-fast RuntimeError): Rank 0 is a local reader but could not attach to shared memory ring buffer 'vllm-test-x'. The writer created the segment ...
+T3a PASS (roundtrip survives external unlink)
+T3b PASS (late attach fails fast)
+RESULT: ALL PASS
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 1 leaked shared_memory objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_46f5665e': [Errno 2] No such file or directory: '/psm_46f5665e'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))
+unit exit: 0
+=== arm baseline starting 01:38:27
+PURGE at 01:41:07
+=== arm baseline status: died
+(Worker_TP2 pid=2977611) ERROR 11-06 01:43:00 [multiproc_executor.py:1063] AttributeError: 'ShmRingBuffer' object has no attribute 'shared_memory'
+=== arm patched starting 01:43:32
+PURGE at 01:46:16
+=== arm patched status: ready
+{"id":"cmpl-ace848216af72b35","object":"text_completion","created":1793929833,"model":"deepseek-ai/DeepSeek-V4.1-Flash","choices":[{"index":0,"text":" 97\n18 + 25 = 43\n120 + 7 =","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_ids":null,"routed_experts":null,"weight_versions":null}],"service_tier":null,"system_fingerprint":"vllm-0.33.0rc1.dev573+g40941f2c4.d20261103-tp4-e7990cc9","usage":{"prompt_tokens":21,"total_tokens":37,"completion_tokens":16,"completion_tokens_details":null},"kv_transfer_params":null,"ec_transfer_params":null,"metrics":null}
+=== done 01:50:48

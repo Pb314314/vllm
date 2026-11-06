@@ -1,0 +1,7 @@
+prewarm-discard status=ready startup_s=646
+warm-baseline-r1 status=ready startup_s=436
+warm-baseline-r2 status=ready startup_s=435
+warm-after-r1 status=ready startup_s=440
+warm-after-r2 status=ready startup_s=411
+purge-baseline status=died startup_s=295
+purge-after status=ready startup_s=471

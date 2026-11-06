@@ -1,0 +1,489 @@
+/home/agent-v/.profile: line 28: /home/agent-v/v/27ba87f8/rust/cargo/env: No such file or directory
+W1106 01:43:33.927000 2979125 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:43:33.928000 2979125 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:43:33.929000 2979125 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:38] 
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:38]        █     █     █▄   ▄█
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:38]  ▄▄ ▄█ █     █     █ ▀▄▀ █  version 0.33.0rc1.dev573+g40941f2c4.d20261103
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:38]   █▄█▀ █     █     █     █  model   /mnt/model-cache/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/dba1be0a40aa45a94ad051997016db3960a90277
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:38]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:38] 
+(APIServer pid=2979125) INFO 11-06 01:43:41 [startup.py:96] non-default args: {'model_tag': '/mnt/model-cache/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/dba1be0a40aa45a94ad051997016db3960a90277', 'disable_uvicorn_access_log': True, 'model': '/mnt/model-cache/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/dba1be0a40aa45a94ad051997016db3960a90277', 'max_model_len': 32768, 'served_model_name': ['deepseek-ai/DeepSeek-V4.1-Flash'], 'tensor_parallel_size': 4, 'gpu_memory_utilization': 0.9, 'kv_cache_dtype': 'fp8', 'enable_prefix_caching': False, 'max_num_batched_tokens': 1260, 'max_num_seqs': 32, 'speculative_config': {'method': 'dspark', 'num_speculative_tokens': 5, 'draft_sample_method': 'probabilistic', 'enable_adaptive_verification': False}, 'compilation_config': {'mode': None, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': [], 'ir_enable_torch_wrap': None, 'splitting_ops': None, 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'cudagraph_decoder_replay': True, 'decoder_replay_cudagraph_capture_sizes': [], 'decoder_replay_trim_threshold': 768, 'compile_sizes': None, 'compile_ranges_endpoints': None, 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_DECODE_ONLY: (2, 0)>, 'use_breakable_cudagraph': None, 'cudagraph_num_of_warmups': 0, 'cudagraph_capture_sizes': None, 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': None, 'pass_config': {}, 'max_cudagraph_capture_size': 128, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': None, 'static_all_moe_layers': []}, 'engram_config': EngramConfig(cpu_offload=False, disk_offload=False, embedding_across_dp=True, dp_shared_memory=None, use_thp=False)}
+(APIServer pid=2979125) INFO 11-06 01:44:07 [config.py:985] Detected quantization_config.scale_fmt=ue8m0; enabling UE8M0 for DeepGEMM.
+(APIServer pid=2979125) INFO 11-06 01:44:09 [model.py:756] Resolved architecture: DeepseekV41ForCausalLM
+(APIServer pid=2979125) INFO 11-06 01:44:09 [model.py:781] Defaulting to tokenizer_mode='deepseek_v41' for DeepseekV41ForCausalLM
+(APIServer pid=2979125) INFO 11-06 01:44:09 [model.py:2194] Using max model len 32768
+(APIServer pid=2979125) INFO 11-06 01:44:19 [cache.py:511] Using fp8 data type to store kv cache. It reduces the GPU memory footprint and boosts the performance. Meanwhile, it may cause accuracy drop without a proper scaling factor
+(APIServer pid=2979125) INFO 11-06 01:44:21 [model.py:756] Resolved architecture: DeepseekV41ForCausalLM
+(APIServer pid=2979125) INFO 11-06 01:44:21 [model.py:2194] Using max model len 1048576
+(APIServer pid=2979125) INFO 11-06 01:44:29 [speculative.py:1466] Overriding draft model max model len from 1048576 to 32768
+(APIServer pid=2979125) INFO 11-06 01:44:29 [scheduler.py:310] Chunked prefill is enabled with max_num_batched_tokens=1260.
+(APIServer pid=2979125) INFO 11-06 01:44:29 [deep_gemm.py:233] deep_gemm not found in site-packages, trying vendored vllm.third_party.deep_gemm
+(APIServer pid=2979125) INFO 11-06 01:44:30 [deep_gemm.py:260] DeepGEMM PDL enabled on vllm.third_party.deep_gemm.
+(APIServer pid=2979125) INFO 11-06 01:44:30 [vllm.py:1512] Resolved Engram configuration: EngramConfig(cpu_offload=False, disk_offload=False, embedding_across_dp=True, dp_shared_memory=False, use_thp=False)
+(APIServer pid=2979125) INFO 11-06 01:44:30 [vllm.py:832] Auto-enabling VLLM_USE_BREAKABLE_CUDAGRAPH=1. Set VLLM_USE_BREAKABLE_CUDAGRAPH=0 to opt out.
+(APIServer pid=2979125) INFO 11-06 01:44:30 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(APIServer pid=2979125) WARNING 11-06 01:44:30 [vllm.py:2405] max_num_scheduled_tokens is set to 1260 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.
+(APIServer pid=2979125) INFO 11-06 01:44:31 [compilation.py:317] Enabled custom fusions: norm_quant, act_quant, allreduce_rms
+(APIServer pid=2979125) INFO 11-06 01:44:35 [numa_utils.py:140] Auto-detected NUMA nodes for GPUs: [0, 0, 1, 1]
+(APIServer pid=2979125) INFO 11-06 01:44:35 [numa_utils.py:607] Launching EngineCore subprocess (local_rank=0, dp_local_rank=0) with numactl --cpunodebind=0,1 --preferred-many=0,1
+(APIServer pid=2979125) INFO 11-06 01:44:35 [base.py:283] Multi-modal warmup completed in 0.045s
+W1106 01:44:36.651000 2979810 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:44:36.653000 2979810 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:44:36.654000 2979810 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+(EngineCore pid=2979810) INFO 11-06 01:44:45 [core.py:152] Initializing a V1 LLM engine (v0.33.0rc1.dev573+g40941f2c4.d20261103) with config: model='/mnt/model-cache/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/dba1be0a40aa45a94ad051997016db3960a90277', speculative_config=SpeculativeConfig(method='dspark', model='/mnt/model-cache/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/dba1be0a40aa45a94ad051997016db3960a90277', num_spec_tokens=5), tokenizer='/mnt/model-cache/hub/models--deepseek-ai--DeepSeek-V4.1-Flash/snapshots/dba1be0a40aa45a94ad051997016db3960a90277', skip_tokenizer_init=False, tokenizer_mode=deepseek_v41, revision=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=32768, download_dir=None, load_format=auto, tensor_parallel_size=4, pipeline_parallel_size=1, data_parallel_size=1, decode_context_parallel_size=1, dcp_comm_backend=ag_rs, disable_custom_all_reduce=False, quantization=deepseek_v4_fp8, quantization_config=None, enforce_eager=False, aux_output_config=AuxOutputConfig(enable_return_routed_experts=False, max_bytes=None), kv_cache_dtype=fp8, device_config=cuda, structured_outputs_config=StructuredOutputsConfig(backend='auto', disable_any_whitespace=False, disable_additional_properties=False, reasoning_parser='', reasoning_parser_plugin='', enable_in_reasoning=False), observability_config=ObservabilityConfig(show_hidden_metrics_for_version=None, otlp_traces_endpoint=None, collect_detailed_traces=None, per_request_spec_decode_metrics='none', kv_cache_metrics=False, kv_cache_metrics_sample=0.01, custom_histogram_buckets=None, cudagraph_metrics=False, enable_layerwise_nvtx_tracing=False, enable_mfu_metrics=False, enable_mm_processor_stats=False, enable_logging_iteration_details=False, jit_monitor_mode='warn', jit_monitor_verbose=False), seed=0, served_model_name=deepseek-ai/DeepSeek-V4.1-Flash, enable_prefix_caching=False, enable_chunked_prefill=True, pooler_config=None, compilation_config={'mode': <CompilationMode.NONE: 0>, 'debug_dump_path': None, 'cache_dir': '', 'compile_cache_save_format': 'binary', 'backend': 'inductor', 'custom_ops': ['+quant_fp8', 'all', '+quant_fp8'], 'ir_enable_torch_wrap': False, 'splitting_ops': [], 'compile_mm_encoder': False, 'cudagraph_mm_encoder': False, 'encoder_cudagraph_token_budgets': [], 'encoder_cudagraph_max_vision_items_per_batch': 0, 'encoder_cudagraph_max_frames_per_batch': None, 'cudagraph_decoder_replay': True, 'decoder_replay_cudagraph_capture_sizes': [], 'decoder_replay_trim_threshold': 768, 'compile_sizes': [], 'compile_ranges_endpoints': [1260], 'inductor_compile_config': {'enable_auto_functionalized_v2': False, 'combo_kernels': True, 'benchmark_combo_kernel': True}, 'inductor_passes': {}, 'cudagraph_mode': <CUDAGraphMode.FULL_DECODE_ONLY: (2, 0)>, 'use_breakable_cudagraph': True, 'cudagraph_num_of_warmups': 1, 'cudagraph_capture_sizes': [1, 2, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128], 'cudagraph_copy_inputs': False, 'cudagraph_specialize_lora': True, 'use_inductor_graph_partition': False, 'pass_config': {'fuse_norm_quant': True, 'fuse_act_quant': True, 'fuse_attn_quant': False, 'fuse_allreduce_rms': True, 'enable_qk_norm_rope_fusion': False, 'fuse_rope_kvcache_cat_mla': False, 'fuse_act_padding': False, 'fuse_qk_norm_rope_kvcache': False}, 'max_cudagraph_capture_size': 128, 'dynamic_shapes_config': {'type': <DynamicShapesType.BACKED: 'backed'>, 'evaluate_guards': False, 'assume_32_bit_indexing': False}, 'local_cache_dir': None, 'fast_moe_cold_start': False, 'static_all_moe_layers': []}, kernel_config=KernelConfig(ir_op_priority=IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native']), enable_flashinfer_autotune=True, enable_rocm_segmented_attn_autotune=False, enable_cutedsl_warmup=True, enable_jit_warmup=True, monokernel=False, moe_backend='auto', sparse_indexer_topk_backend='auto', linear_backend='auto', linear_backend_per_quant=None, rdna_hybrid_w4a16_prefill_dequant='disable')
+(EngineCore pid=2979810) INFO 11-06 01:44:45 [multiproc_executor.py:167] DP group leader: node_rank=0, node_rank_within_dp=0, master_addr=127.0.0.1, mq_connect_ip=192.168.0.108 (local), world_size=4, local_world_size=4
+(EngineCore pid=2979810) INFO 11-06 01:44:45 [numa_utils.py:607] Launching worker subprocess (local_rank=0, dp_local_rank=None) with numactl --cpunodebind=0 --preferred=0
+(EngineCore pid=2979810) INFO 11-06 01:44:45 [numa_utils.py:607] Launching worker subprocess (local_rank=1, dp_local_rank=None) with numactl --cpunodebind=0 --preferred=0
+(EngineCore pid=2979810) INFO 11-06 01:44:45 [numa_utils.py:607] Launching worker subprocess (local_rank=2, dp_local_rank=None) with numactl --cpunodebind=1 --preferred=1
+(EngineCore pid=2979810) INFO 11-06 01:44:45 [numa_utils.py:607] Launching worker subprocess (local_rank=3, dp_local_rank=None) with numactl --cpunodebind=1 --preferred=1
+W1106 01:44:46.325000 2980353 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:44:46.325000 2980355 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:44:46.327000 2980353 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:44:46.328000 2980353 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+W1106 01:44:46.327000 2980355 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:44:46.329000 2980355 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+W1106 01:44:46.524000 2980351 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:44:46.526000 2980351 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:44:46.527000 2980351 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+W1106 01:44:46.530000 2980349 torch/_opaque_base.py:6] torch._opaque_base is deprecated, use torch._custom_class_base instead
+W1106 01:44:46.531000 2980349 torch/_library/opaque_object.py:294] register_opaque_type is deprecated, use register_custom_class instead
+W1106 01:44:46.532000 2980349 torch/_library/opaque_object.py:211] typ='value' is deprecated, use typ='constant' instead
+(Worker pid=2980355) INFO 11-06 01:44:55 [parallel_state.py:1935] world_size=4 rank=3 local_rank=3 distributed_init_method=file:///mnt/data/agent-v/d3c25120-e2e-45915/local/vllm_dist_6951231c59364d22b4bb626ca61b38d7 backend=nccl
+(Worker pid=2980353) INFO 11-06 01:44:55 [parallel_state.py:1935] world_size=4 rank=2 local_rank=2 distributed_init_method=file:///mnt/data/agent-v/d3c25120-e2e-45915/local/vllm_dist_6951231c59364d22b4bb626ca61b38d7 backend=nccl
+(Worker pid=2980349) INFO 11-06 01:44:56 [parallel_state.py:1935] world_size=4 rank=0 local_rank=0 distributed_init_method=file:///mnt/data/agent-v/d3c25120-e2e-45915/local/vllm_dist_6951231c59364d22b4bb626ca61b38d7 backend=nccl
+(Worker pid=2980351) INFO 11-06 01:44:57 [parallel_state.py:1935] world_size=4 rank=1 local_rank=1 distributed_init_method=file:///mnt/data/agent-v/d3c25120-e2e-45915/local/vllm_dist_6951231c59364d22b4bb626ca61b38d7 backend=nccl
+(Worker pid=2980349) INFO 11-06 01:45:01 [pynccl.py:148] vLLM is using nccl==2.32.3
+(Worker pid=2980349) INFO 11-06 01:45:02 [cuda_communicator.py:375] Using ['FLASHINFER', 'CUSTOM', 'SYMM_MEM', 'PYNCCL'] all-reduce backends (in dispatch order) for group 'tp:0' out of potential backends: ['FLASHINFER_PCIE_IPC', 'FLASHINFER', 'NCCL_SYMM_MEM', 'QUICK_REDUCE', 'AITER_CUSTOM', 'CUSTOM', 'SYMM_MEM', 'PYNCCL'].
+(Worker pid=2980349) INFO 11-06 01:45:05 [cuda_communicator.py:375] Using ['PYNCCL'] all-reduce backends (in dispatch order) for group 'ep:0' out of potential backends: ['FLASHINFER_PCIE_IPC', 'FLASHINFER', 'NCCL_SYMM_MEM', 'QUICK_REDUCE', 'AITER_CUSTOM', 'CUSTOM', 'SYMM_MEM', 'PYNCCL'].
+(Worker pid=2980349) INFO 11-06 01:45:05 [parallel_state.py:2391] rank 0 in world size 4 is assigned as DP rank 0, PP rank 0, PCP rank 0, TP rank 0, ETP rank 0, EP rank 0, EPLB rank N/A
+(Worker pid=2980349) INFO 11-06 01:45:05 [gpu_worker.py:558] Using V2 Model Runner
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:06 [model_runner.py:403] Loading model from scratch...
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:06 [cuda.py:571] Using backend AttentionBackendEnum.FLASH_ATTN for vit attention
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:06 [mm_encoder_attention.py:372] Using AttentionBackendEnum.FLASH_ATTN for MMEncoderAttention.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:07 [mhc.py:93] DSV4.1 mHC: CuTe DSL Lamport all-reduce fused with mHC for up to 16 tokens.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:07 [quant_config.py:84] DeepSeek V4 expert_dtype resolved to 'fp4'
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:07 [__init__.py:1007] Using FlashInferCutedslMxfp8LinearKernel for MXFP8 GEMM
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:07 [attention.py:248] Using DeepSeek's nvfp4_ds_mla KV cache format.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:07 [mxfp4.py:844] Using 'FLASHINFER_TRTLLM_MXFP4_MXFP8' Mxfp4 MoE backend.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:08 [attention.py:1492] Using FP8 indexer cache for Lightning Indexer.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:08 [deep_gemm.py:233] deep_gemm not found in site-packages, trying vendored vllm.third_party.deep_gemm
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:08 [deep_gemm.py:260] DeepGEMM PDL enabled on vllm.third_party.deep_gemm.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:08 [model.py:175] DSV4.1 mHC: MoE top-k finalize fused into the all-reduce for up to 16 tokens.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:08 [model.py:893] Decoder SWA bounded replay: in eager prefill steps, layer 20 writes its KV for every token, and the rest of it and layers 21-39 run on each request's last 128 tokens only.
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+[transformers] You are using a model of type `deepseek_v41` to instantiate a model of type ``. This may be expected if you are loading a checkpoint that shares a subset of the architecture (e.g., loading a `sam2_video` checkpoint into `Sam2Model`), but is otherwise not supported and can yield errors. Please verify that the checkpoint is compatible with the model you are instantiating.
+(Worker_TP3 pid=2980355) INFO 11-06 01:45:19 [engram.py:475] Built engram token map (129280 -> 99092 ids) for layers (1, 14)
+(Worker_TP2 pid=2980353) INFO 11-06 01:45:20 [engram.py:475] Built engram token map (129280 -> 99092 ids) for layers (1, 14)
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:20 [engram.py:475] Built engram token map (129280 -> 99092 ids) for layers (1, 14)
+(Worker_TP0 pid=2980349) WARNING 11-06 01:45:20 [compilation.py:1367] Op 'quant_fp8' not present in model, enabling with '+quant_fp8' has no effect
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:20 [base_loader.py:95] Initializing model took 13.366564 seconds
+(Worker_TP1 pid=2980351) INFO 11-06 01:45:20 [engram.py:475] Built engram token map (129280 -> 99092 ids) for layers (1, 14)
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:56 [weight_utils.py:1125] Filesystem type for checkpoints: FUSE.GCSFUSE. Checkpoint size: 475.25 GiB. Available RAM: 562.63 GiB.
+(Worker_TP0 pid=2980349) INFO 11-06 01:45:56 [weight_utils.py:1148] Auto-prefetch is disabled because the filesystem (FUSE.GCSFUSE) is not a recognized network FS (NFS/Lustre). If you want to force prefetching, start vLLM with --safetensors-load-strategy=prefetch.
+Loading safetensors checkpoint shards:   0% Completed | 0/48 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:   2% Completed | 1/48 [00:00<00:25,  1.81it/s]
+Loading safetensors checkpoint shards:   4% Completed | 2/48 [00:01<00:24,  1.88it/s]
+Loading safetensors checkpoint shards:   6% Completed | 3/48 [00:02<00:43,  1.04it/s]
+Loading safetensors checkpoint shards:   8% Completed | 4/48 [00:04<00:51,  1.18s/it]
+Loading safetensors checkpoint shards:  10% Completed | 5/48 [00:05<00:54,  1.27s/it]
+Loading safetensors checkpoint shards:  12% Completed | 6/48 [00:07<00:59,  1.41s/it]
+Loading safetensors checkpoint shards:  15% Completed | 7/48 [00:08<01:03,  1.54s/it]
+Loading safetensors checkpoint shards:  17% Completed | 8/48 [00:10<01:01,  1.54s/it]
+Loading safetensors checkpoint shards:  19% Completed | 9/48 [00:11<00:59,  1.52s/it]
+Loading safetensors checkpoint shards:  21% Completed | 10/48 [00:13<00:56,  1.50s/it]
+Loading safetensors checkpoint shards:  23% Completed | 11/48 [00:15<00:56,  1.52s/it]
+Loading safetensors checkpoint shards:  25% Completed | 12/48 [00:16<00:53,  1.50s/it]
+Loading safetensors checkpoint shards:  27% Completed | 13/48 [00:17<00:52,  1.49s/it]
+Loading safetensors checkpoint shards:  29% Completed | 14/48 [00:19<00:50,  1.47s/it]
+Loading safetensors checkpoint shards:  31% Completed | 15/48 [00:20<00:47,  1.44s/it]
+Loading safetensors checkpoint shards:  33% Completed | 16/48 [00:22<00:45,  1.43s/it]
+Loading safetensors checkpoint shards:  35% Completed | 17/48 [00:23<00:43,  1.41s/it]
+Loading safetensors checkpoint shards:  38% Completed | 18/48 [00:24<00:42,  1.40s/it]
+Loading safetensors checkpoint shards:  40% Completed | 19/48 [00:26<00:40,  1.39s/it]
+Loading safetensors checkpoint shards:  42% Completed | 20/48 [00:27<00:38,  1.38s/it]
+Loading safetensors checkpoint shards:  44% Completed | 21/48 [00:29<00:37,  1.39s/it]
+Loading safetensors checkpoint shards:  46% Completed | 22/48 [00:30<00:37,  1.43s/it]
+Loading safetensors checkpoint shards:  48% Completed | 23/48 [00:32<00:38,  1.53s/it]
+Loading safetensors checkpoint shards:  50% Completed | 24/48 [00:33<00:35,  1.47s/it]
+Loading safetensors checkpoint shards:  52% Completed | 25/48 [00:35<00:34,  1.49s/it]
+Loading safetensors checkpoint shards:  54% Completed | 26/48 [00:36<00:32,  1.48s/it]
+Loading safetensors checkpoint shards:  56% Completed | 27/48 [00:38<00:32,  1.55s/it]
+Loading safetensors checkpoint shards:  58% Completed | 28/48 [00:40<00:31,  1.58s/it]
+Loading safetensors checkpoint shards:  60% Completed | 29/48 [00:41<00:30,  1.58s/it]
+Loading safetensors checkpoint shards:  62% Completed | 30/48 [00:43<00:28,  1.58s/it]
+Loading safetensors checkpoint shards:  65% Completed | 31/48 [00:44<00:27,  1.61s/it]
+Loading safetensors checkpoint shards:  67% Completed | 32/48 [00:46<00:25,  1.59s/it]
+Loading safetensors checkpoint shards:  69% Completed | 33/48 [00:47<00:23,  1.56s/it]
+Loading safetensors checkpoint shards:  71% Completed | 34/48 [00:49<00:21,  1.55s/it]
+Loading safetensors checkpoint shards:  73% Completed | 35/48 [00:50<00:20,  1.56s/it]
+Loading safetensors checkpoint shards:  75% Completed | 36/48 [00:52<00:18,  1.56s/it]
+Loading safetensors checkpoint shards:  77% Completed | 37/48 [00:54<00:17,  1.55s/it]
+Loading safetensors checkpoint shards:  79% Completed | 38/48 [00:55<00:15,  1.53s/it]
+Loading safetensors checkpoint shards:  81% Completed | 39/48 [00:56<00:13,  1.50s/it]
+Loading safetensors checkpoint shards:  83% Completed | 40/48 [00:58<00:11,  1.48s/it]
+Loading safetensors checkpoint shards:  85% Completed | 41/48 [00:59<00:10,  1.44s/it]
+Loading safetensors checkpoint shards:  88% Completed | 42/48 [01:01<00:08,  1.41s/it]
+Loading safetensors checkpoint shards:  90% Completed | 43/48 [01:01<00:05,  1.14s/it]
+(Worker_TP3 pid=2980355) INFO 11-06 01:46:58 [eagle3_utils.py:26] Using Eagle3 auxiliary layers from config: (37, 38, 39)
+(Worker_TP3 pid=2980355) INFO 11-06 01:46:58 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+Loading safetensors checkpoint shards:  92% Completed | 44/48 [01:02<00:03,  1.07it/s]
+Loading safetensors checkpoint shards:  94% Completed | 45/48 [01:02<00:02,  1.26it/s]
+Loading safetensors checkpoint shards:  96% Completed | 46/48 [01:02<00:01,  1.45it/s]
+(Worker_TP2 pid=2980353) INFO 11-06 01:47:01 [eagle3_utils.py:26] Using Eagle3 auxiliary layers from config: (37, 38, 39)
+(Worker_TP2 pid=2980353) INFO 11-06 01:47:01 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+Loading safetensors checkpoint shards:  98% Completed | 47/48 [01:08<00:02,  2.09s/it]
+Loading safetensors checkpoint shards: 100% Completed | 48/48 [01:13<00:00,  3.06s/it]
+Loading safetensors checkpoint shards: 100% Completed | 48/48 [01:13<00:00,  1.53s/it]
+
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:10 [default_loader.py:506] Loading weights took 85.14 seconds
+(Worker_TP1 pid=2980351) INFO 11-06 01:47:10 [eagle3_utils.py:26] Using Eagle3 auxiliary layers from config: (37, 38, 39)
+(Worker_TP1 pid=2980351) INFO 11-06 01:47:10 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:10 [__init__.py:1007] Using DeepGemmMxfp8BmmLinearKernel for MXFP8 GEMM
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:10 [deep_gemm.py:172] DeepGEMM E8M0 enabled on current platform.
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:11 [mxfp4.py:2325] Using MoEPrepareAndFinalizeNoDPEPModular
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:11 [mxfp4.py:2326] Using TrtLlmMxfp4ExpertsModular
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:12 [eagle3_utils.py:26] Using Eagle3 auxiliary layers from config: (37, 38, 39)
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:12 [vllm.py:1512] Resolved Engram configuration: EngramConfig(cpu_offload=False, disk_offload=False, embedding_across_dp=True, dp_shared_memory=False, use_thp=False)
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:12 [vllm.py:832] Auto-enabling VLLM_USE_BREAKABLE_CUDAGRAPH=1. Set VLLM_USE_BREAKABLE_CUDAGRAPH=0 to opt out.
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:12 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(Worker_TP0 pid=2980349) WARNING 11-06 01:47:12 [vllm.py:2405] max_num_scheduled_tokens is set to 1260 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:12 [compilation.py:317] Enabled custom fusions: norm_quant, act_quant, allreduce_rms
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:12 [base_loader.py:95] Initializing model took 0.036126 seconds
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:24 [weight_utils.py:1125] Filesystem type for checkpoints: FUSE.GCSFUSE. Checkpoint size: 475.25 GiB. Available RAM: 559.61 GiB.
+Loading safetensors checkpoint shards:   0% Completed | 0/48 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:   2% Completed | 1/48 [00:00<00:18,  2.49it/s]
+Loading safetensors checkpoint shards:   4% Completed | 2/48 [00:00<00:18,  2.54it/s]
+Loading safetensors checkpoint shards:   6% Completed | 3/48 [00:01<00:18,  2.50it/s]
+Loading safetensors checkpoint shards:   8% Completed | 4/48 [00:01<00:18,  2.44it/s]
+Loading safetensors checkpoint shards:  10% Completed | 5/48 [00:02<00:17,  2.40it/s]
+Loading safetensors checkpoint shards:  12% Completed | 6/48 [00:02<00:17,  2.35it/s]
+Loading safetensors checkpoint shards:  15% Completed | 7/48 [00:02<00:18,  2.22it/s]
+Loading safetensors checkpoint shards:  17% Completed | 8/48 [00:03<00:18,  2.15it/s]
+Loading safetensors checkpoint shards:  19% Completed | 9/48 [00:03<00:18,  2.15it/s]
+Loading safetensors checkpoint shards:  21% Completed | 10/48 [00:04<00:17,  2.17it/s]
+Loading safetensors checkpoint shards:  23% Completed | 11/48 [00:04<00:16,  2.18it/s]
+Loading safetensors checkpoint shards:  25% Completed | 12/48 [00:05<00:17,  2.06it/s]
+Loading safetensors checkpoint shards:  27% Completed | 13/48 [00:05<00:17,  2.05it/s]
+Loading safetensors checkpoint shards:  29% Completed | 14/48 [00:06<00:16,  2.08it/s]
+Loading safetensors checkpoint shards:  31% Completed | 15/48 [00:06<00:15,  2.17it/s]
+Loading safetensors checkpoint shards:  33% Completed | 16/48 [00:07<00:14,  2.20it/s]
+Loading safetensors checkpoint shards:  35% Completed | 17/48 [00:07<00:13,  2.25it/s]
+Loading safetensors checkpoint shards:  38% Completed | 18/48 [00:08<00:13,  2.28it/s]
+Loading safetensors checkpoint shards:  40% Completed | 19/48 [00:08<00:13,  2.22it/s]
+Loading safetensors checkpoint shards:  42% Completed | 20/48 [00:09<00:13,  2.13it/s]
+Loading safetensors checkpoint shards:  44% Completed | 21/48 [00:09<00:13,  2.05it/s]
+Loading safetensors checkpoint shards:  46% Completed | 22/48 [00:10<00:12,  2.11it/s]
+Loading safetensors checkpoint shards:  48% Completed | 23/48 [00:10<00:11,  2.12it/s]
+Loading safetensors checkpoint shards:  50% Completed | 24/48 [00:10<00:10,  2.20it/s]
+Loading safetensors checkpoint shards:  52% Completed | 25/48 [00:11<00:10,  2.17it/s]
+(Worker_TP3 pid=2980355) INFO 11-06 01:47:35 [model_runner.py:432] Model loading took 127.92 GiB memory and 149.832531 seconds
+(Worker_TP3 pid=2980355) INFO 11-06 01:47:35 [interface.py:781] Setting kv cache block size to 128 for FLASHMLA_MEGA_ATTN_DSV41/DEEPSEEK_SPARSE_SWA/DEEPSEEK_V41_SPARSE_INDEXER/CompressorBackend backend(s).
+Loading safetensors checkpoint shards:  54% Completed | 26/48 [00:11<00:09,  2.22it/s]
+Loading safetensors checkpoint shards:  56% Completed | 27/48 [00:12<00:09,  2.27it/s]
+Loading safetensors checkpoint shards:  58% Completed | 28/48 [00:12<00:08,  2.36it/s]
+Loading safetensors checkpoint shards:  60% Completed | 29/48 [00:13<00:08,  2.37it/s]
+Loading safetensors checkpoint shards:  62% Completed | 30/48 [00:13<00:07,  2.42it/s]
+Loading safetensors checkpoint shards:  65% Completed | 31/48 [00:13<00:07,  2.39it/s]
+(Worker_TP2 pid=2980353) INFO 11-06 01:47:38 [model_runner.py:432] Model loading took 127.91 GiB memory and 152.175525 seconds
+(Worker_TP2 pid=2980353) INFO 11-06 01:47:38 [interface.py:781] Setting kv cache block size to 128 for FLASHMLA_MEGA_ATTN_DSV41/DEEPSEEK_SPARSE_SWA/DEEPSEEK_V41_SPARSE_INDEXER/CompressorBackend backend(s).
+Loading safetensors checkpoint shards:  67% Completed | 32/48 [00:14<00:06,  2.35it/s]
+Loading safetensors checkpoint shards:  69% Completed | 33/48 [00:14<00:06,  2.36it/s]
+Loading safetensors checkpoint shards:  71% Completed | 34/48 [00:15<00:05,  2.36it/s]
+Loading safetensors checkpoint shards:  73% Completed | 35/48 [00:15<00:05,  2.33it/s]
+Loading safetensors checkpoint shards:  75% Completed | 36/48 [00:16<00:05,  2.26it/s]
+Loading safetensors checkpoint shards:  77% Completed | 37/48 [00:16<00:04,  2.20it/s]
+Loading safetensors checkpoint shards:  79% Completed | 38/48 [00:16<00:04,  2.28it/s]
+Loading safetensors checkpoint shards:  81% Completed | 39/48 [00:17<00:03,  2.37it/s]
+Loading safetensors checkpoint shards:  83% Completed | 40/48 [00:17<00:03,  2.09it/s]
+Loading safetensors checkpoint shards:  85% Completed | 41/48 [00:18<00:03,  2.21it/s]
+Loading safetensors checkpoint shards:  88% Completed | 42/48 [00:18<00:02,  2.24it/s]
+Loading safetensors checkpoint shards:  90% Completed | 43/48 [00:19<00:02,  2.39it/s]
+Loading safetensors checkpoint shards:  92% Completed | 44/48 [00:19<00:02,  1.99it/s]
+Loading safetensors checkpoint shards:  94% Completed | 45/48 [00:20<00:01,  1.81it/s]
+Loading safetensors checkpoint shards:  96% Completed | 46/48 [00:21<00:01,  1.68it/s]
+Loading safetensors checkpoint shards:  98% Completed | 47/48 [00:21<00:00,  1.90it/s]
+Loading safetensors checkpoint shards: 100% Completed | 48/48 [00:21<00:00,  2.13it/s]
+Loading safetensors checkpoint shards: 100% Completed | 48/48 [00:21<00:00,  2.19it/s]
+
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:46 [dspark.py:541] DSpark draft model loaded: 99 params
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:46 [default_loader.py:506] Loading weights took 32.67 seconds
+(Worker_TP1 pid=2980351) INFO 11-06 01:47:47 [model_runner.py:432] Model loading took 127.91 GiB memory and 161.294140 seconds
+(Worker_TP0 pid=2980349) WARNING 11-06 01:47:47 [speculator.py:290] Draft model DSparkDeepseekV4ForCausalLM does not support external multimodal embeddings. Embeddings from the target model will not be passed to the drafter; using text-only draft inputs instead.
+(Worker_TP1 pid=2980351) INFO 11-06 01:47:47 [interface.py:781] Setting kv cache block size to 128 for FLASHMLA_MEGA_ATTN_DSV41/DEEPSEEK_SPARSE_SWA/DEEPSEEK_V41_SPARSE_INDEXER/CompressorBackend backend(s).
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:48 [model_runner.py:432] Model loading took 127.91 GiB memory and 162.649722 seconds
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:48 [topk_topp_sampler.py:152] Using FlashInfer for top-p & top-k sampling.
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:48 [torch_utils.py:293] Reducing Torch threads from 35 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:48 [interface.py:781] Setting kv cache block size to 128 for FLASHMLA_MEGA_ATTN_DSV41/DEEPSEEK_SPARSE_SWA/DEEPSEEK_V41_SPARSE_INDEXER/CompressorBackend backend(s).
+(EngineCore pid=2979810) INFO 11-06 01:47:48 [torch_utils.py:293] Reducing Torch threads from 35 to 1 for serving. Set OMP_NUM_THREADS in the external environment to override.
+(EngineCore pid=2979810) INFO 11-06 01:47:48 [utils.py:420] Using BLHNC KV cache layout.
+/usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/dsl.py:2300: UserWarning: Argument aux_data (position 19) cannot be converted to a JitArgument for function 'cutlass___call___vllmvllm_flash_attncuteflash_fwd_sm100FlashAttentionForwardSm100_object_at__Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_None_0125_T'. Its type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>` is not supported. If the value is known at compile time, annotate it: `aux_data: Constexpr`. Otherwise, implement the `JitArgument` or `DynamicExpression` protocol for type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>`, or register a custom argument adapter.
+  exe_args, func_types, adapted_args = self.generate_mlir_function_types(
+/usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/dsl.py:2300: UserWarning: Argument aux_data (position 19) cannot be converted to a JitArgument for function 'cutlass___call___vllmvllm_flash_attncuteflash_fwd_sm100FlashAttentionForwardSm100_object_at__Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_None_0125_T'. Its type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>` is not supported. If the value is known at compile time, annotate it: `aux_data: Constexpr`. Otherwise, implement the `JitArgument` or `DynamicExpression` protocol for type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>`, or register a custom argument adapter.
+  exe_args, func_types, adapted_args = self.generate_mlir_function_types(
+(Worker_TP0 pid=2980349) INFO 11-06 01:47:57 [encoder_runner.py:131] Encoder cache will be initialized with a budget of 1260 tokens, and profiled with 1 image items of the maximum feature size.
+/usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/dsl.py:2300: UserWarning: Argument aux_data (position 19) cannot be converted to a JitArgument for function 'cutlass___call___vllmvllm_flash_attncuteflash_fwd_sm100FlashAttentionForwardSm100_object_at__Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_None_0125_T'. Its type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>` is not supported. If the value is known at compile time, annotate it: `aux_data: Constexpr`. Otherwise, implement the `JitArgument` or `DynamicExpression` protocol for type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>`, or register a custom argument adapter.
+  exe_args, func_types, adapted_args = self.generate_mlir_function_types(
+/usr/local/lib/python3.12/dist-packages/nvidia_cutlass_dsl/dsl_packages/cutlass/base_dsl/dsl.py:2300: UserWarning: Argument aux_data (position 19) cannot be converted to a JitArgument for function 'cutlass___call___vllmvllm_flash_attncuteflash_fwd_sm100FlashAttentionForwardSm100_object_at__Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_Tensorgmemoi64i641_None_0125_T'. Its type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>` is not supported. If the value is known at compile time, annotate it: `aux_data: Constexpr`. Otherwise, implement the `JitArgument` or `DynamicExpression` protocol for type `<class 'vllm.vllm_flash_attn.cute.utils.AuxData'>`, or register a custom argument adapter.
+  exe_args, func_types, adapted_args = self.generate_mlir_function_types(
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:00 [flashinfer_all_reduce.py:252] Initialized FlashInfer Allreduce norm fusion workspace with backend=mnnvl
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:08 [gpu_worker.py:843] Available KV cache memory: 35.77 GiB
+(EngineCore pid=2979810) INFO 11-06 01:48:09 [kv_cache_utils.py:867] kv cache group sizes (32, 32, 32, 32, 32, 32, 128, 8)
+(EngineCore pid=2979810) INFO 11-06 01:48:09 [kv_cache_utils.py:868] kv lcm block sizes 128
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:09 [indexer.py:1075] DSA indexer decode path: use_flattening=False supports_varlen=True (next_n=6, use_fp4_cache=False)
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:09 [sparse_indexer.py:167] DeepSeek V4.1 indexer: candidate consumers score only the candidate blocks with DeepGEMM sparse MQA logits (2048 sparse blocks of 8 tokens per row).
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:09 [kernel_warmup.py:237] JIT kernel warmup starting.
+(Worker_TP3 pid=2980355) INFO 11-06 01:48:09 [kernel_warmup.py:237] JIT kernel warmup starting.
+(Worker_TP2 pid=2980353) INFO 11-06 01:48:09 [kernel_warmup.py:237] JIT kernel warmup starting.
+(Worker_TP1 pid=2980351) INFO 11-06 01:48:09 [kernel_warmup.py:237] JIT kernel warmup starting.
+JIT kernel warmup (230 compile keys):   0%|          | 0/15 [00:00<?, ?kernel/s]JIT kernel warmup (230 compile keys):  87%|████████▋ | 13/15 [00:12<00:01,  1.02kernel/s, CombineTopkSwaIndicesKernel (9 keys)]Elaborating:   0%|          | 0/17 [00:00<?, ?it/s]Elaborating:   0%|          | 0/17 [00:00<?, ?it/s]Elaborating:  18%|█▊        | 3/17 [00:00<00:00, 18.43it/s]Elaborating:  18%|█▊        | 3/17 [00:00<00:00, 18.32it/s]Elaborating:  29%|██▉       | 5/17 [00:00<00:00, 16.89it/s]Elaborating:  29%|██▉       | 5/17 [00:00<00:00, 16.83it/s]Elaborating:  47%|████▋     | 8/17 [00:00<00:00, 21.08it/s]Elaborating:  47%|████▋     | 8/17 [00:00<00:00, 20.95it/s]Elaborating:  65%|██████▍   | 11/17 [00:00<00:00, 20.99it/s]Elaborating:  65%|██████▍   | 11/17 [00:00<00:00, 20.87it/s]Elaborating:  82%|████████▏ | 14/17 [00:00<00:00, 20.13it/s]Elaborating:  82%|████████▏ | 14/17 [00:00<00:00, 20.16it/s]Elaborating: 100%|██████████| 17/17 [00:00<00:00, 21.27it/s]
+Elaborating: 100%|██████████| 17/17 [00:00<00:00, 21.26it/s]
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                                                                                    2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+                                                          Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          2026-11-06 01:48:48  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]Parallel Compiling: 100%|██████████| 17/17 [00:00<00:00, 226.46it/s]Parallel Compiling: 100%|██████████| 17/17 [00:00<00:00, 242.85it/s]
+
+(Worker_TP2 pid=2980353) INFO 11-06 01:48:48 [kernel_warmup.py:250] JIT kernel warmup finished in 39.74s.
+(Worker_TP3 pid=2980355) INFO 11-06 01:48:48 [kernel_warmup.py:250] JIT kernel warmup finished in 39.74s.
+JIT kernel warmup (230 compile keys):  93%|█████████▎| 14/15 [00:40<00:03,  3.63s/kernel, FusedWoAKernel (46 keys)]            Elaborating:   0%|          | 0/17 [00:00<?, ?it/s]
+Elaborating:   0%|          | 0/17 [00:00<?, ?it/s][A
+Elaborating:  18%|█▊        | 3/17 [00:00<00:00, 18.10it/s][AElaborating:  18%|█▊        | 3/17 [00:00<00:00, 17.74it/s]
+Elaborating:  29%|██▉       | 5/17 [00:00<00:00, 16.58it/s][AElaborating:  29%|██▉       | 5/17 [00:00<00:00, 16.30it/s]
+Elaborating:  47%|████▋     | 8/17 [00:00<00:00, 20.64it/s][AElaborating:  47%|████▋     | 8/17 [00:00<00:00, 20.33it/s]
+Elaborating:  65%|██████▍   | 11/17 [00:00<00:00, 20.34it/s][AElaborating:  65%|██████▍   | 11/17 [00:00<00:00, 20.18it/s](Worker_TP2 pid=2980353) INFO 11-06 01:48:50 [flashinfer_sparse_mla_warmup.py:328] Warming up DeepSeek V4 sparse MLA attention for mixed tokens=16.
+(Worker_TP3 pid=2980355) INFO 11-06 01:48:50 [flashinfer_sparse_mla_warmup.py:328] Warming up DeepSeek V4 sparse MLA attention for mixed tokens=16.
+
+Elaborating:  82%|████████▏ | 14/17 [00:00<00:00, 19.69it/s][AElaborating:  82%|████████▏ | 14/17 [00:00<00:00, 19.56it/s]Elaborating: 100%|██████████| 17/17 [00:00<00:00, 20.83it/s]
+
+Elaborating: 100%|██████████| 17/17 [00:00<00:00, 20.64it/s]
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s][AParallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                                                                                   
+                                                          [A2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+JIT kernel warmup (230 compile keys):  93%|█████████▎| 14/15 [00:41<00:03,  3.63s/kernel, MHCPreNormKernel (21 keys)]
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s][A                                                          2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.                                                                                                                     
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]
+                                                          [A2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+JIT kernel warmup (230 compile keys):  93%|█████████▎| 14/15 [00:41<00:03,  3.63s/kernel, MHCPreNormKernel (21 keys)]
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s][A                                                                                                                     
+                                                                                                                    [A2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]JIT kernel warmup (230 compile keys):  93%|█████████▎| 14/15 [00:41<00:03,  3.63s/kernel, MHCPreNormKernel (21 keys)]                                                          
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s][A2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                                                                                     
+                                                                                                                    [A2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.JIT kernel warmup (230 compile keys):  93%|█████████▎| 14/15 [00:41<00:03,  3.63s/kernel, MHCPreNormKernel (21 keys)]
+
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s][A                                                                                                                                                                               2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s]                                                          [A2026-11-06 01:48:50  [TileLang:tilelang.cache.kernel_cache:WARNING] (kernel_cache.py:357): Found kernel 'mhc_pre_big_fuse_with_norm_tilelang' in memory cache. For better performance, consider using `@tilelang.jit` instead of direct kernel caching.
+JIT kernel warmup (230 compile keys):  93%|█████████▎| 14/15 [00:41<00:03,  3.63s/kernel, MHCPreNormKernel (21 keys)]
+Parallel Compiling:   0%|          | 0/17 [00:00<?, ?it/s][AParallel Compiling: 100%|██████████| 17/17 [00:00<00:00, 266.15it/s]
+(Worker_TP1 pid=2980351) INFO 11-06 01:48:50 [kernel_warmup.py:250] JIT kernel warmup finished in 41.44s.
+Parallel Compiling: 100%|██████████| 17/17 [00:00<00:00, 227.22it/s]
+JIT kernel warmup (230 compile keys): 100%|██████████| 15/15 [00:41<00:00,  3.29s/kernel, MHCPreNormKernel (21 keys)]JIT kernel warmup (230 compile keys): 100%|██████████| 15/15 [00:41<00:00,  2.76s/kernel, MHCPreNormKernel (21 keys)]
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:50 [kernel_warmup.py:250] JIT kernel warmup finished in 41.44s.
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:50 [kernel_warmup.py:140] Warming up ll_bf16 router GEMM kernels for shapes: ((5120, 384),).
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:51 [flashinfer_sparse_mla_warmup.py:328] Warming up DeepSeek V4 sparse MLA attention for mixed tokens=16.
+(Worker_TP1 pid=2980351) INFO 11-06 01:48:51 [flashinfer_sparse_mla_warmup.py:328] Warming up DeepSeek V4 sparse MLA attention for mixed tokens=16.
+(Worker_TP2 pid=2980353) INFO 11-06 01:48:58 [cache.py:511] Using nvfp4_ds_mla data type to store kv cache. It reduces the GPU memory footprint and boosts the performance. Meanwhile, it may cause accuracy drop without a proper scaling factor
+(Worker_TP3 pid=2980355) INFO 11-06 01:48:58 [cache.py:511] Using nvfp4_ds_mla data type to store kv cache. It reduces the GPU memory footprint and boosts the performance. Meanwhile, it may cause accuracy drop without a proper scaling factor
+(Worker_TP3 pid=2980355) INFO 11-06 01:48:58 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(Worker_TP2 pid=2980353) INFO 11-06 01:48:58 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(Worker_TP1 pid=2980351) INFO 11-06 01:48:58 [cache.py:511] Using nvfp4_ds_mla data type to store kv cache. It reduces the GPU memory footprint and boosts the performance. Meanwhile, it may cause accuracy drop without a proper scaling factor
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:58 [kernel_warmup.py:522] Skipping FlashInfer autotuning for ops ('trtllm_batch_decode_mla',)
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:58 [flashinfer_autotune_cache.py:106] Using legacy FlashInfer autotune cache synchronization for multi-rank deployments until FlashInfer coordinates cache hits.
+(Worker_TP1 pid=2980351) INFO 11-06 01:48:58 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:58 [cache.py:511] Using nvfp4_ds_mla data type to store kv cache. It reduces the GPU memory footprint and boosts the performance. Meanwhile, it may cause accuracy drop without a proper scaling factor
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:58 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(Worker_TP0 pid=2980349) INFO 11-06 01:48:58 [kernel_warmup.py:546] Using FlashInfer autotune cache file: /home/agent-v/.cache/vllm/flashinfer_autotune_cache/0.7.2.post1/100a/f8d0633ca5db9bae16e54b34cc8edaa807521d08cf77f56a33e6156119105347/autotune_configs_dp0_rank0.json. Pass --disable-flashinfer-autotune to skip autotuning.
+2026-11-06 01:48:59,070 - INFO - autotuner.py:3814 - flashinfer.jit: [Autotuner]: Loaded 162 configs from /home/agent-v/.cache/vllm/flashinfer_autotune_cache/0.7.2.post1/100a/f8d0633ca5db9bae16e54b34cc8edaa807521d08cf77f56a33e6156119105347/autotune_configs_dp0_rank2.json
+2026-11-06 01:48:59,073 - INFO - autotuner.py:3814 - flashinfer.jit: [Autotuner]: Loaded 162 configs from /home/agent-v/.cache/vllm/flashinfer_autotune_cache/0.7.2.post1/100a/f8d0633ca5db9bae16e54b34cc8edaa807521d08cf77f56a33e6156119105347/autotune_configs_dp0_rank1.json
+2026-11-06 01:48:59,078 - INFO - autotuner.py:3814 - flashinfer.jit: [Autotuner]: Loaded 162 configs from /home/agent-v/.cache/vllm/flashinfer_autotune_cache/0.7.2.post1/100a/f8d0633ca5db9bae16e54b34cc8edaa807521d08cf77f56a33e6156119105347/autotune_configs_dp0_rank3.json
+2026-11-06 01:48:59,082 - INFO - autotuner.py:3814 - flashinfer.jit: [Autotuner]: Loaded 162 configs from /home/agent-v/.cache/vllm/flashinfer_autotune_cache/0.7.2.post1/100a/f8d0633ca5db9bae16e54b34cc8edaa807521d08cf77f56a33e6156119105347/autotune_configs_dp0_rank0.json
+2026-11-06 01:48:59,084 - INFO - autotuner.py:1048 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
+2026-11-06 01:48:59,084 - INFO - autotuner.py:1048 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
+2026-11-06 01:48:59,084 - INFO - autotuner.py:1048 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
+2026-11-06 01:48:59,084 - INFO - autotuner.py:1048 - flashinfer.jit: [Autotuner]: Autotuning process starts ...
+2026-11-06 01:48:59,085 - INFO - autotuner.py:1071 - flashinfer.jit: [Autotuner]: Autotuning process ends
+2026-11-06 01:48:59,085 - INFO - autotuner.py:1071 - flashinfer.jit: [Autotuner]: Autotuning process ends
+2026-11-06 01:48:59,086 - INFO - autotuner.py:1071 - flashinfer.jit: [Autotuner]: Autotuning process ends
+2026-11-06 01:48:59,086 - INFO - autotuner.py:1071 - flashinfer.jit: [Autotuner]: Autotuning process ends
+2026-11-06 01:48:59,142 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8GemmRunner, source=config file)
+2026-11-06 01:48:59,142 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8GemmRunner, source=config file)
+2026-11-06 01:48:59,145 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8GemmRunner, source=config file)
+2026-11-06 01:48:59,146 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8GemmRunner, source=config file)
+2026-11-06 01:49:01,479 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for flashinfer::trtllm_fp4_block_scale_moe (runner=MoERunner, source=config file)
+2026-11-06 01:49:01,480 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for flashinfer::trtllm_fp4_block_scale_moe (runner=MoERunner, source=config file)
+2026-11-06 01:49:01,492 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for flashinfer::trtllm_fp4_block_scale_moe (runner=MoERunner, source=config file)
+2026-11-06 01:49:01,492 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for flashinfer::trtllm_fp4_block_scale_moe (runner=MoERunner, source=config file)
+2026-11-06 01:49:04,984 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8WarpSplitKRunner, source=config file)
+2026-11-06 01:49:04,985 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8WarpSplitKRunner, source=config file)
+2026-11-06 01:49:05,020 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8WarpSplitKRunner, source=config file)
+2026-11-06 01:49:05,025 - INFO - autotuner.py:2019 - flashinfer.jit: [Autotuner]: Config cache hit for mxfp8_gemm (runner=CuteDSLMxfp8WarpSplitKRunner, source=config file)
+(EngineCore pid=2979810) INFO 11-06 01:49:10 [shm_broadcast.py:906] No available shared memory broadcast block found in 60 seconds. This typically happens when some processes are hanging or doing some time-consuming work (e.g. compilation, weight/kv cache quantization).
+2026-11-06 01:49:17,335 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1792), (204800,), (286720,), (0,), (1260, 1792), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,337 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 8192), (51200,), (327680,), (0,), (1260, 8192), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,338 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 2048), (2048, 5120), (81920,), (327680,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,339 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1152), (204800,), (184320,), (0,), (1260, 1152), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,340 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 576), (576, 5120), (25600,), (102400,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,341 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers flashinfer::trtllm_fp4_block_scale_moe input_shapes=((1260, 5120), (0,), (1260, 6), (1260, 6), (1260, 5120), (1260, 160), (0,), (0,)); falling back to runner=MoERunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,342 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1792), (204800,), (286720,), (0,), (1260, 1792), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,343 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 8192), (51200,), (327680,), (0,), (1260, 8192), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,343 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 6144), (6144, 6400), (245760,), (1228800,), (0,), (1260, 6400), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,344 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 2048), (2048, 5120), (81920,), (327680,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,345 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1152), (204800,), (184320,), (0,), (1260, 1152), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,346 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 576), (576, 5120), (25600,), (102400,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,347 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers flashinfer::trtllm_fp4_block_scale_moe input_shapes=((1260, 5120), (0,), (1260, 6), (1260, 6), (1260, 5120), (1260, 160), (0,), (0,)); falling back to runner=MoERunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,347 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1792), (204800,), (286720,), (0,), (1260, 1792), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,349 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 6144), (6144, 6400), (245760,), (1228800,), (0,), (1260, 6400), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,349 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 8192), (51200,), (327680,), (0,), (1260, 8192), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,350 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1792), (204800,), (286720,), (0,), (1260, 1792), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,352 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 8192), (51200,), (327680,), (0,), (1260, 8192), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,352 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 2048), (2048, 5120), (81920,), (327680,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,353 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 2048), (2048, 5120), (81920,), (327680,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,354 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1152), (204800,), (184320,), (0,), (1260, 1152), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,355 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1152), (204800,), (184320,), (0,), (1260, 1152), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,355 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 576), (576, 5120), (25600,), (102400,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,356 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 576), (576, 5120), (25600,), (102400,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,356 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers flashinfer::trtllm_fp4_block_scale_moe input_shapes=((1260, 5120), (0,), (1260, 6), (1260, 6), (1260, 5120), (1260, 160), (0,), (0,)); falling back to runner=MoERunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,357 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers flashinfer::trtllm_fp4_block_scale_moe input_shapes=((1260, 5120), (0,), (1260, 6), (1260, 6), (1260, 5120), (1260, 160), (0,), (0,)); falling back to runner=MoERunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,359 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 6144), (6144, 6400), (245760,), (1228800,), (0,), (1260, 6400), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,359 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 6144), (6144, 6400), (245760,), (1228800,), (0,), (1260, 6400), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,365 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 4096), (51200,), (163840,), (0,), (1260, 4096), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,365 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 4096), (51200,), (163840,), (0,), (1260, 4096), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,367 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 4096), (51200,), (163840,), (0,), (1260, 4096), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:17,367 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 1280), (1280, 4096), (51200,), (163840,), (0,), (1260, 4096), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,156 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 15360), (15360, 5120), (614400,), (2457600,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,156 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 15360), (15360, 5120), (614400,), (2457600,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,157 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1536), (204800,), (245760,), (0,), (1260, 1536), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,158 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1536), (204800,), (245760,), (0,), (1260, 1536), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,161 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 15360), (15360, 5120), (614400,), (2457600,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,161 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 15360), (15360, 5120), (614400,), (2457600,), (0,), (1260, 5120), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,163 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1536), (204800,), (245760,), (0,), (1260, 1536), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+2026-11-06 01:49:19,163 - WARNING - autotuner.py:2293 - flashinfer.jit: [AutoTuner]: No tuned config covers mxfp8_gemm input_shapes=((1260, 5120), (5120, 1536), (204800,), (245760,), (0,), (1260, 1536), (41943040,)); falling back to runner=CuteDSLMxfp8GemmRunner tactic=-1.  This shape is outside the tuning bucket range -- expand tuning_buckets / max_num_tokens during the next tuning pass to avoid this perf cliff.
+Capturing CUDA graphs (FULL):   0%|          | 0/16 [00:00<?, ?it/s]Capturing CUDA graphs (FULL):   6%|▋         | 1/16 [00:02<00:32,  2.19s/it]Capturing CUDA graphs (FULL):  12%|█▎        | 2/16 [00:02<00:14,  1.06s/it]Capturing CUDA graphs (FULL):  19%|█▉        | 3/16 [00:02<00:09,  1.42it/s]Capturing CUDA graphs (FULL):  25%|██▌       | 4/16 [00:03<00:06,  1.87it/s]Capturing CUDA graphs (FULL):  31%|███▏      | 5/16 [00:03<00:04,  2.27it/s]Capturing CUDA graphs (FULL):  38%|███▊      | 6/16 [00:03<00:03,  2.61it/s]Capturing CUDA graphs (FULL):  44%|████▍     | 7/16 [00:03<00:03,  2.88it/s]Capturing CUDA graphs (FULL):  50%|█████     | 8/16 [00:04<00:02,  3.10it/s]Capturing CUDA graphs (FULL):  56%|█████▋    | 9/16 [00:05<00:04,  1.52it/s]Capturing CUDA graphs (FULL):  62%|██████▎   | 10/16 [00:05<00:03,  1.85it/s]Capturing CUDA graphs (FULL):  69%|██████▉   | 11/16 [00:06<00:02,  2.19it/s]Capturing CUDA graphs (FULL):  75%|███████▌  | 12/16 [00:06<00:01,  2.50it/s]Capturing CUDA graphs (FULL):  81%|████████▏ | 13/16 [00:06<00:01,  2.78it/s]Capturing CUDA graphs (FULL):  88%|████████▊ | 14/16 [00:06<00:00,  3.00it/s]Capturing CUDA graphs (FULL):  94%|█████████▍| 15/16 [00:08<00:00,  1.61it/s]Capturing CUDA graphs (FULL): 100%|██████████| 16/16 [00:08<00:00,  1.83it/s]Capturing CUDA graphs (FULL): 100%|██████████| 16/16 [00:08<00:00,  1.88it/s]
+(Worker_TP3 pid=2980355) INFO 11-06 01:49:32 [speculator.py:170] Capturing model for DSpark speculator...
+(Worker_TP2 pid=2980353) INFO 11-06 01:49:32 [speculator.py:170] Capturing model for DSpark speculator...
+(Worker_TP0 pid=2980349) INFO 11-06 01:49:32 [speculator.py:170] Capturing model for DSpark speculator...
+(Worker_TP1 pid=2980351) INFO 11-06 01:49:32 [speculator.py:170] Capturing model for DSpark speculator...
+Capturing dspark CUDA graphs (FULL):   0%|          | 0/16 [00:00<?, ?it/s]Capturing dspark CUDA graphs (FULL):  19%|█▉        | 3/16 [00:00<00:03,  3.94it/s]Capturing dspark CUDA graphs (FULL):  44%|████▍     | 7/16 [00:00<00:00,  9.23it/s]Capturing dspark CUDA graphs (FULL):  69%|██████▉   | 11/16 [00:01<00:00, 14.16it/s]Capturing dspark CUDA graphs (FULL):  94%|█████████▍| 15/16 [00:02<00:00,  6.82it/s]Capturing dspark CUDA graphs (FULL): 100%|██████████| 16/16 [00:02<00:00,  7.72it/s]
+(Worker_TP2 pid=2980353) INFO 11-06 01:49:34 [model_runner.py:1217] Graph capturing finished in 12 secs, took 0.63 GiB
+(Worker_TP3 pid=2980355) INFO 11-06 01:49:34 [model_runner.py:1217] Graph capturing finished in 12 secs, took 0.63 GiB
+(Worker_TP2 pid=2980353) INFO 11-06 01:49:34 [gpu_worker.py:1211] Free memory on device (179.19/184.31 GiB) on startup. Desired GPU memory utilization is (0.9, 165.88 GiB). Actual usage is 129.1 GiB for consumed memory (weights + non-torch), 1.01 GiB for peak activation, and 0.63 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=37568136500` (34.99 GiB) to fit into requested memory, or `--kv-cache-memory=51862966784` (48.3 GiB) to fully utilize gpu memory. Current kv cache memory in use is 35.77 GiB.
+(Worker_TP3 pid=2980355) INFO 11-06 01:49:34 [gpu_worker.py:1211] Free memory on device (179.19/184.31 GiB) on startup. Desired GPU memory utilization is (0.9, 165.88 GiB). Actual usage is 129.1 GiB for consumed memory (weights + non-torch), 1.01 GiB for peak activation, and 0.63 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=37566039348` (34.99 GiB) to fit into requested memory, or `--kv-cache-memory=51860869632` (48.3 GiB) to fully utilize gpu memory. Current kv cache memory in use is 35.76 GiB.
+(Worker_TP1 pid=2980351) INFO 11-06 01:49:35 [model_runner.py:1217] Graph capturing finished in 12 secs, took 0.63 GiB
+(Worker_TP1 pid=2980351) INFO 11-06 01:49:35 [gpu_worker.py:1211] Free memory on device (179.19/184.31 GiB) on startup. Desired GPU memory utilization is (0.9, 165.88 GiB). Actual usage is 129.1 GiB for consumed memory (weights + non-torch), 1.01 GiB for peak activation, and 0.63 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=37568136500` (34.99 GiB) to fit into requested memory, or `--kv-cache-memory=51862966784` (48.3 GiB) to fully utilize gpu memory. Current kv cache memory in use is 35.77 GiB.
+(Worker_TP0 pid=2980349) INFO 11-06 01:49:35 [model_runner.py:1217] Graph capturing finished in 12 secs, took 0.63 GiB
+(Worker_TP0 pid=2980349) INFO 11-06 01:49:35 [gpu_worker.py:1211] Free memory on device (178.51/184.31 GiB) on startup. Desired GPU memory utilization is (0.9, 165.88 GiB). Actual usage is 129.1 GiB for consumed memory (weights + non-torch), 1.01 GiB for peak activation, and 0.63 GiB for CUDAGraph memory. Replace gpu_memory_utilization config with `--kv-cache-memory=37568136500` (34.99 GiB) to fit into requested memory, or `--kv-cache-memory=51137548800` (47.63 GiB) to fully utilize gpu memory. Current kv cache memory in use is 35.77 GiB.
+(Worker_TP2 pid=2980353) INFO 11-06 01:49:35 [jit_monitor.py:87] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+(Worker_TP3 pid=2980355) INFO 11-06 01:49:35 [jit_monitor.py:87] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+(Worker_TP1 pid=2980351) INFO 11-06 01:49:35 [jit_monitor.py:87] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+(Worker_TP0 pid=2980349) INFO 11-06 01:49:35 [jit_monitor.py:87] Kernel JIT monitor activated; monitored JIT compilations during inference will use mode=warn.
+(Worker_TP2 pid=2980353) INFO 11-06 01:49:35 [extensible_kv_cache.py:576] Memory after warmup: 46.62 GiB free, 2.72 GiB committed to the KV cache, 1.01 GiB kept for transient activations; 247263 KV cache blocks (35.02 GiB) fit within the requested 165.88 GiB. Torch may reserve up to 142.67 GiB.
+(Worker_TP3 pid=2980355) INFO 11-06 01:49:35 [extensible_kv_cache.py:576] Memory after warmup: 46.62 GiB free, 2.72 GiB committed to the KV cache, 1.01 GiB kept for transient activations; 247249 KV cache blocks (35.02 GiB) fit within the requested 165.88 GiB. Torch may reserve up to 142.67 GiB.
+(Worker_TP1 pid=2980351) INFO 11-06 01:49:36 [extensible_kv_cache.py:576] Memory after warmup: 46.62 GiB free, 2.72 GiB committed to the KV cache, 1.01 GiB kept for transient activations; 247263 KV cache blocks (35.02 GiB) fit within the requested 165.88 GiB. Torch may reserve up to 142.67 GiB.
+(Worker_TP0 pid=2980349) INFO 11-06 01:49:36 [extensible_kv_cache.py:576] Memory after warmup: 45.95 GiB free, 2.72 GiB committed to the KV cache, 1.01 GiB kept for transient activations; 247263 KV cache blocks (35.02 GiB) fit within the requested 165.88 GiB. Torch may reserve up to 141.99 GiB.
+(EngineCore pid=2979810) INFO 11-06 01:49:36 [kv_cache_utils.py:1171] GPU KV cache size: 10,646,327 tokens, Maximum concurrency for 32,768 tokens per request: 324.90x
+(Worker_TP2 pid=2980353) INFO 11-06 01:49:36 [extensible_kv_cache.py:466] Extended KV cache to 247249 blocks (35.02 GiB).
+(Worker_TP3 pid=2980355) INFO 11-06 01:49:36 [extensible_kv_cache.py:466] Extended KV cache to 247249 blocks (35.02 GiB).
+(Worker_TP0 pid=2980349) INFO 11-06 01:49:36 [extensible_kv_cache.py:466] Extended KV cache to 247249 blocks (35.02 GiB).
+(Worker_TP1 pid=2980351) INFO 11-06 01:49:36 [extensible_kv_cache.py:466] Extended KV cache to 247249 blocks (35.02 GiB).
+(EngineCore pid=2979810) INFO 11-06 01:49:36 [core.py:454] init engine (profile, create kv cache, warmup model) took 107.53 s
+(EngineCore pid=2979810) INFO 11-06 01:50:06 [vllm.py:1512] Resolved Engram configuration: EngramConfig(cpu_offload=False, disk_offload=False, embedding_across_dp=True, dp_shared_memory=False, use_thp=False)
+(EngineCore pid=2979810) INFO 11-06 01:50:06 [vllm.py:832] Auto-enabling VLLM_USE_BREAKABLE_CUDAGRAPH=1. Set VLLM_USE_BREAKABLE_CUDAGRAPH=0 to opt out.
+(EngineCore pid=2979810) INFO 11-06 01:50:06 [kernel.py:513] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['vllm_c', 'native'], fused_add_rms_norm=['vllm_c', 'native'], gelu_and_mul_sparse=['triton', 'native'])
+(EngineCore pid=2979810) WARNING 11-06 01:50:06 [vllm.py:2405] max_num_scheduled_tokens is set to 1260 based on the speculative decoding settings. This may lead to suboptimal performance. Consider increasing max_num_batched_tokens to accommodate the additional draft token slots, or decrease num_speculative_tokens.
+(EngineCore pid=2979810) INFO 11-06 01:50:07 [compilation.py:317] Enabled custom fusions: norm_quant, act_quant, allreduce_rms
+(APIServer pid=2979125) INFO 11-06 01:50:07 [entry.py:135] Supported tasks: ['generate']
+(APIServer pid=2979125) INFO 11-06 01:50:07 [factories.py:105] Scale-out endpoints are disabled. Restart vllm serve with --enable-scale-out to enable them.
+(APIServer pid=2979125) INFO 11-06 01:50:28 [entry.py:139] Starting vLLM server on http://0.0.0.0:8000
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:188] Available routes are:
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /openapi.json, Methods: GET, HEAD
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /docs, Methods: GET, HEAD
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /docs/oauth2-redirect, Methods: GET, HEAD
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /redoc, Methods: GET, HEAD
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /load, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /version, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /kv_event_sources, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /health, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /metrics, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /tokenize, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /detokenize, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/models, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/systemone, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/decisions, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /ping, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /ping, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /invocations, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/chat/completions, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/chat/completions/batch, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/responses, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/responses/{response_id}, Methods: GET
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/responses/{response_id}/cancel, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/completions, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/messages, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/messages/count_tokens, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /generative_scoring, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /scale_elastic_ep, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /is_scaling_elastic_ep, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/chat/completions/render, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/messages/render, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/completions/render, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/responses/render, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/chat/completions/derender, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /v1/completions/derender, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /inference/v1/generate, Methods: POST
+(APIServer pid=2979125) INFO 11-06 01:50:28 [launcher.py:197] Route: /inference/v1/abort_requests, Methods: POST
+INFO:     Started server process [2979125]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+(APIServer pid=2979125) INFO 11-06 01:50:33 [launcher.py:256] [shutdown] API server: shutdown triggered
+(APIServer pid=2979125) INFO 11-06 01:50:33 [launcher.py:269] [shutdown] API server: stopping engine client mode=abort timeout=0s
+(APIServer pid=2979125) INFO 11-06 01:50:33 [core_client.py:804] [shutdown] MPClient: start timeout=0s
+(APIServer pid=2979125) INFO 11-06 01:50:33 [core_client.py:806] [shutdown] MPClient: stopping engine manager
+(APIServer pid=2979125) INFO 11-06 01:50:33 [utils.py:628] [shutdown] Process manager: send sigterm to process EngineCore
+(APIServer pid=2979125) WARNING 11-06 01:50:33 [utils.py:648] [shutdown] Process manager: force killing remaining processes count=1
+(EngineCore pid=2979810) INFO 11-06 01:50:33 [core.py:1648] [shutdown] EngineCore: trigger received signal=SIGTERM
+(APIServer pid=2979125) WARNING 11-06 01:50:33 [utils.py:653] [shutdown] Process manager: force killing remaining process EngineCore pid 2979810
+(EngineCore pid=2979810) INFO 11-06 01:50:33 [core.py:1835] [shutdown] EngineCore: start mode=abort timeout=0s
+(EngineCore pid=2979810) INFO 11-06 01:50:33 [core.py:1866] [shutdown] EngineCore: request processing complete; starting resource teardown
+(EngineCore pid=2979810) INFO 11-06 01:50:33 [core.py:1696] [shutdown] EngineCore: exiting busy loop
+(EngineCore pid=2979810) INFO 11-06 01:50:33 [multiproc_executor.py:580] [shutdown] Executor: waiting for worker exit count=4
+(Worker_TP0 pid=2980349) INFO 11-06 01:50:33 [multiproc_executor.py:967] Parent process exited, terminating worker queues
+(APIServer pid=2979125) WARNING 11-06 01:50:33 [system_utils.py:251] [shutdown] force killing sub process VLLM::Worker_TP0 pid 2980349
+(APIServer pid=2979125) WARNING 11-06 01:50:33 [system_utils.py:251] [shutdown] force killing sub process VLLM::Worker_TP1 pid 2980351
+(APIServer pid=2979125) WARNING 11-06 01:50:33 [system_utils.py:251] [shutdown] force killing sub process VLLM::Worker_TP2 pid 2980353
+(APIServer pid=2979125) WARNING 11-06 01:50:33 [system_utils.py:251] [shutdown] force killing sub process VLLM::Worker_TP3 pid 2980355
+(APIServer pid=2979125) INFO 11-06 01:50:33 [core_client.py:808] [shutdown] MPClient: engine manager stopped
+(APIServer pid=2979125) INFO 11-06 01:50:33 [core_client.py:809] [shutdown] MPClient: cleaning up background resources
+(APIServer pid=2979125) INFO 11-06 01:50:33 [core_client.py:811] [shutdown] MPClient: complete
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957] AsyncLLM output_handler failed.
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957] Traceback (most recent call last):
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957]   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/async_llm.py", line 894, in output_handler
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957]     outputs = await engine_core.get_output_async()
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957]               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957]   File "/usr/local/lib/python3.12/dist-packages/vllm/v1/engine/core_client.py", line 1290, in get_output_async
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957]     raise self._format_exception(outputs) from None
+(APIServer pid=2979125) ERROR 11-06 01:50:33 [async_llm.py:957] vllm.v1.engine.exceptions.EngineDeadError: EngineCore encountered an issue. See stack trace (above) for the root cause.
+(APIServer pid=2979125) INFO 11-06 01:50:33 [launcher.py:278] [shutdown] API server: engine client stopped
+(APIServer pid=2979125) INFO 11-06 01:50:33 [launcher.py:281] [shutdown] API server: signalling HTTP server shutdown
+(APIServer pid=2979125) INFO 11-06 01:50:33 [launcher.py:304] [shutdown] API server: shutting down FastAPI HTTP server
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 4 leaked semaphore objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:254: UserWarning: resource_tracker: There appear to be 6 leaked shared_memory objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_85a3a2c5': [Errno 2] No such file or directory: '/psm_85a3a2c5'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))
+/usr/lib/python3.12/multiprocessing/resource_tracker.py:267: UserWarning: resource_tracker: '/psm_7867695d': [Errno 2] No such file or directory: '/psm_7867695d'
+  warnings.warn('resource_tracker: %r: %s' % (name, e))

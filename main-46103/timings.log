@@ -1,0 +1,8 @@
+small-baseline-r1 status=ready startup_s=316
+small-after-r1 status=ready startup_s=120
+small-baseline-r2 status=ready startup_s=125
+small-after-r2 status=ready startup_s=126
+dsv41-nopurge-baseline status=ready startup_s=576
+dsv41-purge-baseline status=died startup_s=296
+dsv41-nopurge-after status=ready startup_s=415
+dsv41-purge-after status=ready startup_s=400

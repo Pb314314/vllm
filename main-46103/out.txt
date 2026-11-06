@@ -1,0 +1,57 @@
+workdir: /tmp/d3c25120/main-46103 (gb200-rack1-11)
+[INFO] Extracting squashfs filesystem...
+Parallel unsquashfs: Using 140 processors
+176961 inodes (341684 blocks) to write
+
+
+created 175566 files
+created 21301 directories
+created 1390 symlinks
+created 0 devices
+created 0 fifos
+created 0 sockets
+created 5 hardlinks
+Preparing worktree (detached HEAD 0730495)
+HEAD is now at 0730495 [Build] Bump vllm-flash-attn to compress fatbins with --compress-mode=size (#65518)
+/home/agent-v/.profile: line 28: /home/agent-v/v/27ba87f8/rust/cargo/env: No such file or directory
+Building wheels for collected packages: vllm
+  Created wheel for vllm: filename=vllm-0.33.0rc1.dev0+g073049553c.precompiled-0.editable-cp312-cp312-linux_aarch64.whl size=14186 sha256=e1a1bd335dba589cd9950ae4599af74069ce1abc70bb1b224c90af2480885063
+  Stored in directory: /tmp/pip-ephem-wheel-cache-hqrenc4u/wheels/f4/a7/b8/0a6679ba076e01ffbb9ad9478631584cf9f499ebe9b14e5b1b
+Successfully installed vllm-0.33.0rc1.dev0+g073049553c.precompiled
+small snapshot: /mnt/model-cache/hub/models--mgoin--Qwen3-0.6B-MXFP8/snapshots/ab26a96357ddd5ba9c97d85f933c78eff296cddc/
+ARM baseline files OK
+small-baseline-r1 status=ready startup_s=316
+{"id":"cmpl-b8aecb25147e72a0","object":"text_completion","created":1793944662,"model":"qwen","choices":[{"index":0,"text":" 97\n12 + 25 = 37\n1","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_i
+ARM after files OK
+small-after-r1 status=ready startup_s=120
+{"id":"cmpl-92899777db2b9801","object":"text_completion","created":1793944804,"model":"qwen","choices":[{"index":0,"text":" 97\n12 + 25 = 37\n1","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_i
+ARM baseline files OK
+small-baseline-r2 status=ready startup_s=125
+{"id":"cmpl-a2466a263491db8a","object":"text_completion","created":1793944950,"model":"qwen","choices":[{"index":0,"text":" 97\n12 + 25 = 37\n1","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_i
+ARM after files OK
+small-after-r2 status=ready startup_s=126
+{"id":"cmpl-8478f13634ae72c2","object":"text_completion","created":1793945097,"model":"qwen","choices":[{"index":0,"text":" 97\n12 + 25 = 37\n1","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"prompt_logprobs":null,"prompt_token_i
+ARM baseline files OK
+dsv41-nopurge-baseline status=ready startup_s=576
+{"id":"cmpl-b4c6a3dc3b682d06","object":"text_completion","created":1793945694,"model":"deepseek-ai/DeepSeek-V4.1-Flash","choices":[{"index":0,"text":" 97\n120 + 7 = 127\n64 + 33 =","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"p
+ARM baseline files OK
+PURGE at 06:18:00
+dsv41-purge-baseline status=died startup_s=296
+(Worker_TP2 pid=1736120) ERROR 11-06 06:19:58 [multiproc_executor.py:1097] AttributeError: 'ShmRingBuffer' object has no attribute 'shared_memory'
+ARM after files OK
+dsv41-nopurge-after status=ready startup_s=415
+{"id":"cmpl-8c63806f1306962a","object":"text_completion","created":1793946447,"model":"deepseek-ai/DeepSeek-V4.1-Flash","choices":[{"index":0,"text":" 97\n120 + 7 = 127\n64 + 33 =","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"p
+ARM after files OK
+PURGE at 06:30:27
+dsv41-purge-after status=ready startup_s=400
+{"id":"cmpl-8245d765ce9289c5","object":"text_completion","created":1793946869,"model":"deepseek-ai/DeepSeek-V4.1-Flash","choices":[{"index":0,"text":" 97\n120 + 7 = 127\n64 + 33 =","logprobs":null,"finish_reason":"length","stop_reason":null,"token_ids":null,"p
+=== timings
+small-baseline-r1 status=ready startup_s=316
+small-after-r1 status=ready startup_s=120
+small-baseline-r2 status=ready startup_s=125
+small-after-r2 status=ready startup_s=126
+dsv41-nopurge-baseline status=ready startup_s=576
+dsv41-purge-baseline status=died startup_s=296
+dsv41-nopurge-after status=ready startup_s=415
+dsv41-purge-after status=ready startup_s=400
+MAIN-E2E DONE -> /home/agent-v/v/d3c25120/results/main-46103

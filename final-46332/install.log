@@ -1,0 +1,32 @@
+/home/agent-v/.profile: line 28: /home/agent-v/v/27ba87f8/rust/cargo/env: No such file or directory
+Obtaining file:///tmp/d3c25120/final-46332/wt
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: vllm
+  Building editable for vllm (pyproject.toml): started
+  Building editable for vllm (pyproject.toml): finished with status 'done'
+  Created wheel for vllm: filename=vllm-0.33.0rc1.dev0+g86564975c5.precompiled-0.editable-cp312-cp312-linux_aarch64.whl size=14188 sha256=6dd90b1349ba961b3a9a419f6afb0cc0a696ed958fa4f1e1a801690bdfe9b0fb
+  Stored in directory: /tmp/pip-ephem-wheel-cache-6ohkgni_/wheels/b4/97/d7/0ebd331d845beef545470fcc46af7e2b9f0368f499988f9bef
+Successfully built vllm
+Installing collected packages: vllm
+  Attempting uninstall: vllm
+    Found existing installation: vllm 0.33.0rc1.dev573+g40941f2c4.d20261103.cu134
+    Not uninstalling vllm at /usr/local/lib/python3.12/dist-packages, outside environment /tmp/d3c25120/final-46332/venv
+    Can't uninstall 'vllm'. No files were found to uninstall.
+Successfully installed vllm-0.33.0rc1.dev0+g86564975c5.precompiled
+--- extracted extension hashes:
+be0b2dea5521fd723d22900e7861279d4478591aa13b0fd536f8deefa8cc080d  /tmp/d3c25120/final-46332/wt/vllm/_C_stable_libtorch.abi3.so
+b348addeaeb75a13cba06d4a776b307844e486030367e465585589b0711623bc  /tmp/d3c25120/final-46332/wt/vllm/_deepselect_C.abi3.so
+99072da4d6729c792600ea8ef240f9fd7b23315b148b93cefc595d777400439f  /tmp/d3c25120/final-46332/wt/vllm/_flashkda_C.abi3.so
+82ba5adec3983e967f73102190174cac33c0a624249aba3e6221ea60fdd639a6  /tmp/d3c25120/final-46332/wt/vllm/_flashmla_C.abi3.so
+9ff54f4b308f067caacf6209c5e00c331fdf8435333727362dd649569afa5dfc  /tmp/d3c25120/final-46332/wt/vllm/_flashmla_extension_C.abi3.so
+1878f70280b15d2c08a2d10cf0a8909d359f80ab70917824cd1d20fc57fdc5f0  /tmp/d3c25120/final-46332/wt/vllm/_moe_C_stable_libtorch.abi3.so
+02760bd7a9018e24664b8e736a163b43efc0c90fd9766db8b862851ab332b2df  /tmp/d3c25120/final-46332/wt/vllm/cumem_allocator.abi3.so
+9a30fcf4fe3ec71bc2f24934540a1e41ed672b450c87df6a3dcb99b6f770ef13  /tmp/d3c25120/final-46332/wt/vllm/fs_io_C.abi3.so
+3b65016974af6fe3f9379228aae4ba8917ed07c321a1736fdbb5d7b7824a6a90  /tmp/d3c25120/final-46332/wt/vllm/spinloop.abi3.so
