@@ -280,7 +280,10 @@ def test_model_runner_delegates_to_cudagraph_utils(
         envs, "VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS", profiling_enabled
     )
     monkeypatch.setattr(mrv2, "_profile_cudagraph_memory", lambda r: 42)
-    monkeypatch.setattr(mrv2, "_profile_encoder_cudagraph_memory", lambda r: 43)
+    # Absent on unpatched trees (the import itself is part of the change).
+    monkeypatch.setattr(
+        mrv2, "_profile_encoder_cudagraph_memory", lambda r: 43, raising=False
+    )
     if not extensible:
         expected = 42  # standard cache: full profiling pass
     elif profiling_enabled and encoder_graphs:
@@ -288,6 +291,120 @@ def test_model_runner_delegates_to_cudagraph_utils(
     else:
         expected = 0  # extensible fast path
     assert runner.profile_cudagraph_memory() == expected
+
+
+class _FakeAccelerator:
+    """CPU stand-in for torch.accelerator memory queries: free memory drops
+    from `free_start` to `free_end` across the capture; the reserved-memory
+    peak is fixed."""
+
+    def __init__(self, free_start: int, free_end: int, reserved: int, peak: int):
+        self._free_values = [free_start, free_end]
+        self._reserved = reserved
+        self._peak = peak
+
+    def empty_cache(self):
+        pass
+
+    def synchronize(self):
+        pass
+
+    def reset_peak_memory_stats(self):
+        pass
+
+    def memory_stats(self):
+        return {
+            "reserved_bytes.all.current": self._reserved,
+            "reserved_bytes.all.peak": self._peak,
+        }
+
+    def get_memory_info(self, device=None):
+        return (self._free_values.pop(0), 0)
+
+
+class _FakeEncoderRunner:
+    def __init__(self, fails: bool = False):
+        self.captured = 0
+        self.cleared = 0
+        self._fails = fails
+
+    def capture(self):
+        self.captured += 1
+        if self._fails:
+            raise RuntimeError("capture boom")
+
+    def clear(self):
+        self.cleared += 1
+
+
+def _patch_profiler_platform(monkeypatch):
+    """A throwaway platform object whose class owns a restorable global pool."""
+
+    class FakePlatform:
+        _global_graph_pool = None
+
+        def graph_pool_handle(self):
+            return object()
+
+    fake = FakePlatform()
+    monkeypatch.setattr(cgu, "current_platform", fake)
+    monkeypatch.setattr(
+        cgu, "capture_outside_cumem_pool", lambda: contextlib.nullcontext()
+    )
+    return FakePlatform
+
+
+def test_profile_encoder_cudagraph_memory_peak_and_cleanup(monkeypatch):
+    """The encoder-only profiler returns the persistent graph bytes and stores
+    max(persistent, capture peak) on the runner for the extensible-KV warmup
+    reserve (#65868); it releases the profiling graphs and restores the global
+    pool afterwards."""
+    # persistent = 10000-9000 = 1000; capture peak = 3000-500 = 2500 > 1000.
+    accel = _FakeAccelerator(
+        free_start=10_000, free_end=9_000, reserved=500, peak=3_000
+    )
+    monkeypatch.setattr(cgu.torch, "accelerator", accel)
+    FakePlatform = _patch_profiler_platform(monkeypatch)
+    encoder = _FakeEncoderRunner()
+    runner = SimpleNamespace(
+        model_state=SimpleNamespace(encoder_runner=encoder),
+        maybe_setup_dummy_loras=lambda cfg: contextlib.nullcontext(),
+        lora_config=None,
+        cudagraph_capture_peak_bytes=0,
+    )
+
+    measured = cgu.profile_encoder_cudagraph_memory(runner)
+
+    assert measured == 1_000
+    assert runner.cudagraph_capture_peak_bytes == 2_500
+    assert encoder.captured == 1
+    assert encoder.cleared == 1
+    assert FakePlatform._global_graph_pool is None
+
+
+def test_profile_encoder_cudagraph_memory_cleans_up_on_capture_failure(
+    monkeypatch,
+):
+    """A failing capture still restores the global pool and releases the
+    partial graphs, so the error path leaves no captured state behind."""
+    accel = _FakeAccelerator(
+        free_start=10_000, free_end=9_000, reserved=500, peak=3_000
+    )
+    monkeypatch.setattr(cgu.torch, "accelerator", accel)
+    FakePlatform = _patch_profiler_platform(monkeypatch)
+    encoder = _FakeEncoderRunner(fails=True)
+    runner = SimpleNamespace(
+        model_state=SimpleNamespace(encoder_runner=encoder),
+        maybe_setup_dummy_loras=lambda cfg: contextlib.nullcontext(),
+        lora_config=None,
+        cudagraph_capture_peak_bytes=0,
+    )
+
+    with pytest.raises(RuntimeError, match="capture boom"):
+        cgu.profile_encoder_cudagraph_memory(runner)
+
+    assert encoder.cleared == 1
+    assert FakePlatform._global_graph_pool is None
 
 
 def test_extrapolate_full_graph_memory():
