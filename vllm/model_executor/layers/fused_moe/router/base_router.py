@@ -13,7 +13,7 @@ from vllm.model_executor.layers.fused_moe.router.fused_moe_router import (
     FusedMoERouter,
 )
 from vllm.platforms import current_platform
-from vllm.triton_utils import tl, triton
+from vllm.triton_utils import HAS_TRITON, tl, triton
 from vllm.v1.worker.ubatching import dbo_current_ubatch_id
 
 if current_platform.is_cuda_alike() or current_platform.is_xpu():
@@ -140,6 +140,65 @@ def get_moe_padding_mask(num_tokens: int) -> torch.Tensor | None:
         is_padding = get_forward_context().is_padding
         return is_padding[:num_tokens] if is_padding is not None else None
     return None
+
+
+@triton.jit
+def _copy_real_logits_to_padding_kernel(
+    logits_ptr,
+    is_padding_ptr,
+    num_rows,
+    stride,
+    num_experts,
+    BLOCK_M: tl.constexpr,
+    BLOCK_E: tl.constexpr,
+):
+    rows = tl.program_id(0) * BLOCK_M + tl.arange(0, BLOCK_M)
+    is_pad = tl.load(is_padding_ptr + rows, mask=rows < num_rows, other=0) != 0
+    if tl.sum(is_pad.to(tl.int32)) == 0:
+        return
+    # Real rows normally come first: binary search for the number of real rows.
+    lo = 0
+    hi = tl.min(tl.where(is_pad, rows, num_rows))
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if tl.load(is_padding_ptr + mid) != 0:
+            hi = mid
+        else:
+            lo = mid + 1
+    src = tl.where(lo > 0, rows % tl.maximum(lo, 1), 0)
+    # Read only real rows (or row 0 when none), never rows being written.
+    src_is_pad = tl.load(is_padding_ptr + src) != 0
+    copy = is_pad & (src != rows) & ((lo == 0) | ~src_is_pad)
+    cols = tl.arange(0, BLOCK_E)
+    mask = copy[:, None] & (cols < num_experts)[None, :]
+    vals = tl.load(logits_ptr + src[:, None] * stride + cols[None, :], mask=mask)
+    tl.store(logits_ptr + rows[:, None] * stride + cols[None, :], vals, mask=mask)
+
+
+def route_padding_like_real_rows(router_logits: torch.Tensor) -> torch.Tensor:
+    """Overwrite each padding row's logits with a real row's, in place.
+
+    Kernels that route from logits would otherwise send padding rows to
+    experts no real row selects, loading those experts' weights for nothing.
+    Copied rows only select experts that are already active, spread over the
+    real rows. Without real rows, all padding rows share row 0's experts.
+    """
+    num_rows, num_experts = router_logits.shape
+    is_padding = get_moe_padding_mask(num_rows) if HAS_TRITON else None
+    if is_padding is None or num_rows == 0 or is_padding.shape[0] != num_rows:
+        return router_logits
+    assert router_logits.stride(-1) == 1
+    block_m = 16
+    _copy_real_logits_to_padding_kernel[(triton.cdiv(num_rows, block_m),)](
+        router_logits,
+        is_padding,
+        num_rows,
+        router_logits.stride(0),
+        num_experts,
+        BLOCK_M=block_m,
+        BLOCK_E=triton.next_power_of_2(num_experts),
+    )
+    return router_logits
 
 
 class BaseRouter(FusedMoERouter):
