@@ -338,7 +338,9 @@ class _FakeEncoderRunner:
 
 
 def _patch_profiler_platform(monkeypatch):
-    """A throwaway platform object whose class owns a restorable global pool."""
+    """A throwaway platform whose class owns a restorable global pool, already
+    bound to a sentinel: production startups create CUDAGraphWrapper instances
+    (which bind the global pool) before this profiler runs."""
 
     class FakePlatform:
         _global_graph_pool = None
@@ -347,11 +349,12 @@ def _patch_profiler_platform(monkeypatch):
             return object()
 
     fake = FakePlatform()
+    FakePlatform._global_graph_pool = sentinel = object()
     monkeypatch.setattr(cgu, "current_platform", fake)
     monkeypatch.setattr(
         cgu, "capture_outside_cumem_pool", lambda: contextlib.nullcontext()
     )
-    return FakePlatform
+    return FakePlatform, sentinel
 
 
 def test_profile_encoder_cudagraph_memory_peak_and_cleanup(monkeypatch):
@@ -364,7 +367,7 @@ def test_profile_encoder_cudagraph_memory_peak_and_cleanup(monkeypatch):
         free_start=10_000, free_end=9_000, reserved=500, peak=3_000
     )
     monkeypatch.setattr(cgu.torch, "accelerator", accel)
-    FakePlatform = _patch_profiler_platform(monkeypatch)
+    FakePlatform, sentinel = _patch_profiler_platform(monkeypatch)
     encoder = _FakeEncoderRunner()
     runner = SimpleNamespace(
         model_state=SimpleNamespace(encoder_runner=encoder),
@@ -379,7 +382,34 @@ def test_profile_encoder_cudagraph_memory_peak_and_cleanup(monkeypatch):
     assert runner.cudagraph_capture_peak_bytes == 2_500
     assert encoder.captured == 1
     assert encoder.cleared == 1
-    assert FakePlatform._global_graph_pool is None
+    # The pre-existing pool is restored, not cleared to None.
+    assert FakePlatform._global_graph_pool is sentinel
+
+
+def test_profile_encoder_cudagraph_memory_persistent_above_peak(monkeypatch):
+    """The opposite ordering: when the persistent graph bytes exceed the
+    reserved-peak delta, the reserve must still cover the persistent size."""
+    # persistent = 10000-7000 = 3000; capture peak = 1000-500 = 500 < 3000.
+    accel = _FakeAccelerator(
+        free_start=10_000, free_end=7_000, reserved=500, peak=1_000
+    )
+    monkeypatch.setattr(cgu.torch, "accelerator", accel)
+    FakePlatform, sentinel = _patch_profiler_platform(monkeypatch)
+    encoder = _FakeEncoderRunner()
+    runner = SimpleNamespace(
+        model_state=SimpleNamespace(encoder_runner=encoder),
+        maybe_setup_dummy_loras=lambda cfg: contextlib.nullcontext(),
+        lora_config=None,
+        cudagraph_capture_peak_bytes=0,
+    )
+
+    measured = cgu.profile_encoder_cudagraph_memory(runner)
+
+    assert measured == 3_000
+    assert runner.cudagraph_capture_peak_bytes == 3_000
+    assert encoder.captured == 1
+    assert encoder.cleared == 1
+    assert FakePlatform._global_graph_pool is sentinel
 
 
 def test_profile_encoder_cudagraph_memory_cleans_up_on_capture_failure(
@@ -391,7 +421,7 @@ def test_profile_encoder_cudagraph_memory_cleans_up_on_capture_failure(
         free_start=10_000, free_end=9_000, reserved=500, peak=3_000
     )
     monkeypatch.setattr(cgu.torch, "accelerator", accel)
-    FakePlatform = _patch_profiler_platform(monkeypatch)
+    FakePlatform, sentinel = _patch_profiler_platform(monkeypatch)
     encoder = _FakeEncoderRunner(fails=True)
     runner = SimpleNamespace(
         model_state=SimpleNamespace(encoder_runner=encoder),
@@ -404,7 +434,7 @@ def test_profile_encoder_cudagraph_memory_cleans_up_on_capture_failure(
         cgu.profile_encoder_cudagraph_memory(runner)
 
     assert encoder.cleared == 1
-    assert FakePlatform._global_graph_pool is None
+    assert FakePlatform._global_graph_pool is sentinel
 
 
 def test_extrapolate_full_graph_memory():
