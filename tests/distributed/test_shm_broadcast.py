@@ -1028,6 +1028,100 @@ def test_message_queue_survives_external_unlink_after_attach():
         reader.shutdown()
 
 
+def _attach_order_child(handle, attach_after_load: bool, result_q) -> None:
+    """Child process playing a multiproc worker: attach to the writer's ring,
+    with a stand-in model-load delay before or after the attach, then dequeue."""
+    if attach_after_load:
+        time.sleep(3)  # the parent unlinks the segment during this window
+    try:
+        mq = MessageQueue.create_from_handle(handle, rank=0)
+    except RuntimeError as e:
+        result_q.put(("raise", str(e)))
+        return
+    if not attach_after_load:
+        time.sleep(3)  # model-load window happens after the early attach
+    try:
+        result_q.put(("dequeued", mq.dequeue(timeout=10)))
+    except Exception as e:
+        result_q.put(("error", f"{type(e).__name__}: {e}"))
+
+
+@pytest.mark.parametrize("attach_after_load", [False, True])
+def test_attach_before_model_load_survives_mid_load_unlink(attach_after_load):
+    """Regression test for the multiproc startup attach race (worker side).
+    An external cleaner (e.g. systemd-logind RemoveIPC) can unlink the ring's
+    segment during a long model load. Attaching before the load (current
+    WorkerProc order) keeps a live mapping and the message is still delivered;
+    attaching after it (old order) must fail fast with the clear RuntimeError
+    from create_from_handle, not a deferred AttributeError at first dequeue."""
+    writer = MessageQueue(
+        n_reader=1,
+        n_local_reader=1,
+        max_chunk_bytes=1024,
+        max_chunks=4,
+        connect_ip="127.0.0.1",
+    )
+    result_q = mp.Queue()
+    child = mp.Process(
+        target=_attach_order_child,
+        args=(writer.export_handle(), attach_after_load, result_q),
+    )
+    child.start()
+    time.sleep(1)  # let the early-attaching child attach before the purge
+    os.unlink(os.path.join("/dev/shm", writer.buffer.shared_memory.name))
+    writer.enqueue(b"payload")
+    kind, detail = result_q.get(timeout=30)
+    child.join(timeout=30)
+    writer.shutdown()
+    if attach_after_load:
+        assert kind == "raise", (kind, detail)
+        assert "could not attach" in detail
+    else:
+        assert (kind, detail) == ("dequeued", b"payload")
+
+
+def test_multiproc_worker_attaches_input_mq_exactly_once_early():
+    """WorkerProc._attach_input_mq (called before model load) performs the
+    single input-MQ attach for nnodes_within_dp == 1; _init_message_queues
+    (called after load) must not attach a second time."""
+    from vllm.v1.executor.multiproc_executor import WorkerProc
+
+    writer = MessageQueue(
+        n_reader=1,
+        n_local_reader=1,
+        max_chunk_bytes=1024,
+        max_chunks=4,
+        connect_ip="127.0.0.1",
+    )
+    bare = WorkerProc.__new__(WorkerProc)
+    bare.worker = SimpleNamespace(rank=0)
+    cfg = SimpleNamespace(parallel_config=SimpleNamespace(nnodes_within_dp=1))
+    bare._attach_input_mq(writer.export_handle(), cfg)
+    first = bare.rpc_broadcast_mq
+    assert first is not None
+    bare._init_message_queues(writer.export_handle(), cfg)
+    assert bare.rpc_broadcast_mq is first  # not re-attached after load
+    assert bare.worker_response_mq is not None
+    first.shutdown()
+    bare.worker_response_mq.shutdown()
+    writer.shutdown()
+
+
+def test_ray_worker_proc_keeps_single_late_attach():
+    """RayWorkerProc must override the early-attach hook as a no-op: its
+    workers attach exactly once, late, in RayWorkerProc._init_message_queues.
+    A second (early) attach would leave a stale subscription on the writer's
+    XPUB socket that wait_until_ready() would count as a live reader."""
+    import ray  # noqa: F401  (test env dependency; mirrors other tests here)
+
+    from vllm.v1.executor.ray_executor_v2 import RayWorkerProc
+
+    assert "_attach_input_mq" in RayWorkerProc.__dict__  # overridden, not inherited
+    bare = RayWorkerProc.__new__(RayWorkerProc)
+    bare._attach_input_mq(None, None)  # no-op: attaches nothing
+    assert not hasattr(bare, "rpc_broadcast_mq")
+
+
 def test_remote_subscribe_addr_unique_concurrent_writers(
     monkeypatch: pytest.MonkeyPatch,
 ):

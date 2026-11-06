@@ -190,6 +190,16 @@ class RayWorkerProc(WorkerProc):
             **self._init_kwargs,
         )
 
+    def _attach_input_mq(
+        self, input_shm_handle: Handle, vllm_config: VllmConfig
+    ) -> None:
+        # Ray workers keep their single late attach in _init_message_queues:
+        # attaching here as well would create a second, stale subscription on
+        # the writer's XPUB socket, which wait_until_ready() would count as a
+        # live reader. Ray also places actors across nodes even with
+        # nnodes_within_dp == 1, where a same-node shm attach cannot succeed.
+        return
+
     def _init_message_queues(
         self, input_shm_handle: Handle, vllm_config: VllmConfig
     ) -> None:
