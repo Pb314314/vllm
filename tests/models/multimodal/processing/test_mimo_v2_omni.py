@@ -14,9 +14,8 @@ weights); everything else is self-contained (synthetic tokenizer, in-memory
 config) and runs on CPU anywhere.
 """
 
-from types import SimpleNamespace
-
 from collections import UserList
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -356,10 +355,11 @@ def _run_video_audio(processor, va_item):
 def test_video_audio_timestamps_use_frame_media_time(processor):
     frames = np.zeros((8, 4, 4, 3), dtype=np.uint8)
     audio = np.zeros(4, dtype=np.float32)
-    # 0.4s-spaced frames: must NOT collapse onto the 1 fps fallback.
-    metadata = _video_metadata([10, 35, 60, 85, 110, 135, 160, 185])
+    # 3.0 s-spaced frames starting at 0.4 s: catches both the 1 fps fallback
+    # and any interval-compressing mutant.
+    metadata = _video_metadata([10, 85, 160, 235, 310, 385, 460, 535])
     ts = _run_video_audio(processor, ((frames, metadata), audio))
-    expect = 0.4 + torch.arange(8, dtype=torch.float32)
+    expect = 0.4 + 3.0 * torch.arange(8, dtype=torch.float32)
     assert torch.allclose(ts, expect, atol=1e-6)
 
 
