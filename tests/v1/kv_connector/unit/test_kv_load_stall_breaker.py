@@ -8,8 +8,7 @@ are reserved only against other async-load admissions, so blocks held by
 holders the reservation does not cover (paused streaming sessions holding
 their KV between turns, connector-pinned saves, synchronous admissions) can
 leave the completed loads unable to allocate their tails. Parked requests
-are not preemption candidates, and paused streaming/agentic sessions sit in
-`running` holding their KV without producing work, so the engine deadlocks:
+are not preemption candidates, so once `running` drains the engine deadlocks:
 every step schedules nothing and no block is ever freed.
 
 The scheduler must instead free the youngest completed load's blocks and
@@ -177,41 +176,85 @@ def test_stall_breaker_does_not_fire_while_running():
     block_pool.free_blocks(pinned)
 
 
-def test_stall_breaker_fires_with_paused_holder_in_running():
-    """A holder in `running` that is not scheduled (e.g. a paused streaming
-    session waiting for its next turn) must not keep the breaker silent: the
-    step still scheduled nothing, so the deadlock persists unless a parked
-    load's blocks are freed."""
-    scheduler, load1, load2 = _make_scheduler_with_two_loads()
+def test_stall_breaker_ignores_transient_final_output_wait():
+    """With async scheduling a running request whose final output is still in
+    flight is deliberately not scheduled again (`num_output_placeholders`
+    covers the outstanding sample that will reach max_tokens). The step
+    schedules nothing, but the outstanding result will finish the request and
+    free its blocks -- the breaker must stay silent and retain the completed
+    loads."""
+    vllm_config = create_vllm_config(
+        max_num_batched_tokens=1024,
+        block_size=BLOCK_SIZE,
+    )
+    vllm_config.scheduler_config.async_scheduling = True
+    scheduler = create_scheduler(
+        vllm_config,
+        num_blocks=NUM_BLOCKS,
+    )
+    load1 = create_request(num_tokens=PROMPT_TOKENS)
+    load2 = create_request(num_tokens=PROMPT_TOKENS)
+    scheduler.add_request(load1)
+    scheduler.add_request(load2)
+    hits = {
+        load1.request_id: EXTERNAL_TOKENS,
+        load2.request_id: EXTERNAL_TOKENS,
+    }
+    scheduler.connector = create_mock_connector()
+    scheduler.connector.get_loaded_kv_cache_group_ids.return_value = (0,)
+    scheduler.connector.get_num_new_matched_tokens.side_effect = _make_hits(hits)
+    scheduler.connector.request_finished.return_value = (False, None)
+    scheduler.connector.take_events.return_value = ()
+    scheduler.connector.has_pending_block_frees.return_value = False
     block_pool = scheduler.kv_cache_manager.block_pool
 
-    scheduler.schedule()
+    # Both loads park (16 blocks); a two-block consumer with max_tokens=2 is
+    # admitted and prefilled. Its first sampled token is delivered below.
+    s1 = scheduler.schedule()
     assert block_pool.get_num_free_blocks() == 9
-    pinned = block_pool.get_new_blocks(PINNED_BLOCKS)
+    consumer = create_request(num_tokens=2 * BLOCK_SIZE, max_tokens=2)
+    scheduler.add_request(consumer)
+    s2 = scheduler.schedule()
+    assert consumer.status == RequestStatus.RUNNING
+    assert consumer.num_output_placeholders == 1
+    assert block_pool.get_num_free_blocks() == 7
 
-    # Both loads complete.
+    # The loads complete while the consumer keeps running. Pin blocks so
+    # neither 4-block tail fits until the consumer finishes.
+    pinned = block_pool.get_new_blocks(4)
+    assert block_pool.get_num_free_blocks() == 3
     runner_out = create_model_runner_output(
-        [], finished_recving={load1.request_id, load2.request_id}
+        [consumer], finished_recving={load1.request_id, load2.request_id}
     )
-    scheduler.update_from_output(scheduler.schedule(), runner_out)
-    assert not scheduler.running
+    scheduler.update_from_output(s2, runner_out)
+    assert consumer.status == RequestStatus.RUNNING
 
-    # A paused streaming session: in `running`, holding its blocks, but with
-    # no work to schedule this step.
-    holder = create_request(num_tokens=BLOCK_SIZE)
-    holder.status = RequestStatus.RUNNING
-    scheduler.requests[holder.request_id] = holder
-    scheduler.running.append(holder)
-
-    # Gate check: with nothing scheduled, the breaker fires despite the
-    # paused holder in `running`, freeing the youngest completed load.
-    assert scheduler._maybe_break_kv_load_stall([], [], [], 0.0)
-    assert load2.num_computed_tokens == 0
-    assert load2.status == RequestStatus.WAITING
+    # The consumer decodes once more; its second (final) sampled token stays
+    # in flight. The completed loads still cannot allocate.
+    s3 = scheduler.schedule()
+    assert consumer.num_output_placeholders == 1
+    assert block_pool.get_num_free_blocks() == 2
     assert load1.num_computed_tokens == EXTERNAL_TOKENS
+    assert load2.num_computed_tokens == EXTERNAL_TOKENS
 
-    # If the holder had been scheduled this step, the breaker stays silent.
-    assert not scheduler._maybe_break_kv_load_stall([holder], [], [], 0.0)
+    # Transient idle step: the consumer is skipped (its outstanding sample
+    # reaches max_tokens), nothing else fits, yet the breaker must not fire.
+    s4 = scheduler.schedule()
+    assert consumer.status == RequestStatus.RUNNING
+    assert load1.num_computed_tokens == EXTERNAL_TOKENS
+    assert load2.num_computed_tokens == EXTERNAL_TOKENS
+    assert len(scheduler.kv_holding_waiting) == 2
+
+    # The outstanding output arrives (delivered against the step that
+    # scheduled it): the consumer finishes and frees its blocks, and the
+    # older load's tail now fits.
+    runner_out = create_model_runner_output([consumer])
+    scheduler.update_from_output(s3, runner_out)
+    assert consumer.status == RequestStatus.FINISHED_LENGTH_CAPPED
+    assert block_pool.get_num_free_blocks() == 5
+    scheduler.schedule()
+    assert load1.status == RequestStatus.RUNNING
+    assert load1.num_computed_tokens == PROMPT_TOKENS
 
     # Cleanup.
     block_pool.free_blocks(pinned)
