@@ -261,11 +261,12 @@ def test_profile_cudagraph_memory_restores_compilation_counters(monkeypatch):
 def test_model_runner_delegates_to_cudagraph_utils(
     monkeypatch, extensible, profiling_enabled, encoder_graphs
 ):
-    """With a standard KV cache the runner always profiles. With an extensible
-    KV cache it profiles only when encoder CUDA graphs will be captured (their
-    capture must fit the memory warmup leaves behind, #65868) and the profiling
-    opt-out env var is on; decoder-only and text-only deployments keep the old
-    fast path."""
+    """With a standard KV cache the runner always runs the full profiling
+    pass. With an extensible KV cache it runs the lighter encoder-only pass,
+    and only when encoder CUDA graphs will be captured (their capture must
+    fit the memory warmup leaves behind, #65868) with the profiling opt-out
+    env var on; decoder-only and text-only deployments keep the old fast
+    path (no pass at all)."""
     runner = mrv2.GPUModelRunner.__new__(mrv2.GPUModelRunner)
     runner.cache_config = SimpleNamespace(enable_extensible_kv_cache=extensible)
     runner.eplb = EPLBController(
@@ -279,8 +280,14 @@ def test_model_runner_delegates_to_cudagraph_utils(
         envs, "VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS", profiling_enabled
     )
     monkeypatch.setattr(mrv2, "_profile_cudagraph_memory", lambda r: 42)
-    profiles = not extensible or (profiling_enabled and encoder_graphs)
-    assert runner.profile_cudagraph_memory() == (42 if profiles else 0)
+    monkeypatch.setattr(mrv2, "_profile_encoder_cudagraph_memory", lambda r: 43)
+    if not extensible:
+        expected = 42  # standard cache: full profiling pass
+    elif profiling_enabled and encoder_graphs:
+        expected = 43  # extensible + encoder graphs: encoder-only pass
+    else:
+        expected = 0  # extensible fast path
+    assert runner.profile_cudagraph_memory() == expected
 
 
 def test_extrapolate_full_graph_memory():

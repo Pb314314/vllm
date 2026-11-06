@@ -989,6 +989,66 @@ _MIN_PER_GRAPH_BYTES = 1 << 20
 
 
 @torch.inference_mode()
+def profile_encoder_cudagraph_memory(runner: "GPUModelRunner") -> int:
+    """Estimate the GPU memory needed to capture the multimodal encoder's
+    CUDA graphs.
+
+    Much lighter than profile_cudagraph_memory(): the encoder does not use
+    the KV cache, so no minimal KV cache is bootstrapped and no decoder
+    graphs are captured. Used for the extensible KV cache (#65868), where the
+    worker holds the result back from warmup commits so the real encoder
+    capture, which runs before the final KV sizing, still fits. Graphs
+    captured here are discarded; the real capture_model() re-captures them.
+    """
+    from vllm.utils.gc_utils import freeze_gc_for_cudagraph_capture
+
+    gc.collect()
+    torch.accelerator.empty_cache()
+
+    # Capture into a throwaway pool, like profile_cudagraph_memory(): graphs
+    # captured into the persistent global pool and then discarded would drop
+    # its use_count to 0, tripping the c10 allocator's create_or_incref_pool
+    # assert when the real capture reuses that pool.
+    platform_cls = type(current_platform)
+    saved_global_pool = platform_cls._global_graph_pool
+    throwaway_pool = current_platform.graph_pool_handle()
+    platform_cls._global_graph_pool = throwaway_pool
+
+    encoder_runner = runner.model_state.encoder_runner
+    try:
+        with (
+            freeze_gc_for_cudagraph_capture(),
+            runner.maybe_setup_dummy_loras(runner.lora_config),
+        ):
+            # The real capture needs its peak footprint free, not just the
+            # persistent graph size: with an extensible KV cache, warmup
+            # commits leave only what the reserve holds back (#65868).
+            torch.accelerator.reset_peak_memory_stats()
+            reserved_before = torch.accelerator.memory_stats().get(
+                "reserved_bytes.all.current", 0
+            )
+            with capture_outside_cumem_pool():
+                free_before = torch.accelerator.get_memory_info()[0]
+                encoder_runner.capture()
+                torch.accelerator.synchronize()
+                free_after = torch.accelerator.get_memory_info()[0]
+            persistent = max(int(free_before - free_after), 0)
+            capture_peak = (
+                torch.accelerator.memory_stats().get("reserved_bytes.all.peak", 0)
+                - reserved_before
+            )
+            runner.cudagraph_capture_peak_bytes = max(persistent, capture_peak)
+            return persistent
+    finally:
+        platform_cls._global_graph_pool = saved_global_pool
+        # Release the profiling graphs and the throwaway pool; the real
+        # capture_model() re-captures the encoder graphs.
+        encoder_runner.clear()
+        gc.collect()
+        torch.accelerator.empty_cache()
+
+
+@torch.inference_mode()
 def profile_cudagraph_memory(runner: "GPUModelRunner") -> int:
     """Estimate the GPU memory needed for CUDA graph capture.
 
@@ -1066,23 +1126,8 @@ def profile_cudagraph_memory(runner: "GPUModelRunner") -> int:
             mem_samples: list[int] = []
             manager._capture_mem_samples = mem_samples
 
-            # The real capture needs its peak footprint free, not just the
-            # persistent graph size: with an extensible KV cache, warmup
-            # commits leave only what the reserve holds back (#65868). Measure
-            # the reserved-memory peak across the profiling capture; the
-            # worker uses it for the extensible cache's warmup reserve, while
-            # the persistent estimate below stays the capacity accounting.
-            torch.accelerator.reset_peak_memory_stats()
-            reserved_before = torch.accelerator.memory_stats().get(
-                "reserved_bytes.all.current", 0
-            )
             with capture_outside_cumem_pool():
                 measured = int(runner.capture_model(profile_only=True))
-            capture_peak = (
-                torch.accelerator.memory_stats().get("reserved_bytes.all.peak", 0)
-                - reserved_before
-            )
-            runner.cudagraph_capture_peak_bytes = max(measured, capture_peak)
 
             # The measured delta covers PIECEWISE, encoder and speculator graphs
             # plus the sampled FULL graphs; swap the sampled FULL cost for the

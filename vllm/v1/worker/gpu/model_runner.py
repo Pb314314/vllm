@@ -120,6 +120,9 @@ from vllm.v1.worker.gpu.cudagraph_utils import (
 from vllm.v1.worker.gpu.cudagraph_utils import (
     profile_cudagraph_memory as _profile_cudagraph_memory,
 )
+from vllm.v1.worker.gpu.cudagraph_utils import (
+    profile_encoder_cudagraph_memory as _profile_encoder_cudagraph_memory,
+)
 from vllm.v1.worker.gpu.dp_utils import DPSyncState, dispatch_cg_and_sync_dp
 from vllm.v1.worker.gpu.ec_connector import get_ec_connector
 from vllm.v1.worker.gpu.eplb_utils import EPLBController, step_eplb_after
@@ -1142,6 +1145,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             if not capture_encoder or not envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:
                 return 0
+            # Encoder-only profiling: no KV bootstrap and no decoder graphs,
+            # so the pass is small enough to run on memory-tight startups.
+            with self.eplb.suppress():
+                return _profile_encoder_cudagraph_memory(self)
         # Runs before the KV cache exists, outside compile_or_warm_up_model.
         with self.eplb.suppress():
             return _profile_cudagraph_memory(self)
