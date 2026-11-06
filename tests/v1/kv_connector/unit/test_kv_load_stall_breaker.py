@@ -8,7 +8,8 @@ are reserved only against other async-load admissions, so blocks held by
 holders the reservation does not cover (paused streaming sessions holding
 their KV between turns, connector-pinned saves, synchronous admissions) can
 leave the completed loads unable to allocate their tails. Parked requests
-are not preemption candidates, so once `running` drains the engine deadlocks:
+are not preemption candidates, and paused streaming/agentic sessions sit in
+`running` holding their KV without producing work, so the engine deadlocks:
 every step schedules nothing and no block is ever freed.
 
 The scheduler must instead free the youngest completed load's blocks and
@@ -171,6 +172,46 @@ def test_stall_breaker_does_not_fire_while_running():
     assert load1.num_computed_tokens == EXTERNAL_TOKENS
     assert load2.num_computed_tokens == EXTERNAL_TOKENS
     assert len(scheduler.kv_holding_waiting) == 2
+
+    # Cleanup.
+    block_pool.free_blocks(pinned)
+
+
+def test_stall_breaker_fires_with_paused_holder_in_running():
+    """A holder in `running` that is not scheduled (e.g. a paused streaming
+    session waiting for its next turn) must not keep the breaker silent: the
+    step still scheduled nothing, so the deadlock persists unless a parked
+    load's blocks are freed."""
+    scheduler, load1, load2 = _make_scheduler_with_two_loads()
+    block_pool = scheduler.kv_cache_manager.block_pool
+
+    scheduler.schedule()
+    assert block_pool.get_num_free_blocks() == 9
+    pinned = block_pool.get_new_blocks(PINNED_BLOCKS)
+
+    # Both loads complete.
+    runner_out = create_model_runner_output(
+        [], finished_recving={load1.request_id, load2.request_id}
+    )
+    scheduler.update_from_output(scheduler.schedule(), runner_out)
+    assert not scheduler.running
+
+    # A paused streaming session: in `running`, holding its blocks, but with
+    # no work to schedule this step.
+    holder = create_request(num_tokens=BLOCK_SIZE)
+    holder.status = RequestStatus.RUNNING
+    scheduler.requests[holder.request_id] = holder
+    scheduler.running.append(holder)
+
+    # Gate check: with nothing scheduled, the breaker fires despite the
+    # paused holder in `running`, freeing the youngest completed load.
+    assert scheduler._maybe_break_kv_load_stall([], [], [], 0.0)
+    assert load2.num_computed_tokens == 0
+    assert load2.status == RequestStatus.WAITING
+    assert load1.num_computed_tokens == EXTERNAL_TOKENS
+
+    # If the holder had been scheduled this step, the breaker stays silent.
+    assert not scheduler._maybe_break_kv_load_stall([holder], [], [], 0.0)
 
     # Cleanup.
     block_pool.free_blocks(pinned)

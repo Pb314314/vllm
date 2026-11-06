@@ -1527,10 +1527,11 @@ class Scheduler(SchedulerInterface):
                     if request.has_encoder_inputs:
                         self.encoder_cache_manager.free(request)
                     if request_queue is self.kv_holding_waiting:
-                        # A block-holding head that cannot allocate while no
-                        # request is running deadlocks the engine: nothing is
-                        # left that could free blocks, and parked KV loads are
-                        # not preemption candidates. Try to break the stall.
+                        # A block-holding head that cannot allocate while
+                        # nothing is scheduled deadlocks the engine: holders
+                        # may sit unscheduled in `running` (paused streams),
+                        # and parked KV loads are not preemption candidates.
+                        # Try to break the stall.
                         self._maybe_break_kv_load_stall(
                             scheduled_running_reqs,
                             scheduled_new_reqs,
@@ -1946,22 +1947,25 @@ class Scheduler(SchedulerInterface):
         growth do not honour the reservation, so under bursty load the parked
         prefixes can end up holding so much of the pool that no completed
         load can allocate its tail. Parked requests are not preemption
-        candidates, so once `running` drains the engine stalls forever: every
-        step schedules nothing and no block is ever freed.
+        candidates, and other block holders may sit in `running` indefinitely
+        without producing work (e.g. agentic/streaming sessions paused
+        between turns), so the engine stalls forever: every step schedules
+        nothing and no block is ever freed.
 
-        When this step scheduled nothing and no request is running, free the
-        blocks of the youngest completed async load and requeue it as a fresh
-        waiting request. It re-admits later, hitting its own blocks in the
-        prefix cache (they were cached when the load completed) or re-loading
-        them from the connector's remote tier. This only fires when nothing
-        can run anyway, so it never displaces useful work, and each firing
-        strictly grows the free pool, so the head eventually fits.
+        When this step scheduled nothing, free the blocks of the youngest
+        completed async load and requeue it as a fresh waiting request. A
+        holder that can still make progress is scheduled every step, which
+        keeps this from firing; only genuinely idle steps qualify. The
+        victim re-admits later, hitting its own blocks in the prefix cache
+        (they were cached when the load completed) or re-loading them from
+        the connector's remote tier. This only fires when nothing can run
+        anyway, so it never displaces useful work, and each firing strictly
+        grows the free pool, so the head eventually fits.
 
         Returns True if a victim's blocks were freed.
         """
         if (
             self.connector is None
-            or self.running
             or scheduled_running_reqs
             or scheduled_new_reqs
             or scheduled_resumed_reqs
@@ -1991,7 +1995,7 @@ class Scheduler(SchedulerInterface):
                 # holding its blocks): never preempt it here.
                 continue
             logger.warning(
-                "GPU KV pool stalled with no running request: freeing the "
+                "GPU KV pool stalled with nothing scheduled: freeing the "
                 "blocks of completed async KV load %s to break the deadlock; "
                 "it will re-admit and re-load its prefix.",
                 victim.request_id,
