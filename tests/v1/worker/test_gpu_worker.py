@@ -687,10 +687,14 @@ def test_extensible_init_reserves_profiled_cudagraph_memory(
     final KV sizing (#65868): the profiled graph estimate is added to the
     headroom while the warmup commit limit is fixed, then released, so the
     final sizing does not double-count the captured graphs."""
+    from vllm.v1.kv_cache_layout import KVCacheLayout
     from vllm.v1.worker import gpu_worker
     from vllm.v1.worker.gpu_worker import Worker
 
     monkeypatch.setattr(gpu_worker, "ensure_kv_transfer_initialized", lambda *a: None)
+    # Current main pads extensible KV segments unconditionally (#65554); keep
+    # the fake config block-outermost so padding leaves it untouched.
+    monkeypatch.setattr(gpu_worker, "granule_size", lambda device: 2 << 20)
     headroom_at_commit: list[int] = []
 
     class FakeKVCache:
@@ -715,7 +719,10 @@ def test_extensible_init_reserves_profiled_cudagraph_memory(
         cache_hit_alignment_tokens=16,
     )
     worker = SimpleNamespace(
-        cache_config=SimpleNamespace(enable_extensible_kv_cache=True),
+        cache_config=SimpleNamespace(
+            enable_extensible_kv_cache=True,
+            get_resolved_kv_cache_layout=lambda: KVCacheLayout.BLNHC,
+        ),
         model_config=SimpleNamespace(enable_return_routed_experts=False),
         vllm_config=SimpleNamespace(kv_transfer_config=None),
         model_runner=runner,
@@ -738,10 +745,14 @@ def test_extensible_init_without_cudagraph_estimate_keeps_activation_headroom(
 ):
     """With no profiled graph estimate (e.g. no graphs, or the profiling env
     var off), warmup commits hold back just the activation peak, as before."""
+    from vllm.v1.kv_cache_layout import KVCacheLayout
     from vllm.v1.worker import gpu_worker
     from vllm.v1.worker.gpu_worker import Worker
 
     monkeypatch.setattr(gpu_worker, "ensure_kv_transfer_initialized", lambda *a: None)
+    # Block-outermost fake layout: the unconditional segment padding (#65554)
+    # leaves the config untouched.
+    monkeypatch.setattr(gpu_worker, "granule_size", lambda device: 2 << 20)
     headroom_at_commit: list[int] = []
 
     class FakeKVCache:
@@ -766,7 +777,10 @@ def test_extensible_init_without_cudagraph_estimate_keeps_activation_headroom(
         cache_hit_alignment_tokens=16,
     )
     worker = SimpleNamespace(
-        cache_config=SimpleNamespace(enable_extensible_kv_cache=True),
+        cache_config=SimpleNamespace(
+            enable_extensible_kv_cache=True,
+            get_resolved_kv_cache_layout=lambda: KVCacheLayout.BLNHC,
+        ),
         model_config=SimpleNamespace(enable_return_routed_experts=False),
         vllm_config=SimpleNamespace(kv_transfer_config=None),
         model_runner=runner,
