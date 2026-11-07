@@ -1115,6 +1115,14 @@ class Worker(WorkerBase):
 
         cuda_graph_memory_bytes = 0
         if not self.model_config.enforce_eager:
+            if self.cache_config.enable_extensible_kv_cache:
+                # Warmup may have committed all but its headroom, which the
+                # graphs (encoder graphs especially) can exceed. Capture
+                # addresses any committed blocks, and the final sizing
+                # recommits what is left after capture.
+                kv_cache = self._v2_model_runner().extensible_kv_cache
+                assert kv_cache is not None
+                kv_cache.commit(1, shrink=True)
             with self._get_cudagraph_capture_context():
                 cuda_graph_memory_bytes = self.model_runner.capture_model()
 
