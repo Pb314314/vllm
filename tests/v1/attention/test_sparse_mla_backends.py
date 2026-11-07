@@ -404,6 +404,7 @@ _MQA = SparseMLAPrefillRoute.SPARSE_MQA
     ("seq_len", "overrides", "expected"),
     [
         (2048, {}, _DENSE),
+        (2049, {}, _MASKED),
         (2048, {"force_mqa": True}, _MQA),
         (2048, {"hisparse": True}, _MQA),
         (2048, {"pcp": True, "dcp": 2}, _MQA),
@@ -420,11 +421,7 @@ _MQA = SparseMLAPrefillRoute.SPARSE_MQA
     ],
 )
 def test_prefill_route(seq_len, overrides, expected):
-    """The builder picks each step's prefill route once; consumers only read it.
-
-    The masked-MHA cases use GLM-5's (256, 256) FlashMLA TP1 thresholds:
-    pure prefills up to 8K, never with context.
-    """
+    """Masked cases use GLM-5's FlashMLA TP1 thresholds: pure prefills up to 8K."""
     workspace_numel = overrides.get(
         "workspace_numel", math.prod(_topk_mask_shape(1, seq_len, seq_len))
     )

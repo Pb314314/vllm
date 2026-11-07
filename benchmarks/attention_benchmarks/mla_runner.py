@@ -856,9 +856,19 @@ def _run_single_benchmark(
     # Sparse backends use num_decode_tokens/num_prefills directly.
     #
     # sparse_mla_force_mqa overrides: even for prefill metadata, use MQA.
-    force_mqa = getattr(config, "sparse_mla_force_mqa", False)
-    force_dense_mha = getattr(config, "sparse_mla_mha_mode", "auto") == "dense"
-    if force_mqa:
+    mha_mode = getattr(config, "sparse_mla_mha_mode", "auto")
+    mqa_only = getattr(config, "sparse_mla_force_mqa", False) or (
+        # In auto mode, sparse prefills take the route the builder chose.
+        is_sparse
+        and mha_mode == "auto"
+        and metadata.num_prefills > 0
+        and (
+            metadata.prefill is None
+            or metadata.prefill.route is SparseMLAPrefillRoute.SPARSE_MQA
+        )
+    )
+    force_dense_mha = mha_mode == "dense"
+    if mqa_only:
         has_decode = True
         has_prefill = False
     elif is_sparse:
@@ -874,7 +884,6 @@ def _run_single_benchmark(
             "Sparse MLA dense_mha benchmark did not produce prefill metadata. "
             "Check reorder_batch_threshold/path forcing."
         )
-    mha_mode = getattr(config, "sparse_mla_mha_mode", "auto")
     if is_sparse and has_prefill and mha_mode != "auto":
         metadata.prefill.route = (
             SparseMLAPrefillRoute.MASKED_MHA
