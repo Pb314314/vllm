@@ -25,6 +25,7 @@ if not is_aiter_found_and_supported():
         allow_module_level=True,
     )
 
+from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.v1.attention.backend import CommonAttentionMetadata
 from vllm.v1.attention.backends.mla import rocm_aiter_mla_sparse as sparse_mod
 
@@ -394,7 +395,7 @@ def test_dense_prefill_builds_sparse_metadata_for_decode_subset(monkeypatch):
         num_decode_tokens=1,
         seq_lens=seq_lens,
         prefill_max_seq_len=4,
-        prefill=SimpleNamespace(use_dense_mha=True),
+        prefill=SimpleNamespace(route=SparseMLAPrefillRoute.DENSE_MHA),
     )
 
     monkeypatch.setattr(
@@ -480,7 +481,7 @@ def test_long_prefill_shares_full_sparse_metadata_with_decode(monkeypatch):
         num_decode_tokens=1,
         seq_lens=seq_lens,
         prefill_max_seq_len=5,
-        prefill=SimpleNamespace(use_dense_mha=False),
+        prefill=SimpleNamespace(route=SparseMLAPrefillRoute.SPARSE_MQA),
     )
 
     monkeypatch.setattr(
@@ -709,7 +710,15 @@ def test_sparse_metadata_workload_length_dtype_matrix(
         num_decode_tokens=num_decodes,
         seq_lens=seq_lens,
         prefill_max_seq_len=prefill_len if num_prefills else 0,
-        prefill=SimpleNamespace(use_dense_mha=not is_long) if num_prefills else None,
+        prefill=(
+            SimpleNamespace(
+                route=SparseMLAPrefillRoute.SPARSE_MQA
+                if is_long
+                else SparseMLAPrefillRoute.DENSE_MHA
+            )
+            if num_prefills
+            else None
+        ),
     )
     monkeypatch.setattr(
         sparse_mod.SparseMLACommonMetadataBuilder,

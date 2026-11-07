@@ -12,6 +12,7 @@ from vllm._aiter_ops import rocm_aiter_ops
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.model_executor.layers.attention.sparse_mla_attention import (
     SparseMLACommonImpl,
     SparseMLACommonMetadata,
@@ -594,7 +595,8 @@ class ROCMAiterMLASparseMetadataBuilder(
             common_prefix_len, common_attn_metadata, fast_build=fast_build
         )
         use_dense_prefill = (
-            metadata.prefill is not None and metadata.prefill.use_dense_mha
+            metadata.prefill is not None
+            and metadata.prefill.route is SparseMLAPrefillRoute.DENSE_MHA
         )
         num_reqs = metadata.num_decodes if use_dense_prefill else metadata.num_reqs
         num_tokens = int(common_attn_metadata.query_start_loc_cpu[num_reqs].item())
@@ -830,7 +832,6 @@ class ROCMAiterMLASparseImpl(SparseMLACommonImpl[ROCMAiterMLASparseMetadata]):
         )
         self.softmax_scale = scale
         self.supports_dense_mha_prefill = sinks is None  # type: ignore[misc]
-        self.masked_mha_available = False
 
         vllm_config = get_current_vllm_config()
         self.owns_indexer: bool = indexer is not None
