@@ -889,6 +889,7 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         is_profile: bool = False,
         valid_dummy_state_slots: bool = False,
         randomize_inputs: bool = False,
+        num_reqs_cap: int | None = None,
         **kwargs,
     ) -> tuple[torch.Tensor | None, torch.Tensor | None]:
         if skip_attn and not is_profile:
@@ -902,6 +903,10 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         # Adjust the dummy token count only when the expanded draft batch
         # would exceed the token budget.
         num_reqs = min(num_tokens, self.max_num_reqs)
+        if num_reqs_cap is not None and not uniform_decode:
+            # Cap the request count, e.g. so flashinfer-autotune dummy runs
+            # for sparse-MLA models keep >= 256 tokens per request.
+            num_reqs = min(num_reqs, max(1, num_reqs_cap))
         if uniform_decode:
             # HACK(lucas): for now since the worker is shared between MRV1 and MRV2,
             # and for spec-decode with MTP we want to make sure the dummy runs use

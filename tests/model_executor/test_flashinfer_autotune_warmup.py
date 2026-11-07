@@ -46,6 +46,7 @@ def _make_runner(modules, *, max_tokens: int = 8192):
     """Create a runner carrying only the state used by FlashInfer warmup."""
     return SimpleNamespace(
         scheduler_config=SimpleNamespace(max_num_batched_tokens=max_tokens),
+        model_config=SimpleNamespace(hf_config=SimpleNamespace()),
         vllm_config=SimpleNamespace(
             attention_config=SimpleNamespace(hisparse_config=None),
             parallel_config=SimpleNamespace(
@@ -89,6 +90,71 @@ def test_flashinfer_autotune_token_counts_are_bounded_and_deduplicated():
         token_counts = _flashinfer_autotune_token_counts(runner)
 
     assert token_counts == (32,)
+
+
+def test_flashinfer_autotune_num_reqs_cap_only_for_dsa_models():
+    from vllm.model_executor.warmup.kernel_warmup import (
+        _DSA_AUTOTUNE_MIN_TOKENS_PER_REQ,
+        _flashinfer_autotune_num_reqs_cap,
+    )
+
+    runner = _make_runner([])
+    # No index_topk marker: non-DSA models get no cap.
+    assert _flashinfer_autotune_num_reqs_cap(runner, 8192) is None
+
+    runner.model_config.hf_config = SimpleNamespace(index_topk=2048)
+    assert _flashinfer_autotune_num_reqs_cap(runner, 8192) == 8192 // 2048
+    # index_topk below the floor: the 256-token floor binds instead.
+    runner.model_config.hf_config = SimpleNamespace(index_topk=64)
+    assert (
+        _flashinfer_autotune_num_reqs_cap(runner, 8192)
+        == 8192 // _DSA_AUTOTUNE_MIN_TOKENS_PER_REQ
+    )
+
+    # Multimodal-style configs can nest the text config.
+    runner.model_config.hf_config = SimpleNamespace(
+        text_config=SimpleNamespace(index_topk=2048)
+    )
+    assert _flashinfer_autotune_num_reqs_cap(runner, 8192) is not None
+
+
+@pytest.mark.parametrize("skip_attn", [False, True])
+def test_flashinfer_autotune_caps_dummy_run_requests_for_dsa_models(skip_attn):
+    from vllm.model_executor.warmup.kernel_warmup import _DSA_AUTOTUNE_MIN_TOKENS_PER_REQ
+    from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
+    from vllm.v1.worker.gpu_model_runner import GPUModelRunner as V1Runner
+
+    runner = _make_runner([])
+    runner.model_config.hf_config = SimpleNamespace(index_topk=2048)
+    dummy_run_signature = signature((V2Runner if skip_attn else V1Runner)._dummy_run)
+    runner._dummy_run.side_effect = lambda **kwargs: dummy_run_signature.bind(
+        None, **kwargs
+    )
+
+    with (
+        patch(
+            "vllm.model_executor.warmup.kernel_warmup."
+            "_flashinfer_autotune_token_counts",
+            return_value=(8192,),
+        ),
+        patch(
+            "vllm.utils.flashinfer.flashinfer_get_hybrid_num_tokens_buckets",
+            return_value=(8192,),
+        ),
+        patch("vllm.utils.flashinfer.autotune"),
+    ):
+        _run_flashinfer_autotune_dummy_runs(runner, skip_attn=skip_attn)
+
+    assert runner._dummy_run.call_args_list == [
+        call(
+            num_tokens=8192,
+            skip_eplb=True,
+            is_profile=True,
+            randomize_inputs=True,
+            num_reqs_cap=8192 // 2048,
+            **({"skip_attn": True} if skip_attn else {}),
+        ),
+    ]
 
 
 @pytest.mark.parametrize("skip_attn", [False, True])
@@ -681,3 +747,17 @@ def test_autotune_cache_key_normalizes_kv_init_fields():
     # block_size stays significant (the daemon keys on the resolved value).
     resolved = CacheConfig(block_size=32)
     assert hash_config(_normalize_cache_config_for_hash(resolved)) != hash_config(fresh)
+
+
+def test_num_reqs_cap_is_applied_in_both_gpu_runners():
+    """Guard the clamp call sites: removing a runner's clamp must fail a test."""
+    import inspect
+
+    from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
+    from vllm.v1.worker.gpu_model_runner import GPUModelRunner as V1Runner
+
+    for cls in (V1Runner, V2Runner):
+        src = inspect.getsource(cls._dummy_run)
+        assert "num_reqs_cap: int | None = None" in src
+        assert "num_reqs_cap is not None" in src
+        assert "min(num_reqs, max(1, num_reqs_cap))" in src

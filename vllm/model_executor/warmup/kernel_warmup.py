@@ -429,12 +429,42 @@ def _flashinfer_deferred_moe_token_counts(
     return tuple(dict.fromkeys(token_counts))
 
 
+# Sparse-MLA (DSA) warmup shapes crash the trtllm-gen sparse MQA decode
+# kernel when per-request length is far below index_topk; keep dummy
+# requests at least this long (and at least index_topk) for those models.
+_DSA_AUTOTUNE_MIN_TOKENS_PER_REQ = 256
+
+
 def _flashinfer_autotune_token_counts(runner: "GPUModelRunner") -> tuple[int, ...]:
     max_tokens = runner.scheduler_config.max_num_batched_tokens
     # Tune the widest bucket set first so bounded passes reuse its configs.
     token_counts = [max_tokens]
     token_counts.extend(_flashinfer_deferred_moe_token_counts(runner))
     return tuple(dict.fromkeys(token_counts))
+
+
+def _flashinfer_autotune_num_reqs_cap(
+    runner: "GPUModelRunner", num_tokens: int
+) -> int | None:
+    """Cap the autotune dummy-run request count for sparse-MLA (DSA) models.
+
+    The trtllm-gen sparse MQA decode kernel's warmup cubins fault with an
+    illegal address for dummy-run shapes with short per-request lengths
+    (measured: per-request length in ~[8, 128] tokens at >= 8192 total
+    tokens, e.g. 1024 requests of 8 tokens; <= 4 or >= 256 tokens per
+    request is stable). Capping the request count keeps every dummy request
+    at >= 256 tokens for these models. The cap only applies to the autotune
+    warmup dummy runs; serving-time shapes are unaffected. Returns None for
+    non-DSA models (no cap).
+    """
+    hf_config = runner.model_config.hf_config
+    index_topk = getattr(hf_config, "index_topk", None) or getattr(
+        getattr(hf_config, "text_config", None), "index_topk", None
+    )
+    if index_topk is None:
+        return None
+    min_tokens_per_req = max(_DSA_AUTOTUNE_MIN_TOKENS_PER_REQ, index_topk)
+    return max(1, num_tokens // min_tokens_per_req)
 
 
 def _run_flashinfer_autotune_dummy_runs(
@@ -470,12 +500,14 @@ def _run_flashinfer_autotune_dummy_runs(
         )
         # Round M up to match serving-time bucket selection for non-bucket M.
         # See https://github.com/flashinfer-ai/flashinfer/issues/5450
+        num_reqs_cap = _flashinfer_autotune_num_reqs_cap(runner, num_tokens)
         with fi_utils.autotune(tuning_buckets=tuning_buckets, round_up=True):
             runner._dummy_run(
                 num_tokens=num_tokens,
                 skip_eplb=True,
                 is_profile=True,
                 randomize_inputs=True,
+                **({"num_reqs_cap": num_reqs_cap} if num_reqs_cap else {}),
                 **dummy_run_kwargs,
             )
             autotune_indexer_wq_b(runner.get_model(), max_tuning_tokens)
