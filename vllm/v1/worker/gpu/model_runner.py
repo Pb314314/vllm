@@ -93,7 +93,10 @@ from vllm.v1.watermarking.spec_decode import (
     speculative_target_watermark_key,
 )
 from vllm.v1.worker.cp_utils import check_attention_cp_compatibility
-from vllm.v1.worker.extensible_kv_cache import ExtensibleKVCache
+from vllm.v1.worker.extensible_kv_cache import (
+    ExtensibleKVCache,
+    ensure_kv_cache_blocks,
+)
 from vllm.v1.worker.gpu import pcp_manager as pcp
 from vllm.v1.worker.gpu.async_utils import (
     AsyncOutput,
@@ -1185,6 +1188,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
                         with use_workspace_lane(self._draft_workspace_lane):
                             self.speculator.capture()
                     if self.adaptive_verification is not None and not profile_only:
+                        if self.extensible_kv_cache is not None:
+                            # Startup released warmup's blocks before capture.
+                            # Spread the profiled context over as many blocks
+                            # as fit, as real steps read distinct blocks.
+                            ensure_kv_cache_blocks(
+                                self, self.extensible_kv_cache.committable_blocks()
+                            )
                         with self.step_timing.collect() as timings:
                             for batch in self.adaptive_verification.batches_to_profile(
                                 self.cudagraph_manager.captured_token_counts()
