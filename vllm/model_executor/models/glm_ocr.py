@@ -71,8 +71,6 @@ from vllm.model_executor.models.glm4_1v import (
     Glm4vVisionTransformer,
 )
 from vllm.multimodal import MULTIMODAL_REGISTRY
-from vllm.utils.torch_utils import PIN_MEMORY
-from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
 from .utils import (
     maybe_prefix,
@@ -341,61 +339,28 @@ class GlmOcrVisionTransformer(Glm4vVisionTransformer):
         self,
         x: torch.Tensor,
         grid_thw: torch.Tensor | list[list[int]],
+        *,
         encoder_metadata: dict[str, torch.Tensor] | None = None,
     ) -> torch.Tensor:
-        del encoder_metadata
-        if isinstance(grid_thw, list):
-            grid_thw = torch.tensor(grid_thw, dtype=torch.int32)
+        if encoder_metadata is None:
+            if not isinstance(grid_thw, list):
+                grid_thw = grid_thw.tolist()
+            encoder_metadata = self.prepare_encoder_metadata(grid_thw)
 
         # patchify
         x = self.input_norm(x.to(device=self.device), self.dtype)
         x = self.patch_embed(x)
-
-        # compute position embedding
-        rotary_pos_emb_cos, rotary_pos_emb_sin, image_type_ids = self.rot_pos_emb(
-            grid_thw
-        )
-        # compute cu_seqlens
-        cu_seqlens = torch.repeat_interleave(
-            grid_thw[:, 1] * grid_thw[:, 2], grid_thw[:, 0]
-        ).cumsum(dim=0, dtype=torch.int32)
-        # cat straight into a pinned buffer so the H2D copy stays non-blocking.
-        cu_seqlens = torch.cat(
-            [cu_seqlens.new_zeros(1), cu_seqlens],
-            out=cu_seqlens.new_empty(cu_seqlens.numel() + 1, pin_memory=PIN_MEMORY),
-        )
-        sequence_lengths = None
-        if self.attn_backend == AttentionBackendEnum.FLASHINFER:
-            cu_seqlens_np = cu_seqlens.numpy()
-            sequence_lengths = MMEncoderAttention.maybe_compute_seq_lens(
-                self.attn_backend, cu_seqlens_np, self.device
-            )
-            max_seqlen = torch.tensor(
-                MMEncoderAttention.compute_max_seqlen(self.attn_backend, cu_seqlens_np),
-                dtype=torch.int32,
-            )
-            cu_seqlens = MMEncoderAttention.maybe_recompute_cu_seqlens(
-                self.attn_backend,
-                cu_seqlens_np,
-                self.hidden_size,
-                self.tp_size,
-                self.device,
-            )
-        else:
-            cu_seqlens = cu_seqlens.to(self.device, non_blocking=True)
-            # pre-compute max_seqlen for attn mask to reduce cuMemcpy operations
-            max_seqlen = self.compute_attn_mask_seqlen(cu_seqlens)
 
         # transformers
         x = x.unsqueeze(1)
         for blk in self.blocks:
             x = blk(
                 x,
-                cu_seqlens=cu_seqlens,
-                rotary_pos_emb_cos=rotary_pos_emb_cos,
-                rotary_pos_emb_sin=rotary_pos_emb_sin,
-                max_seqlen=max_seqlen,
-                sequence_lengths=sequence_lengths,
+                cu_seqlens=encoder_metadata["cu_seqlens"],
+                rotary_pos_emb_cos=encoder_metadata["rotary_pos_emb_cos"],
+                rotary_pos_emb_sin=encoder_metadata["rotary_pos_emb_sin"],
+                max_seqlen=encoder_metadata["max_seqlen"],
+                sequence_lengths=encoder_metadata["sequence_lengths"],
             )
 
         # adapter
@@ -429,3 +394,9 @@ class GlmOcrForConditionalGeneration(Glm4vForConditionalGeneration):
                 input_norm=build_mm_input_norm(self.model_config),
                 prefix=maybe_prefix(prefix, "visual"),
             )
+
+    def get_encoder_cudagraph_config(self):
+        # This vision tower has no absolute position embedding buffer.
+        config = super().get_encoder_cudagraph_config()
+        config.buffer_keys = [k for k in config.buffer_keys if k != "pos_embeds"]
+        return config

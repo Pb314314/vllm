@@ -865,8 +865,9 @@ class Glm4vVisionTransformer(nn.Module):
 
         metadata: dict[str, torch.Tensor | None] = {}
 
-        # Positional embeddings
-        metadata["pos_embeds"] = self.pos_embeds_interpolate(grid_thw_list)
+        # Subclass towers may drop absolute position embeddings.
+        if hasattr(self, "embeddings"):
+            metadata["pos_embeds"] = self.pos_embeds_interpolate(grid_thw_list)
         rotary_cos, rotary_sin, _ = self.rot_pos_emb(grid_thw_list)
         metadata["rotary_pos_emb_cos"] = rotary_cos
         metadata["rotary_pos_emb_sin"] = rotary_sin
