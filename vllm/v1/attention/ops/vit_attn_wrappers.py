@@ -287,6 +287,14 @@ def torch_sdpa_wrapper(
     if cu_seqlens is None:
         return apply_sdpa(q, k, v, scale=scale, enable_gqa=enable_gqa).contiguous()
 
+    if current_platform.is_cuda_alike() and torch.cuda.is_current_stream_capturing():
+        raise RuntimeError(
+            "The TORCH_SDPA ViT attention backend splits the batch on the host "
+            "and cannot be captured in an encoder CUDA graph. Use another "
+            "backend (e.g. --mm-encoder-attn-backend TRITON_ATTN) or disable "
+            "cudagraph_mm_encoder."
+        )
+
     outputs = []
 
     # `torch.split` needs Python int sizes.
