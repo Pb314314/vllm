@@ -3,6 +3,9 @@
 
 import io
 import json
+from contextlib import suppress
+from dataclasses import dataclass, field
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import numpy as np
@@ -14,6 +17,10 @@ from transformers import AutoTokenizer
 import vllm.envs as envs
 from tests.utils import RemoteOpenAIServer
 from vllm.config import ModelConfig
+from vllm.entrypoints.scale_out.token_in_token_out.protocol import GenerateRequest
+from vllm.entrypoints.scale_out.token_in_token_out.serving import ServingTokens
+from vllm.entrypoints.serve.engine.protocol import ErrorResponse
+from vllm.inputs import TokensPrompt
 from vllm.v1.engine.detokenizer import check_stop_strings
 
 MODEL_NAME = "Qwen/Qwen3-0.6B"
@@ -136,6 +143,123 @@ async def test_generate_rejects_min_tokens_above_filled_max_tokens(client):
     }
     resp = await client.post(GEN_ENDPOINT, json=followup)
     resp.raise_for_status()
+
+
+@dataclass
+class _MockModelConfig:
+    """Just enough ModelConfig surface for ``ServingTokens`` defaulting."""
+
+    max_model_len: int = 128
+    is_encoder_decoder: bool = False
+    generation_config: str = "auto"
+    override_generation_config: dict = field(default_factory=dict)
+    diff_sampling_param: dict | None = None
+
+    def get_diff_sampling_param(self):
+        return self.diff_sampling_param or {}
+
+
+def _build_mock_serving_tokens(
+    model_config: _MockModelConfig,
+) -> tuple[ServingTokens, MagicMock]:
+    """A ``ServingTokens`` with a mocked engine, so the max_tokens defaulting
+    logic can be unit-tested without a running server."""
+    mock_engine = MagicMock()
+    mock_engine.errored = False
+    mock_engine.model_config = model_config
+    mock_engine.renderer = MagicMock()
+    mock_engine.input_processor = MagicMock()
+    mock_engine.vllm_config.scheduler_config.max_num_seqs = 256
+
+    models = MagicMock()
+    models.lora_requests = {}
+    models.is_base_model.return_value = True
+    models.model_name.return_value = MODEL_NAME
+
+    online_renderer = MagicMock()
+    online_renderer.preprocess_completion = AsyncMock(
+        side_effect=lambda *args, **kwargs: (
+            TokensPrompt(prompt_token_ids=kwargs["prompt_input"]),
+        )
+    )
+
+    serving = ServingTokens(
+        mock_engine,
+        models,
+        online_renderer,
+        online_derenderer=MagicMock(),
+        request_logger=None,
+    )
+    return serving, mock_engine
+
+
+def _gen_request(sampling_params: dict) -> GenerateRequest:
+    return GenerateRequest.model_validate(
+        {
+            "model": MODEL_NAME,
+            "token_ids": [1, 2, 3],
+            "sampling_params": sampling_params,
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_null_max_tokens_respects_server_caps():
+    """An explicit ``max_tokens: null`` must be treated like an omitted
+    field: server-side defaulting applies ``default_sampling_params``,
+    ``--override-generation-config`` and platform caps instead of falling
+    through to ``max_model_len - prompt_len`` in the engine.
+
+    Regression test for https://github.com/vllm-project/vllm/issues/65592.
+    """
+    model_config = _MockModelConfig(
+        max_model_len=128,
+        override_generation_config={"max_new_tokens": 8},
+    )
+    serving, mock_engine = _build_mock_serving_tokens(model_config)
+
+    # Explicit null: capped by the override (8), not 128 - 3.
+    with suppress(Exception):
+        await serving.serve_tokens(_gen_request({"max_tokens": None}))
+    assert mock_engine.generate.call_args.args[1].max_tokens == 8
+
+    # Omitted: same server-side defaulting path.
+    mock_engine.generate.reset_mock()
+    with suppress(Exception):
+        await serving.serve_tokens(_gen_request({}))
+    assert mock_engine.generate.call_args.args[1].max_tokens == 8
+
+    # Explicit value: left untouched, even below the cap.
+    mock_engine.generate.reset_mock()
+    with suppress(Exception):
+        await serving.serve_tokens(_gen_request({"max_tokens": 5}))
+    assert mock_engine.generate.call_args.args[1].max_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_explicit_null_max_tokens_min_tokens_still_bounded():
+    """With the null-as-unset defaulting, ``min_tokens`` must still be
+    validated against the server-resolved ``max_tokens``."""
+    model_config = _MockModelConfig(
+        max_model_len=128,
+        override_generation_config={"max_new_tokens": 8},
+    )
+    serving, mock_engine = _build_mock_serving_tokens(model_config)
+
+    result = await serving.serve_tokens(
+        _gen_request({"max_tokens": None, "min_tokens": 16})
+    )
+    assert isinstance(result, ErrorResponse)
+    assert "min_tokens" in result.error.message
+    mock_engine.generate.assert_not_called()
+
+    # Omitted field: the same server-side fill path, so the same bound
+    # applies (min_tokens=10 > the resolved cap of 8).
+    mock_engine.generate.reset_mock()
+    result = await serving.serve_tokens(_gen_request({"min_tokens": 10}))
+    assert isinstance(result, ErrorResponse)
+    assert "min_tokens" in result.error.message
+    mock_engine.generate.assert_not_called()
 
 
 @pytest.mark.asyncio

@@ -386,8 +386,14 @@ class ServingTokens(GenerateBaseServing):
         # Apply server-side ``max_tokens`` defaulting when the client did
         # not set it, matching the OpenAI-compat endpoints. ``SamplingParams``
         # defaults ``max_tokens`` to 16, which would otherwise silently cap
-        # every generation that omits the field.
-        if not request.is_sampling_param_provided("max_tokens"):
+        # every generation that omits the field. An explicit JSON ``null``
+        # records the key as provided (see
+        # ``_capture_sampling_params_provided_keys``) but carries no value,
+        # so it is treated as unset too; otherwise it would skip
+        # ``get_max_tokens`` and its caps (``default_sampling_params``,
+        # ``--override-generation-config`` and the platform output cap) and
+        # fall through to ``max_model_len - prompt_len`` in the engine.
+        if not request.is_sampling_param_set("max_tokens"):
             sampling_params.max_tokens = get_max_tokens(
                 max_model_len=self.model_config.max_model_len,
                 max_tokens=None,
@@ -395,6 +401,16 @@ class ServingTokens(GenerateBaseServing):
                 default_sampling_params=self.default_sampling_params,
                 override_max_tokens=self.override_max_tokens,
             )
+            # The server-side fill above happens after ``SamplingParams``
+            # validation ran, so ``min_tokens`` must be re-checked against
+            # the resolved value here rather than relying on downstream
+            # validation to catch it.
+            if sampling_params.min_tokens > sampling_params.max_tokens:
+                return self.create_error_response(
+                    "min_tokens must be less than or equal to "
+                    f"max_tokens={sampling_params.max_tokens}, got "
+                    f"{sampling_params.min_tokens}."
+                )
 
         if self.force_no_detokenize:
             sampling_params.detokenize = False

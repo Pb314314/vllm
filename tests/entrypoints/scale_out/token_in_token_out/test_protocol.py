@@ -64,6 +64,39 @@ def test_explicit_max_tokens_is_provided():
     assert req.is_sampling_param_provided("max_tokens")
 
 
+def test_explicit_null_max_tokens_is_provided_but_unset():
+    """An explicit JSON ``null`` records the key as provided (so serde
+    round-trips keep working) but carries no value, so it must surface as
+    unset: the server applies ``get_max_tokens`` and its caps instead of
+    letting the engine fall through to ``max_model_len - prompt_len``.
+    See https://github.com/vllm-project/vllm/issues/65592."""
+    payload = _base_payload()
+    payload["sampling_params"] = {"max_tokens": None}
+    req = GenerateRequest.model_validate(payload)
+    assert req.sampling_params.max_tokens is None
+    assert req.is_sampling_param_provided("max_tokens")
+    assert not req.is_sampling_param_set("max_tokens")
+
+
+def test_is_sampling_param_set_matches_provided_for_values():
+    """For non-null values ``is_sampling_param_set`` agrees with
+    ``is_sampling_param_provided``, and an omitted field is neither."""
+    req = GenerateRequest.model_validate(_base_payload())
+    assert not req.is_sampling_param_provided("max_tokens")
+    assert not req.is_sampling_param_set("max_tokens")
+
+    payload = _base_payload()
+    payload["sampling_params"] = {"max_tokens": 256}
+    req = GenerateRequest.model_validate(payload)
+    assert req.is_sampling_param_provided("max_tokens")
+    assert req.is_sampling_param_set("max_tokens")
+
+    # Pre-built ``SamplingParams``: a resolved value counts as set.
+    sp = SamplingParams(max_tokens=500)
+    req = GenerateRequest(token_ids=[1, 2, 3], sampling_params=sp)
+    assert req.is_sampling_param_set("max_tokens")
+
+
 def test_other_fields_tracked_independently():
     payload = _base_payload()
     payload["sampling_params"] = {"temperature": 0.0}
