@@ -539,7 +539,7 @@ def test_shrinking_commit_remaps_to_the_smaller_prefix(vmm, layout):
 
 @requires_cuda
 @pytest.mark.parametrize("layout", [KVCacheLayout.LBNHC, KVCacheLayout.BLNHC])
-def test_graphs_captured_after_releasing_warmup_blocks_work_after_recommit(vmm, layout):
+def test_graph_captured_after_release_reaches_recommitted_blocks(vmm, layout):
     """Startup releases warmup's blocks, captures CUDA graphs with only the
     null block committed, then commits the final cache. Graphs that look up
     block ids in the block tables (as draft steps do) must not reach a
