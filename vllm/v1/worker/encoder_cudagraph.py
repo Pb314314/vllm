@@ -28,6 +28,7 @@ from vllm.utils.torch_utils import current_stream
 from vllm.v1.worker.encoder_cudagraph_defs import (
     ENCODER_CUDAGRAPH_AXIS_KEYS_KWARG,
     EncoderCudaGraphConfig,
+    EncoderCudaGraphPaddingLogic,
     EncoderItemSpec,
 )
 
@@ -409,6 +410,27 @@ class EncoderCudaGraphManager:
         dst.zero_()
         dst[: src.shape[0]].copy_(src)
 
+    @staticmethod
+    def _pad_cumulative_buffer(dst: torch.Tensor, src: torch.Tensor) -> None:
+        # Repeat the last offset: the padding becomes zero-length sequences.
+        n = src.shape[0]
+        dst[:n].copy_(src)
+        if n < dst.shape[0]:
+            dst[n:].fill_(src[-1])
+
+    @staticmethod
+    def _get_padding_logic(
+        padding_logics: dict[str, EncoderCudaGraphPaddingLogic],
+        key: str,
+    ) -> EncoderCudaGraphPaddingLogic:
+        if key in padding_logics:
+            return padding_logics[key]
+        # Zeros after the real offsets would form a negative-length sequence,
+        # which can corrupt the attention output of the real sequences.
+        if key == "cu_seqlens":
+            return EncoderCudaGraphManager._pad_cumulative_buffer
+        return EncoderCudaGraphManager._copy_padded_buffer
+
     def _run_budget_graph(
         self,
         mm_kwargs: dict[str, Any],
@@ -455,9 +477,7 @@ class EncoderCudaGraphManager:
             if src.ndim == 0:
                 buf.copy_(src)
             else:
-                padding_logic = self.config.padding_logics.get(
-                    key, self._copy_padded_buffer
-                )
+                padding_logic = self._get_padding_logic(self.config.padding_logics, key)
                 padding_logic(buf, src)
 
         graph_meta.graph.replay()

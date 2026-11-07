@@ -667,7 +667,10 @@ def _check_eonly_encoder_outputs(worker, batches):
 @pytest.mark.parametrize(
     "model_id",
     params_with_marks(
-        {key: MODEL_CONFIGS[key] for key in ("qwen3_vl", "qwen3_5", "glm4_1v")}
+        {
+            key: MODEL_CONFIGS[key]
+            for key in ("qwen2_vl", "qwen3_vl", "qwen3_5", "glm4_1v")
+        }
     ),
 )
 @pytest.mark.skipif(not current_platform.is_cuda(), reason="Requires CUDA graphs")
@@ -701,8 +704,11 @@ def test_eonly_vit_cudagraph_outputs(
         config.model,
         dtype=config.dtype,
         mm_encoder_only=True,
-        # FA padding NaNs are tracked separately in #57136.
-        mm_encoder_attn_backend="FLASHINFER",
+        # FA padding NaNs are tracked separately in #57136. Qwen2-VL does not
+        # build the FlashInfer cu_seqlens layout.
+        mm_encoder_attn_backend=(
+            "FLASH_ATTN" if model_id == "qwen2_vl" else "FLASHINFER"
+        ),
         enable_prefix_caching=False,
         max_model_len=4096,
         max_num_seqs=2,
@@ -712,7 +718,8 @@ def test_eonly_vit_cudagraph_outputs(
             "cudagraph_mm_encoder": True,
             "encoder_cudagraph_token_budgets": token_budgets,
             "encoder_cudagraph_max_vision_items_per_batch": 2,
-            "encoder_cudagraph_max_frames_per_batch": 2,
+            # More frame slots than image slots: image replays pad cu_seqlens.
+            "encoder_cudagraph_max_frames_per_batch": 8,
         },
     ) as model:
         mm_config = model.llm.llm_engine.vllm_config.model_config.multimodal_config
