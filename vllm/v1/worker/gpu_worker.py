@@ -117,6 +117,7 @@ from vllm.v1.worker.extensible_kv_cache import (
     measure_kv_cache_blocks,
     pad_kv_cache_segments,
     registers_kv_cache_memory,
+    release_warmup_kv_cache,
 )
 from vllm.v1.worker.sentinel.gpu_worker_sentinel import WorkerSentinel
 from vllm.v1.worker.startup_plan import (
@@ -1116,13 +1117,7 @@ class Worker(WorkerBase):
         cuda_graph_memory_bytes = 0
         if not self.model_config.enforce_eager:
             if self.cache_config.enable_extensible_kv_cache:
-                # Warmup may have committed all but its headroom, which the
-                # graphs (encoder graphs especially) can exceed. Capture
-                # addresses any committed blocks, and the final sizing
-                # recommits what is left after capture.
-                kv_cache = self._v2_model_runner().extensible_kv_cache
-                assert kv_cache is not None
-                kv_cache.commit(1, shrink=True)
+                release_warmup_kv_cache(self._v2_model_runner())
             with self._get_cudagraph_capture_context():
                 cuda_graph_memory_bytes = self.model_runner.capture_model()
 
