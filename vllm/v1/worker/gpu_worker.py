@@ -117,7 +117,7 @@ from vllm.v1.worker.extensible_kv_cache import (
     measure_kv_cache_blocks,
     pad_kv_cache_segments,
     registers_kv_cache_memory,
-    release_warmup_kv_cache,
+    release_kv_cache_blocks,
 )
 from vllm.v1.worker.sentinel.gpu_worker_sentinel import WorkerSentinel
 from vllm.v1.worker.startup_plan import (
@@ -1117,7 +1117,7 @@ class Worker(WorkerBase):
         cuda_graph_memory_bytes = 0
         if not self.model_config.enforce_eager:
             if self.cache_config.enable_extensible_kv_cache:
-                release_warmup_kv_cache(self._v2_model_runner())
+                release_kv_cache_blocks(self._v2_model_runner())
             with self._get_cudagraph_capture_context():
                 cuda_graph_memory_bytes = self.model_runner.capture_model()
 
