@@ -438,23 +438,13 @@ class CpuPlatform(Platform):
         # Avoid inductor generates num_thread() and breaks the thread binding
         os.environ["TORCHINDUCTOR_CPP_DYNAMIC_THREADS"] = "1"
 
-        # NIXL's Mamba descriptors require DS conv state storage. Select it
-        # before cache shapes are created, while preserving an explicit layout.
+        cls.select_nixl_conv_state_layout(vllm_config)
         conv_state_layout_env = "VLLM_SSM_CONV_STATE_LAYOUT"
-        if conv_state_layout_env not in os.environ:
-            kv_transfer_config = vllm_config.kv_transfer_config
-            uses_nixl = kv_transfer_config is not None and any(
-                kv_transfer_config.has_connector(name)
-                for name in (
-                    "NixlConnector",
-                    "NixlPullConnector",
-                    "NixlPushConnector",
-                )
-            )
-            if uses_nixl:
-                os.environ[conv_state_layout_env] = "DS"
-            elif torch.cpu._is_avx512_bf16_supported():
-                os.environ[conv_state_layout_env] = "SD"
+        if (
+            conv_state_layout_env not in os.environ
+            and torch.cpu._is_avx512_bf16_supported()
+        ):
+            os.environ[conv_state_layout_env] = "SD"
 
         ld_preload_str = os.getenv("LD_PRELOAD", "")
         cpu_architecture = Platform.get_cpu_architecture()
