@@ -143,6 +143,11 @@ class BlockTables:
             self.block_tables[i].stage_write(req_index, start, block_ids)
             self.num_blocks.np[i, req_index] = end
 
+    def clear(self) -> None:
+        """Point every request's block table at the null block."""
+        for block_table in self.block_tables:
+            block_table.gpu.zero_()
+
     def apply_staged_writes(self) -> None:
         if self.num_kv_cache_groups == 0:
             return

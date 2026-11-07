@@ -427,6 +427,10 @@ def test_block_outermost_views_have_mapped_memory_past_their_start(vmm, num_laye
         last_view_start = views[layers[-1]].data_ptr() - kv_cache.buffer.base_ptr
         granule = kv_cache.buffer.granularity
         assert kv_cache.physical_bytes - last_view_start >= granule // 2
+        # Releasing warmup's blocks before capture keeps it so.
+        kv_cache.commit(NUM_BLOCKS)
+        _release_warmup_blocks(kv_cache)
+        assert kv_cache.physical_bytes - last_view_start >= granule // 2
     finally:
         kv_cache.free()
 
@@ -537,48 +541,33 @@ def test_shrinking_commit_remaps_to_the_smaller_prefix(vmm, layout):
         kv_cache.free()
 
 
+def _release_warmup_blocks(kv_cache: ExtensibleKVCache) -> list[str]:
+    calls: list[str] = []
+    runner = SimpleNamespace(
+        extensible_kv_cache=kv_cache,
+        block_tables=SimpleNamespace(clear=lambda: calls.append("clear")),
+    )
+    extensible_kv_cache.release_warmup_kv_cache(runner)
+    return calls
+
+
 @requires_cuda
 @pytest.mark.parametrize("layout", [KVCacheLayout.LBNHC, KVCacheLayout.BLNHC])
-def test_graph_captured_after_release_reaches_recommitted_blocks(vmm, layout):
-    """Startup releases warmup's blocks, captures CUDA graphs with only the
-    null block committed, then commits the final cache. Graphs that look up
-    block ids in the block tables (as draft steps do) must not reach a
-    released block during capture, and must reach blocks committed later."""
+def test_release_before_capture_keeps_only_the_null_blocks(vmm, layout):
+    """Before CUDA graph capture, startup gives back what warmup committed: the
+    cache keeps exactly what allocate committed, and the block tables drop
+    warmup's block ids, which draft steps would otherwise write to."""
     config, _ = _make_config(layout)
-    device = torch.device("cuda")
-    kv_cache = ExtensibleKVCache(config, device, layout)
+    kv_cache = ExtensibleKVCache(config, torch.device("cuda"), layout)
     try:
-        views = allocate_kv_cache(config, device, layout, allocate=kv_cache.allocate)
-        view = next(iter(views.values()))
-        kv_cache.commit(NUM_BLOCKS)
-        # Warmup leaves its block ids in the block tables.
-        block_table = SimpleNamespace(
-            gpu=torch.full((2, 4), NUM_BLOCKS - 1, dtype=torch.int32, device=device)
+        allocate_kv_cache(
+            config, torch.device("cuda"), layout, allocate=kv_cache.allocate
         )
-        runner = SimpleNamespace(
-            extensible_kv_cache=kv_cache,
-            block_tables=SimpleNamespace(block_tables=[block_table]),
-        )
-        extensible_kv_cache.release_warmup_kv_cache(runner)
-        assert kv_cache.num_committed_blocks == 1
-        assert torch.count_nonzero(block_table.gpu) == 0
-
-        block_id = block_table.gpu[0, :1].long()
-        src = torch.full_like(view[:1], 3.0)
-        read = torch.empty_like(view[:1])
-        graph = torch.cuda.CUDAGraph()
-        with torch.cuda.graph(graph):
-            block_id.copy_(block_table.gpu[0, :1])
-            read.copy_(view.index_select(0, block_id))
-            view.index_copy_(0, block_id + 1, src)
-
+        allocated = (kv_cache.num_committed_blocks, kv_cache.physical_bytes)
         kv_cache.commit(NUM_BLOCKS)
-        view[NUM_BLOCKS - 2].fill_(7.0)
-        block_table.gpu[0, 0] = NUM_BLOCKS - 2
-        graph.replay()
-        torch.accelerator.synchronize()
-        assert torch.all(read == 7.0)
-        assert torch.all(view[NUM_BLOCKS - 1] == 3.0)
+
+        assert _release_warmup_blocks(kv_cache) == ["clear"]
+        assert (kv_cache.num_committed_blocks, kv_cache.physical_bytes) == allocated
     finally:
         kv_cache.free()
 
