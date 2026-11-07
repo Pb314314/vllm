@@ -4,7 +4,7 @@
 import json
 import sys
 from collections import defaultdict
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from inspect import signature
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -782,12 +782,10 @@ def _v1_dummy_run_num_reqs(num_tokens, num_reqs_cap):
         raise _StopDummyRun
 
     runner._determine_batch_execution_and_padding.side_effect = stop
-    try:
+    with suppress(_StopDummyRun):
         GPUModelRunner._dummy_run(
             runner, num_tokens=num_tokens, num_reqs_cap=num_reqs_cap
         )
-    except _StopDummyRun:
-        pass
     return len(captured["num_scheduled_tokens_np"])
 
 
@@ -810,7 +808,9 @@ def _v2_dummy_run_num_reqs(num_tokens, num_reqs_cap):
     return len(so_cls.make_empty.return_value.num_scheduled_tokens)
 
 
-@pytest.mark.parametrize("runner_probe", [_v1_dummy_run_num_reqs, _v2_dummy_run_num_reqs])
+@pytest.mark.parametrize(
+    "runner_probe", [_v1_dummy_run_num_reqs, _v2_dummy_run_num_reqs]
+)
 def test_flashinfer_autotune_num_reqs_cap_changes_the_batch(runner_probe):
     """Behavioral: the cap must change the dummy batch the runner builds.
 
