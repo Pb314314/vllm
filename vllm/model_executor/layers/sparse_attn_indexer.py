@@ -36,6 +36,7 @@ from vllm.model_executor.kernels.attention.dsa.fused_mqa_topk import (
     get_fused_mqa_topk_workspaces,
     use_fused_mqa_topk,
 )
+from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.model_executor.layers.indexer_topk import (
     RADIX_TOPK_WORKSPACE_SIZE,
     deep_select_topk,
@@ -703,7 +704,8 @@ def sparse_attn_indexer(
             mla_metadata = attn_metadata.get(dense_mha_layer)
             prefill_metadata = getattr(mla_metadata, "prefill", None)
             if (
-                getattr(prefill_metadata, "use_dense_mha", False)
+                getattr(prefill_metadata, "route", None)
+                is SparseMLAPrefillRoute.DENSE_MHA
                 and getattr(mla_metadata, "num_decode_tokens", -1) == 0
                 and not torch.cuda.is_current_stream_capturing()
             ):

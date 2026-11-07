@@ -33,6 +33,7 @@ from vllm.config import (
     VllmConfig,
     set_current_vllm_config,
 )
+from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.model_executor.layers.linear import ColumnParallelLinear
 from vllm.v1.attention.backends.mla.prefill.registry import MLAPrefillBackendEnum
 
@@ -663,7 +664,12 @@ def _create_backend_impl(
     )
 
     # Create mock layer
-    layer = MockLayer(device, impl=impl, kv_cache_spec=kv_cache_spec)
+    layer = MockLayer(
+        device,
+        impl=impl,
+        kv_cache_spec=kv_cache_spec,
+        attn_backend=backend_cfg["backend_class"],
+    )
 
     # Attach a prefill backend (MLAAttention does this in __init__; the metadata
     # builder reads layer.prefill_backend from static_forward_context).
@@ -868,6 +874,13 @@ def _run_single_benchmark(
             "Sparse MLA dense_mha benchmark did not produce prefill metadata. "
             "Check reorder_batch_threshold/path forcing."
         )
+    mha_mode = getattr(config, "sparse_mla_mha_mode", "auto")
+    if is_sparse and has_prefill and mha_mode != "auto":
+        metadata.prefill.route = (
+            SparseMLAPrefillRoute.MASKED_MHA
+            if mha_mode == "masked"
+            else SparseMLAPrefillRoute.DENSE_MHA
+        )
 
     num_decode = (
         metadata.num_decode_tokens
@@ -931,17 +944,10 @@ def _run_single_benchmark(
             prefill_quant_op = QuantFP8(static=True, group_shape=GroupShape.PER_TENSOR)
 
     fused_output = output_scale is not None and fuse_quant_op
-    mha_mode = getattr(config, "sparse_mla_mha_mode", "auto")
 
     # Build forward function (runs a single decode/prefill pass)
     def forward_fn():
         results = []
-        impl._sparse_mla_force_masked_mha = (  # type: ignore[attr-defined]
-            mha_mode == "masked"
-        )
-        impl._sparse_mla_force_dense_mha = (  # type: ignore[attr-defined]
-            mha_mode == "dense"
-        )
         if has_decode:
             results.append(impl.forward_mqa(decode_inputs, kv_cache, metadata, layer))
         if has_prefill:
@@ -1192,7 +1198,6 @@ def _run_mla_benchmark_batched(
                 is_sparse and getattr(config, "sparse_mla_mha_mode", "auto") == "masked"
             )
             if force_masked_mha:
-                impl.masked_mha_available = True
                 from vllm.model_executor.layers.attention.sparse_mla_attention import (
                     GLOBAL_TOPK_MASK_MAX_BYTES,
                     _topk_mask_shape,

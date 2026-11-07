@@ -9,6 +9,7 @@ import torch
 import vllm.model_executor.layers.sparse_attn_indexer as sparse_indexer
 import vllm.models.deepseek_v32.attention as deepseek_attention
 from vllm.config import CUDAGraphMode
+from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.models.deepseek_v32 import attention as deepseek_v32_attention
 from vllm.models.deepseek_v32.attention import DeepseekV32Attention
 from vllm.v1.attention.backends.mla.indexer import (
@@ -107,10 +108,14 @@ def make_indexer_metadata(
     )
 
 
-def make_mla_metadata(*, use_dense_mha: bool = True, num_decode_tokens: int = 0):
+def make_mla_metadata(
+    *,
+    route: SparseMLAPrefillRoute = SparseMLAPrefillRoute.DENSE_MHA,
+    num_decode_tokens: int = 0,
+):
     return SimpleNamespace(
         num_decode_tokens=num_decode_tokens,
-        prefill=SimpleNamespace(use_dense_mha=use_dense_mha),
+        prefill=SimpleNamespace(route=route),
     )
 
 
@@ -154,7 +159,11 @@ def test_short_prefill_updates_k_cache_before_scoring_decision(
     if indexer_metadata.num_decodes:
         indexer_metadata.decode = object()
     mla_metadata = make_mla_metadata(
-        use_dense_mha=batch_kind != "force_mqa",
+        route=(
+            SparseMLAPrefillRoute.SPARSE_MQA
+            if batch_kind == "force_mqa"
+            else SparseMLAPrefillRoute.DENSE_MHA
+        ),
         num_decode_tokens=mla_num_decode_tokens,
     )
 
