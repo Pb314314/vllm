@@ -1526,6 +1526,17 @@ class Scheduler(SchedulerInterface):
                     # manager
                     if request.has_encoder_inputs:
                         self.encoder_cache_manager.free(request)
+                    if request_queue is self.kv_holding_waiting:
+                        # A block-holding head that cannot allocate while no
+                        # request is running deadlocks the engine: nothing is
+                        # left that could free blocks, and parked KV loads are
+                        # not preemption candidates. Try to break the stall.
+                        self._maybe_break_kv_load_stall(
+                            scheduled_running_reqs,
+                            scheduled_new_reqs,
+                            scheduled_resumed_reqs,
+                            scheduled_timestamp,
+                        )
                     break
 
                 # KVTransfer: the connector uses this info to determine
@@ -1918,6 +1929,129 @@ class Scheduler(SchedulerInterface):
         # Put the request back to the waiting queue.
         self.waiting.prepend_request(request)
         self.reset_preempted_req_ids.add(request.request_id)
+
+    def _maybe_break_kv_load_stall(
+        self,
+        scheduled_running_reqs: list[Request],
+        scheduled_new_reqs: list[Request],
+        scheduled_resumed_reqs: list[Request],
+        timestamp: float,
+    ) -> bool:
+        """Break a KV-connector deadlock by freeing one completed async load.
+
+        Async KV loads (e.g. OffloadingConnector) allocate their loaded
+        prefix's GPU blocks at admission and park in `kv_holding_waiting`.
+        Their un-cached tails are reserved only against other async-load
+        admissions; synchronous admissions and running requests' decode
+        growth do not honour the reservation, so under bursty load the parked
+        prefixes can end up holding so much of the pool that no completed
+        load can allocate its tail. Parked requests are not preemption
+        candidates, so once `running` drains the engine stalls forever: every
+        step schedules nothing and no block is ever freed.
+
+        When this step scheduled nothing and no request is running, free the
+        blocks of the youngest completed async load and requeue it as a fresh
+        waiting request. The `running` check is load-bearing, not redundant
+        with the scheduled-lists checks: with async scheduling a running
+        request's final output can still be in flight while the step
+        schedules nothing, and that outstanding result will finish the
+        request and free its blocks. The victim re-admits later, hitting its
+        own blocks in the prefix cache (they were cached when the load
+        completed) or re-loading them from the connector's remote tier. This
+        only fires when nothing can run anyway, so it never displaces useful
+        work, and each firing strictly grows the free pool, so the head
+        eventually fits.
+
+        Returns True if a victim's blocks were freed.
+        """
+        if (
+            self.connector is None
+            or self.running
+            or scheduled_running_reqs
+            or scheduled_new_reqs
+            or scheduled_resumed_reqs
+            or self.connector.has_pending_block_frees()
+        ):
+            return False
+        for victim in reversed(list(self.kv_holding_waiting)):
+            if victim.request_id in self.failed_recving_kv_req_ids:
+                # Failed loads are recovered by the KV load failure policy.
+                continue
+            if victim.status == RequestStatus.WAITING_FOR_REMOTE_KVS:
+                # Never free blocks under an in-flight transfer: the
+                # connector may be writing them. Only loads reported complete
+                # qualify.
+                if victim.request_id not in self.finished_recving_kv_req_ids:
+                    continue
+            elif not (
+                # Parked/promoted loads are tracked in `_parked_reservations`
+                # (#65285), with `_inflight_prefills` as HiSparse's fallback.
+                (
+                    victim in self._parked_reservations
+                    or victim in self._inflight_prefills
+                )
+                and victim.num_output_tokens == 0
+            ):
+                # Not a parked async KV load (e.g. a paused streaming session
+                # holding its blocks): never preempt it here.
+                continue
+            logger.warning(
+                "GPU KV pool stalled with no running request: freeing the "
+                "blocks of completed async KV load %s to break the deadlock; "
+                "it will re-admit and re-load its prefix.",
+                victim.request_id,
+            )
+            self._preempt_kv_holding_request(victim, timestamp)
+            return True
+        return False
+
+    def _preempt_kv_holding_request(self, request: Request, timestamp: float) -> None:
+        """Free the GPU blocks of a waiting async-KV-load request and requeue
+        it through `_enqueue_waiting_request` (honouring the inflight-load
+        routing).
+
+        Unlike `_preempt_request`, a victim that never ran must NOT be
+        marked PREEMPTED: it has no model-runner state to resume or reset and
+        no stale output. A victim that ran before its reload (preempted, then
+        re-parked) keeps PREEMPTED so the runner resumes it correctly.
+        `num_preemptions` stays untouched in both cases, so a later
+        remote-KV promotion does not surface a never-ran victim as resumed.
+        """
+        request_id = request.request_id
+        self.kv_holding_waiting.remove_request(request)
+        self.deferred_waiting.discard(request)
+        self.finished_recving_kv_req_ids.discard(request_id)
+        self._free_request_blocks(request)
+        self.encoder_cache_manager.free(request)
+        self._pending_encoder_input_ids.pop(request_id, None)
+        self._inflight_prefills.discard(request)
+        # Release the cached parked-load reservation (#65285) too, or the
+        # freed victim's tail would keep blocking other admissions.
+        self._unreserve_parked(request)
+        self._set_kv_fetch_stage(request, None)
+        if self.aux_output_connector is not None:
+            # Release the aux-tier hold that request_loading() placed at
+            # admission. The victim has not finished, so request_finished()
+            # (which queues a terminal event) would be wrong here.
+            self.aux_output_connector.request_load_aborted(request)
+        request.status = (
+            # A victim that ran before (preempted, then re-parked by its
+            # async reload) must stay PREEMPTED: the model runner still
+            # knows the request and it holds output tokens, so emitting it
+            # as a NEW request would corrupt its runner state. A victim
+            # that never ran becomes plain WAITING (see docstring).
+            RequestStatus.PREEMPTED
+            if request.num_preemptions
+            else RequestStatus.WAITING
+        )
+        request.num_computed_tokens = 0
+        request.spec_token_ids = []
+        if self.log_stats:
+            request.record_event(EngineCoreEventType.PREEMPTED, timestamp)
+        # Route through _enqueue_waiting_request so the requeue honours the
+        # --max-num-inflight-kv-loads routing (async_kv_waiting) when the
+        # victim may load async again.
+        self._enqueue_waiting_request(request)
 
     def _update_after_schedule(self, scheduler_output: SchedulerOutput) -> None:
         # Advance the number of computed tokens for the request AFTER

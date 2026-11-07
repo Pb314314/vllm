@@ -159,6 +159,16 @@ class AuxOutputSchedulerConnector:
         )
         self._loading[request.request_id] = {block for block, _ in blocks}
 
+    def request_load_aborted(self, request: Request) -> None:
+        """Release the loading-time hold of a request whose async load was
+        aborted before it ever ran (e.g. stall-breaker preemption). The
+        request has not finished, so `request_finished` (terminal event, hash
+        retention) does not apply; only the `_loading` hold is released. The
+        request re-admits later and calls `request_loading` again if it loads
+        remotely once more.
+        """
+        self._loading.pop(request.request_id, None)
+
     def _release_unheld(self) -> None:
         excess = len(self._kv_cached) - self._capacity
         if excess <= 0:
