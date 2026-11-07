@@ -547,7 +547,7 @@ def _release_warmup_blocks(kv_cache: ExtensibleKVCache) -> list[str]:
         extensible_kv_cache=kv_cache,
         block_tables=SimpleNamespace(clear=lambda: calls.append("clear")),
     )
-    extensible_kv_cache.release_warmup_kv_cache(runner)
+    extensible_kv_cache.release_kv_cache_blocks(runner)
     return calls
 
 
