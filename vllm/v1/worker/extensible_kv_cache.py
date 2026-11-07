@@ -447,6 +447,21 @@ def ensure_kv_cache_blocks(runner: "GPUModelRunner", num_blocks: int) -> None:
         kv_cache.commit(num_blocks)
 
 
+def release_warmup_kv_cache(runner: "GPUModelRunner") -> None:
+    """Shrink an extensible KV cache to the null block before graph capture.
+
+    Warmup commits blocks up to its activation headroom, which CUDA graphs
+    (encoder graphs especially) can exceed; the final sizing commits them
+    again. The block tables still hold warmup's block ids, which speculative
+    decoding's draft steps read during capture, so they are cleared first.
+    """
+    kv_cache = runner.extensible_kv_cache
+    assert kv_cache is not None
+    for block_table in runner.block_tables.block_tables:
+        block_table.gpu.zero_()
+    kv_cache.commit(1, shrink=True)
+
+
 def extend_kv_cache(
     runner: "GPUModelRunner", kv_cache_config: KVCacheConfig, num_blocks: int
 ) -> None:

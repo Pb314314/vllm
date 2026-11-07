@@ -539,6 +539,52 @@ def test_shrinking_commit_remaps_to_the_smaller_prefix(vmm, layout):
 
 @requires_cuda
 @pytest.mark.parametrize("layout", [KVCacheLayout.LBNHC, KVCacheLayout.BLNHC])
+def test_graphs_captured_after_releasing_warmup_blocks_work_after_recommit(vmm, layout):
+    """Startup releases warmup's blocks, captures CUDA graphs with only the
+    null block committed, then commits the final cache. Graphs that look up
+    block ids in the block tables (as draft steps do) must not reach a
+    released block during capture, and must reach blocks committed later."""
+    config, _ = _make_config(layout)
+    device = torch.device("cuda")
+    kv_cache = ExtensibleKVCache(config, device, layout)
+    try:
+        views = allocate_kv_cache(config, device, layout, allocate=kv_cache.allocate)
+        view = next(iter(views.values()))
+        kv_cache.commit(NUM_BLOCKS)
+        # Warmup leaves its block ids in the block tables.
+        block_table = SimpleNamespace(
+            gpu=torch.full((2, 4), NUM_BLOCKS - 1, dtype=torch.int32, device=device)
+        )
+        runner = SimpleNamespace(
+            extensible_kv_cache=kv_cache,
+            block_tables=SimpleNamespace(block_tables=[block_table]),
+        )
+        extensible_kv_cache.release_warmup_kv_cache(runner)
+        assert kv_cache.num_committed_blocks == 1
+        assert torch.count_nonzero(block_table.gpu) == 0
+
+        block_id = block_table.gpu[0, :1].long()
+        src = torch.full_like(view[:1], 3.0)
+        read = torch.empty_like(view[:1])
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph):
+            block_id.copy_(block_table.gpu[0, :1])
+            read.copy_(view.index_select(0, block_id))
+            view.index_copy_(0, block_id + 1, src)
+
+        kv_cache.commit(NUM_BLOCKS)
+        view[NUM_BLOCKS - 2].fill_(7.0)
+        block_table.gpu[0, 0] = NUM_BLOCKS - 2
+        graph.replay()
+        torch.accelerator.synchronize()
+        assert torch.all(read == 7.0)
+        assert torch.all(view[NUM_BLOCKS - 1] == 3.0)
+    finally:
+        kv_cache.free()
+
+
+@requires_cuda
+@pytest.mark.parametrize("layout", [KVCacheLayout.LBNHC, KVCacheLayout.BLNHC])
 def test_committed_views_cover_exactly_the_committed_bytes(vmm, layout):
     """After the final commit, per-layer views are rebuilt over storages that
     span only the committed blocks, at the same addresses as the capacity
