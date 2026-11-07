@@ -44,6 +44,18 @@ from vllm.v1.worker.block_table import get_block_table_width
 logger = init_logger(__name__)
 
 
+def apply_num_reqs_cap(num_reqs: int, num_reqs_cap: int | None) -> int:
+    """Clamp a dummy-run request count to a cap (at least 1).
+
+    Identity when num_reqs_cap is None. Used by the GPU model runners to
+    reshape flashinfer-autotune warmup dummy runs for sparse-MLA models
+    (see vllm/model_executor/warmup/kernel_warmup.py).
+    """
+    if num_reqs_cap is None:
+        return num_reqs
+    return min(num_reqs, max(1, num_reqs_cap))
+
+
 def raise_if_nan_logits(num_nans_in_logits: Mapping[str, int]) -> None:
     if not any(num_nans_in_logits.values()):
         return

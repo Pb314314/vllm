@@ -225,6 +225,7 @@ from vllm.v1.worker.ubatch_utils import (
 )
 from vllm.v1.worker.utils import (
     EncoderTimingStats,
+    apply_num_reqs_cap,
     raise_if_nan_logits,
 )
 from vllm.v1.worker.workspace import lock_workspace
@@ -5555,6 +5556,7 @@ class GPUModelRunner(
         num_active_loras: int = 0,
         profile_seq_lens: int | None = None,
         randomize_inputs: bool = False,
+        num_reqs_cap: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run a dummy forward pass to warm up/profile run or capture the
         CUDA graph for the model.
@@ -5586,6 +5588,9 @@ class GPUModelRunner(
             is_graph_capturing: Whether this run is a cudagraph capture.
             randomize_inputs: Whether to fill the dummy inputs with random
                 values rather than zeros.
+            num_reqs_cap: If set, cap the dummy batch's request count (used by
+                flashinfer-autotune warmup to keep >= 256 tokens per request
+                for sparse-MLA models).
 
         """
         mm_config = self.vllm_config.model_config.multimodal_config
@@ -5639,6 +5644,10 @@ class GPUModelRunner(
                 num_scheduled_tokens_list[-1] = num_tokens % max_query_len
         else:
             num_reqs = min(num_tokens, max_num_reqs)
+            if num_reqs_cap is not None:
+                # Cap the request count, e.g. so flashinfer-autotune dummy
+                # runs for sparse-MLA models keep >= 256 tokens per request.
+                num_reqs = apply_num_reqs_cap(num_reqs, num_reqs_cap)
             min_tokens_per_req = num_tokens // num_reqs
             num_scheduled_tokens_list = [min_tokens_per_req] * num_reqs
             num_scheduled_tokens_list[-1] += num_tokens % num_reqs
