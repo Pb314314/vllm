@@ -323,3 +323,151 @@ def test_mrope_num_dims_from_nested_rope_parameters():
 
 def test_mrope_num_dims_without_mrope():
     assert mrope_num_dims(PreTrainedConfig()) == 0
+
+
+def test_get_config_merges_legacy_hf_quant_config_layers(tmp_path):
+    """A config.json quantization_config that misses layers listed in the
+    legacy hf_quant_config.json gets them merged in (config.json wins on
+    conflicts). Regression test for
+    https://github.com/vllm-project/vllm/issues/65873, where the NVFP4 MTP
+    draft layers are absent from config.json and the draft then loaded
+    unquantized."""
+    mtp_layer = "model.mtp.layers.1.mixer.shared_experts.down_proj"
+    config_layers = {
+        "model.layers.0.mlp.down_proj": {"quant_algo": "NVFP4", "group_size": 16},
+        "model.layers.0.self_attn.q_proj": {"quant_algo": "FP8"},
+    }
+    legacy_layers = {
+        # Overlapping key with a different recipe: config.json must win.
+        "model.layers.0.mlp.down_proj": {"quant_algo": "NVFP4", "group_size": 32},
+        # Only in the legacy file (the #65873 MTP case).
+        mtp_layer: {"quant_algo": "NVFP4", "group_size": 16},
+    }
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "llama",
+                "architectures": ["LlamaForCausalLM"],
+                "quantization_config": {
+                    "quant_algo": "modelopt_mixed",
+                    "quant_method": "modelopt_mixed",
+                    "quantized_layers": config_layers,
+                    "ignore": ["model.mtp.layers.1.self_attn"],
+                },
+            }
+        )
+    )
+    (tmp_path / "hf_quant_config.json").write_text(
+        json.dumps(
+            {
+                "producer": {"name": "modelopt", "version": "0.29.0"},
+                "quantization": {
+                    "quant_algo": "modelopt_mixed",
+                    "quantized_layers": legacy_layers,
+                    "exclude_modules": ["model.mtp.layers.1.self_attn"],
+                },
+            }
+        )
+    )
+
+    config = config_module.get_config(tmp_path, trust_remote_code=False)
+    merged = config.quantization_config["quantized_layers"]
+    assert len(merged) == 3
+    # The legacy-only MTP layer is merged in.
+    assert merged[mtp_layer] == {"quant_algo": "NVFP4", "group_size": 16}
+    # config.json wins on conflicts.
+    assert merged["model.layers.0.mlp.down_proj"]["group_size"] == 16
+    # Exclusion semantics stay with config.json.
+    assert config.quantization_config["ignore"] == ["model.mtp.layers.1.self_attn"]
+
+
+def test_get_config_legacy_hf_quant_config_fallback_unchanged(tmp_path):
+    """Without a config.json quantization_config, hf_quant_config.json is
+    still used verbatim (the pre-existing ModelOpt <= 0.29 path)."""
+    legacy = {
+        "producer": {"name": "modelopt", "version": "0.29.0"},
+        "quantization": {
+            "quant_algo": "modelopt_mixed",
+            "quantized_layers": {"model.layers.0.mlp.down_proj": {"quant_algo": "FP8"}},
+            "exclude_modules": [],
+        },
+    }
+    (tmp_path / "config.json").write_text(
+        json.dumps({"model_type": "llama", "architectures": ["LlamaForCausalLM"]})
+    )
+    (tmp_path / "hf_quant_config.json").write_text(json.dumps(legacy))
+
+    config = config_module.get_config(tmp_path, trust_remote_code=False)
+    assert config.quantization_config == legacy
+
+
+def _write_mixed_quant_checkpoint(tmp_path, quant_config, legacy_layers):
+    (tmp_path / "config.json").write_text(
+        json.dumps(
+            {
+                "model_type": "llama",
+                "architectures": ["LlamaForCausalLM"],
+                "quantization_config": quant_config,
+            }
+        )
+    )
+    (tmp_path / "hf_quant_config.json").write_text(
+        json.dumps(
+            {
+                "producer": {"name": "modelopt", "version": "0.29.0"},
+                "quantization": {
+                    "quant_algo": "modelopt_mixed",
+                    "quantized_layers": legacy_layers,
+                    "exclude_modules": [],
+                },
+            }
+        )
+    )
+
+
+def test_get_config_legacy_quant_read_none_is_not_fatal(tmp_path):
+    """A legacy hf_quant_config.json that cannot be read
+    (get_hf_file_to_dict returns None, a documented failure mode) must not
+    break a load that has a config.json quantization_config."""
+    quant_config = {
+        "quant_algo": "modelopt_mixed",
+        "quant_method": "modelopt_mixed",
+        "quantized_layers": {"model.layers.0.mlp.down_proj": {"quant_algo": "FP8"}},
+    }
+    _write_mixed_quant_checkpoint(tmp_path, quant_config, {})
+
+    with patch.object(config_module, "get_hf_file_to_dict", return_value=None):
+        config = config_module.get_config(tmp_path, trust_remote_code=False)
+    assert config.quantization_config == quant_config
+
+
+def test_get_config_legacy_quant_merge_gated_on_modelopt(tmp_path):
+    """A non-ModelOpt config.json must not get a foreign quantized_layers
+    map injected from a leftover ModelOpt hf_quant_config.json."""
+    quant_config = {
+        "quant_algo": "fp8",
+        "quant_method": "fp8",
+        "quantized_layers": {"model.layers.0.mlp.down_proj": {"quant_algo": "FP8"}},
+    }
+    _write_mixed_quant_checkpoint(
+        tmp_path,
+        quant_config,
+        {"model.mtp.layers.1.mixer.experts": {"quant_algo": "NVFP4"}},
+    )
+
+    config = config_module.get_config(tmp_path, trust_remote_code=False)
+    assert config.quantization_config == quant_config
+
+
+def test_get_config_legacy_quant_merge_requires_primary_layer_map(tmp_path):
+    """A ModelOpt config.json without a per-layer map (uniform-quant
+    checkpoint) gets nothing injected from the legacy file."""
+    quant_config = {"quant_algo": "fp8", "quant_method": "modelopt"}
+    _write_mixed_quant_checkpoint(
+        tmp_path,
+        quant_config,
+        {"model.mtp.layers.1.mixer.experts": {"quant_algo": "NVFP4"}},
+    )
+
+    config = config_module.get_config(tmp_path, trust_remote_code=False)
+    assert config.quantization_config == quant_config
