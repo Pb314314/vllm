@@ -749,6 +749,11 @@ def test_autotune_cache_key_normalizes_kv_init_fields():
 
 
 
+
+class _StopDummyRun(Exception):
+    pass
+
+
 def test_apply_num_reqs_cap_behavior():
     """The clamp's semantics: identity without a cap, >= 1 floor with one."""
     from vllm.v1.worker.utils import apply_num_reqs_cap
@@ -759,19 +764,59 @@ def test_apply_num_reqs_cap_behavior():
     assert apply_num_reqs_cap(8192, 0) == 1  # floored at one request
 
 
-def test_num_reqs_cap_is_applied_in_both_gpu_runners():
-    """Each GPU runner's _dummy_run must assign the clamped count back.
+def _v1_dummy_run_num_reqs(num_tokens, num_reqs_cap):
+    """Run V1 GPUModelRunner._dummy_run until the batch is built and report
+    how many requests it contains."""
+    from unittest.mock import MagicMock
 
-    Removing the clamp, discarding its result, or inlining a bare
-    expression must all break the pattern asserted here; the semantics
-    themselves are covered by test_apply_num_reqs_cap_behavior.
+    from vllm.v1.worker.gpu_model_runner import GPUModelRunner
+
+    runner = MagicMock()
+    runner.vllm_config.model_config.multimodal_config = None
+    runner.max_num_tokens = 1 << 20
+    runner.scheduler_config.max_num_seqs = 8192
+    captured = {}
+
+    def stop(**kwargs):
+        captured.update(kwargs)
+        raise _StopDummyRun
+
+    runner._determine_batch_execution_and_padding.side_effect = stop
+    try:
+        GPUModelRunner._dummy_run(
+            runner, num_tokens=num_tokens, num_reqs_cap=num_reqs_cap
+        )
+    except _StopDummyRun:
+        pass
+    return len(captured["num_scheduled_tokens_np"])
+
+
+def _v2_dummy_run_num_reqs(num_tokens, num_reqs_cap):
+    """Same for the V2 (vllm/v1/worker/gpu/model_runner.py) runner."""
+    from unittest.mock import MagicMock, patch
+
+    from vllm.v1.worker.gpu.model_runner import GPUModelRunner
+
+    runner = MagicMock()
+    runner.max_num_reqs = 8192
+    runner.max_num_tokens = 1 << 20
+    runner.speculator = None
+    runner.is_first_pp_rank = True
+    runner.lora_config = None
+    with patch("vllm.v1.worker.gpu.model_runner.SchedulerOutput") as so_cls:
+        GPUModelRunner._dummy_run(
+            runner, num_tokens=num_tokens, num_reqs_cap=num_reqs_cap
+        )
+    return len(so_cls.make_empty.return_value.num_scheduled_tokens)
+
+
+@pytest.mark.parametrize("runner_probe", [_v1_dummy_run_num_reqs, _v2_dummy_run_num_reqs])
+def test_flashinfer_autotune_num_reqs_cap_changes_the_batch(runner_probe):
+    """Behavioral: the cap must change the dummy batch the runner builds.
+
+    Fails if a runner's clamp is removed, inverted, or its result
+    discarded. No GPU needed: every attribute below the batch-construction
+    point is mocked.
     """
-    import inspect
-
-    from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
-    from vllm.v1.worker.gpu_model_runner import GPUModelRunner as V1Runner
-
-    for cls in (V1Runner, V2Runner):
-        src = inspect.getsource(cls._dummy_run)
-        assert "num_reqs_cap: int | None = None" in src
-        assert "num_reqs = apply_num_reqs_cap(num_reqs, num_reqs_cap)" in src
+    assert runner_probe(8192, num_reqs_cap=None) == 8192  # uncapped
+    assert runner_probe(8192, num_reqs_cap=8) == 8  # capped
