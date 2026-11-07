@@ -668,6 +668,17 @@ class Platform:
         """
         pass
 
+    @staticmethod
+    def select_nixl_conv_state_layout(vllm_config: "VllmConfig") -> None:
+        """NIXL's Mamba descriptors require the DS conv state layout. Select it
+        before cache shapes are created, keeping an explicitly set layout."""
+        kv_transfer_config = vllm_config.kv_transfer_config
+        if kv_transfer_config is not None and any(
+            kv_transfer_config.has_connector(name)
+            for name in ("NixlConnector", "NixlPullConnector", "NixlPushConnector")
+        ):
+            os.environ.setdefault("VLLM_SSM_CONV_STATE_LAYOUT", "DS")
+
     @classmethod
     def check_and_update_config(cls, vllm_config: "VllmConfig") -> None:
         """Check and update the configuration for the current platform.
