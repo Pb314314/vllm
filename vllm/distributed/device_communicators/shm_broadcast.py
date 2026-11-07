@@ -376,7 +376,9 @@ class ShmRingBuffer:
                 except FileNotFoundError:
                     # we might deserialize the object in a different node
                     # in this case, this object is not used,
-                    # and we should suppress the error
+                    # and we should suppress the error. Callers that require
+                    # a working local attach (e.g. MessageQueue.create_from_handle)
+                    # check for the missing attribute and fail clearly instead.
                     pass
 
     def handle(self):
@@ -397,7 +399,16 @@ class ShmRingBuffer:
         if hasattr(self, "shared_memory"):
             self.shared_memory.close()
             if self.is_creator:
-                self.shared_memory.unlink()
+                # The segment may already have been unlinked by an external
+                # cleaner (e.g. systemd-logind RemoveIPC, observed purging
+                # /dev/shm mid-startup); nothing left to do then.
+                # NB: try/except, not contextlib.suppress — at interpreter
+                # teardown module globals may already be None, so a bare-name
+                # reference (suppress included) can itself raise TypeError.
+                try:  # noqa: SIM105
+                    self.shared_memory.unlink()
+                except FileNotFoundError:
+                    pass
 
     @contextmanager
     def get_data(self, current_idx: int):
@@ -633,6 +644,24 @@ class MessageQueue:
         if rank in handle.local_reader_ranks:
             assert handle.buffer_handle is not None
             self.buffer = ShmRingBuffer(*handle.buffer_handle)
+            if not hasattr(self.buffer, "shared_memory"):
+                # This rank is a confirmed local reader, so the writer's
+                # segment must be attachable. ShmRingBuffer.__init__ suppresses
+                # FileNotFoundError for the pickled-copy-on-another-node case,
+                # which cannot happen here: fail immediately with the real
+                # cause instead of a deferred, confusing AttributeError on
+                # first use.
+                name = handle.buffer_handle[3]
+                raise RuntimeError(
+                    f"Rank {rank} is a local reader but could not attach to "
+                    f"shared memory ring buffer {name!r}. The writer created "
+                    "the segment, but it is already gone from /dev/shm. An "
+                    "external cleaner may have unlinked it (e.g. "
+                    "systemd-logind with RemoveIPC=yes purging the user's IPC "
+                    "when their last login session ends, or a tmpfiles/cron "
+                    "cleaner), the handle may be stale, or the processes may "
+                    "not share a /dev/shm mount namespace."
+                )
             self.current_idx = 0
             self.local_reader_rank = handle.local_reader_ranks.index(rank)
             self._is_local_reader = True
