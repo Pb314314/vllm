@@ -225,6 +225,7 @@ from vllm.v1.worker.ubatch_utils import (
 )
 from vllm.v1.worker.utils import (
     EncoderTimingStats,
+    apply_num_reqs_cap,
     raise_if_nan_logits,
 )
 from vllm.v1.worker.workspace import lock_workspace
@@ -5646,7 +5647,7 @@ class GPUModelRunner(
             if num_reqs_cap is not None:
                 # Cap the request count, e.g. so flashinfer-autotune dummy
                 # runs for sparse-MLA models keep >= 256 tokens per request.
-                num_reqs = min(num_reqs, max(1, num_reqs_cap))
+                num_reqs = apply_num_reqs_cap(num_reqs, num_reqs_cap)
             min_tokens_per_req = num_tokens // num_reqs
             num_scheduled_tokens_list = [min_tokens_per_req] * num_reqs
             num_scheduled_tokens_list[-1] += num_tokens % num_reqs

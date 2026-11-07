@@ -189,6 +189,7 @@ from vllm.v1.worker.lora_model_runner_mixin import LoRAModelRunnerMixin
 from vllm.v1.worker.replayssm_utils import get_replayssm_block_copy_tensors
 from vllm.v1.worker.utils import (
     KVBlockZeroer,
+    apply_num_reqs_cap,
     clear_layer_kv_caches,
     copy_kv_cache_blocks_inplace,
     get_uniform_decode_token_count,
@@ -905,8 +906,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         num_reqs = min(num_tokens, self.max_num_reqs)
         if num_reqs_cap is not None and not uniform_decode:
             # Cap the request count, e.g. so flashinfer-autotune dummy runs
-            # for sparse-MLA models keep >= 256 tokens per request.
-            num_reqs = min(num_reqs, max(1, num_reqs_cap))
+            # for sparse-MLA models keep >= max(256, index_topk) tokens per
+            # request.
+            num_reqs = apply_num_reqs_cap(num_reqs, num_reqs_cap)
         if uniform_decode:
             # HACK(lucas): for now since the worker is shared between MRV1 and MRV2,
             # and for spec-decode with MTP we want to make sure the dummy runs use

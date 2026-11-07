@@ -120,7 +120,6 @@ def test_flashinfer_autotune_num_reqs_cap_only_for_dsa_models():
 
 @pytest.mark.parametrize("skip_attn", [False, True])
 def test_flashinfer_autotune_caps_dummy_run_requests_for_dsa_models(skip_attn):
-    from vllm.model_executor.warmup.kernel_warmup import _DSA_AUTOTUNE_MIN_TOKENS_PER_REQ
     from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
     from vllm.v1.worker.gpu_model_runner import GPUModelRunner as V1Runner
 
@@ -749,8 +748,24 @@ def test_autotune_cache_key_normalizes_kv_init_fields():
     assert hash_config(_normalize_cache_config_for_hash(resolved)) != hash_config(fresh)
 
 
+
+def test_apply_num_reqs_cap_behavior():
+    """The clamp's semantics: identity without a cap, >= 1 floor with one."""
+    from vllm.v1.worker.utils import apply_num_reqs_cap
+
+    assert apply_num_reqs_cap(8192, None) == 8192
+    assert apply_num_reqs_cap(8192, 64) == 64
+    assert apply_num_reqs_cap(4, 64) == 4  # cap above the count is a no-op
+    assert apply_num_reqs_cap(8192, 0) == 1  # floored at one request
+
+
 def test_num_reqs_cap_is_applied_in_both_gpu_runners():
-    """Guard the clamp call sites: removing a runner's clamp must fail a test."""
+    """Each GPU runner's _dummy_run must assign the clamped count back.
+
+    Removing the clamp, discarding its result, or inlining a bare
+    expression must all break the pattern asserted here; the semantics
+    themselves are covered by test_apply_num_reqs_cap_behavior.
+    """
     import inspect
 
     from vllm.v1.worker.gpu.model_runner import GPUModelRunner as V2Runner
@@ -759,5 +774,4 @@ def test_num_reqs_cap_is_applied_in_both_gpu_runners():
     for cls in (V1Runner, V2Runner):
         src = inspect.getsource(cls._dummy_run)
         assert "num_reqs_cap: int | None = None" in src
-        assert "num_reqs_cap is not None" in src
-        assert "min(num_reqs, max(1, num_reqs_cap))" in src
+        assert "num_reqs = apply_num_reqs_cap(num_reqs, num_reqs_cap)" in src
