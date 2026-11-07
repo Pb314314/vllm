@@ -748,8 +748,6 @@ def test_autotune_cache_key_normalizes_kv_init_fields():
     assert hash_config(_normalize_cache_config_for_hash(resolved)) != hash_config(fresh)
 
 
-
-
 class _StopDummyRun(Exception):
     pass
 
