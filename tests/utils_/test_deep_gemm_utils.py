@@ -71,3 +71,27 @@ def test_deep_gemm_needs_nvcc_12_9(
     _make_exe(nvcc)
     nvcc.write_text(f"#!/bin/sh\necho 'Cuda compilation tools, release {release}'\n")
     assert dg.is_deep_gemm_supported() is supported
+
+
+def test_sparse_mqa_check_does_not_set_pdl(monkeypatch: pytest.MonkeyPatch):
+    """Config verification runs this check in every API server process, where
+    DeepGEMM's set_pdl creates a CUDA context; it must only inspect symbols."""
+    pdl_calls: list[bool] = []
+
+    class FakeDeepGemm:
+        fp8_fp4_sparse_mqa_logits = object()
+        fp8_fp4_paged_sparse_mqa_logits = object()
+        get_sparse_mqa_logits_metadata = object()
+        get_paged_sparse_mqa_logits_metadata = object()
+
+        @staticmethod
+        def set_pdl(enable: bool) -> None:
+            pdl_calls.append(enable)
+
+    monkeypatch.setattr(dg, "_import_deep_gemm", lambda: FakeDeepGemm)
+    monkeypatch.setattr(dg.current_platform, "is_arch_support_pdl", lambda: True)
+
+    assert dg.has_deep_gemm_sparse_mqa()
+    assert pdl_calls == []
+    monkeypatch.delattr(FakeDeepGemm, "get_paged_sparse_mqa_logits_metadata")
+    assert not dg.has_deep_gemm_sparse_mqa()
