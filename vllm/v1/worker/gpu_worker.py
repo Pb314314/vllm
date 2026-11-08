@@ -1094,7 +1094,7 @@ class Worker(WorkerBase):
         cuda_graph_memory_bytes = 0
         if not self.model_config.enforce_eager:
             if self.cache_config.enable_extensible_kv_cache:
-                release_kv_cache_blocks(self._v2_model_runner())
+                release_kv_cache_blocks(self.model_runner)
             with self._get_cudagraph_capture_context():
                 cuda_graph_memory_bytes = self.model_runner.capture_model()
 
