@@ -102,7 +102,10 @@ class ProcessorInputs:
                     )
                 else:
                     # If there are no extra kwargs, use the client-provided UUID.
-                    hashes.append(uuid_item)
+                    # Tag it so caller-chosen IDs share no keyspace with
+                    # content-derived digests: uuid=H(M) must not address the
+                    # entry an unlabeled upload of M would compute (#66422).
+                    hashes.append(f"uuid:{uuid_item}")
 
             mm_hashes[modality] = hashes
 

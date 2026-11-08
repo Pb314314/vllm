@@ -1527,12 +1527,33 @@ def test_processor_inputs_hashes_partial_uuids():
 
     assert inputs.get_mm_hashes("test-model", "blake3") == {
         "image": [
-            "image-uuid",
+            "uuid:image-uuid",
             MultiModalHasher.hash_kwargs(
                 "blake3", model_id="test-model", image=images[1]
             ),
         ]
     }
+
+
+def test_processor_inputs_uuid_cannot_impersonate_content_digest():
+    """#66422: a caller-chosen uuid must not address the cache entry an
+    unlabeled upload of the same content would compute."""
+    rng = np.random.RandomState(0)
+    image = random_image(rng, min_wh=8, max_wh=9)
+    mm_data_items = MultiModalDataParser().parse_mm_data({"image": [image]})
+
+    content_digest = ProcessorInputs(
+        prompt=[],
+        mm_data_items=mm_data_items,
+    ).get_mm_hashes("test-model", "blake3")["image"][0]
+
+    poisoned = ProcessorInputs(
+        prompt=[],
+        mm_data_items=mm_data_items,
+        mm_uuid_items={"image": [content_digest]},
+    ).get_mm_hashes("test-model", "blake3")["image"][0]
+
+    assert poisoned != content_digest
 
 
 def test_processor_inputs_hashes_scope_kwargs_by_modality():
@@ -1582,7 +1603,9 @@ def test_processor_inputs_hashes_ignore_unrelated_kwargs():
         hf_processor_mm_kwargs={"videos_kwargs": {"size": {"longest_edge": 448}}},
     )
 
-    assert inputs.get_mm_hashes("test-model", "blake3") == {"image": ["image-uuid"]}
+    assert inputs.get_mm_hashes("test-model", "blake3") == {
+        "image": ["uuid:image-uuid"]
+    }
 
 
 @pytest.mark.parametrize(
