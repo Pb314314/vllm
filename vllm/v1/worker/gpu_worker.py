@@ -140,6 +140,15 @@ def _min_across_ranks(value: int) -> int:
     return all_reduce_int(get_world_group().cpu_group, value)
 
 
+def _min_across_engine_ranks(value: int) -> int:
+    """Minimum of value over the ranks sharing this engine's KV cache: its
+    tensor, pipeline and prefill context parallel peers. Data parallel ranks
+    have their own engines and caches."""
+    for group in (get_tp_group(), get_pp_group(), get_pcp_group()):
+        value = all_reduce_int(group.cpu_group, value)
+    return value
+
+
 def _num_workspace_lanes(vllm_config: VllmConfig) -> int:
     spec_config = vllm_config.speculative_config
     return (
@@ -1219,8 +1228,8 @@ class Worker(WorkerBase):
         if self.cache_config.enable_extensible_kv_cache:
             kv_cache = self.model_runner.extensible_kv_cache
             assert kv_cache is not None
-            # Every rank must size the KV cache identically.
-            num_kv_blocks = _min_across_ranks(
+            # Every rank of this engine must size the KV cache identically.
+            num_kv_blocks = _min_across_engine_ranks(
                 measure_kv_cache_blocks(
                     kv_cache,
                     self.vllm_config,
