@@ -240,6 +240,12 @@ _get_k_grouped_mn_major_tma_aligned_packed_ue8m0_tensor_impl: (
 ) = None
 
 
+def _set_jit_cache_dir() -> None:
+    """Point DeepGEMM's JIT cache under VLLM_CACHE_ROOT; set before import."""
+    if not os.environ.get("DG_JIT_CACHE_DIR"):
+        os.environ["DG_JIT_CACHE_DIR"] = os.path.join(envs.VLLM_CACHE_ROOT, "deep_gemm")
+
+
 @functools.cache
 def _import_deep_gemm():
     """Import the deep_gemm module.
@@ -336,13 +342,7 @@ def _lazy_init() -> None:
     if not has_deep_gemm():
         return
 
-    # Set up deep_gemm cache path
-    DEEP_GEMM_JIT_CACHE_ENV_NAME = "DG_JIT_CACHE_DIR"
-    if not os.environ.get(DEEP_GEMM_JIT_CACHE_ENV_NAME, None):
-        os.environ[DEEP_GEMM_JIT_CACHE_ENV_NAME] = os.path.join(
-            envs.VLLM_CACHE_ROOT, "deep_gemm"
-        )
-
+    _set_jit_cache_dir()
     _dg = _import_deep_gemm()
     if _dg is None:
         return
@@ -874,12 +874,21 @@ def fp8_fp4_paged_mqa_logits(
 def has_deep_gemm_sparse_mqa() -> bool:
     """Whether the installed DeepGEMM provides the sparse-indexer kernels
     (``fp8_fp4_(paged_)sparse_mqa_logits``, added in DeepGEMM 2.8, SM100-only)."""
-    _lazy_init()
-    return (
-        _fp8_fp4_sparse_mqa_logits_impl is not None
-        and _fp8_fp4_paged_sparse_mqa_logits_impl is not None
-        and _get_sparse_mqa_logits_metadata_impl is not None
-        and _get_paged_sparse_mqa_logits_metadata_impl is not None
+    # Inspects the module without `_lazy_init()`, whose DeepGEMM `set_pdl`
+    # creates a CUDA context: config verification calls this in every API
+    # server process.
+    if not has_deep_gemm():
+        return False
+    _set_jit_cache_dir()
+    dg = _import_deep_gemm()
+    return dg is not None and all(
+        hasattr(dg, name)
+        for name in (
+            "fp8_fp4_sparse_mqa_logits",
+            "fp8_fp4_paged_sparse_mqa_logits",
+            "get_sparse_mqa_logits_metadata",
+            "get_paged_sparse_mqa_logits_metadata",
+        )
     )
 
 
