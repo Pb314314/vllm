@@ -121,6 +121,7 @@ from .interfaces import (
     SupportsMultiModal,
     SupportsPP,
 )
+from .qwen2_5_vl import _pad_flashinfer_cu_seqlens_buffer
 from .qwen2_vl import _create_qwen2vl_field_factory
 from .utils import (
     AutoWeightsLoader,
@@ -2187,6 +2188,11 @@ class Glm4vForConditionalGeneration(
                 "max_seqlen",
                 "sequence_lengths",
             ],
+            padding_logics=(
+                {"cu_seqlens": _pad_flashinfer_cu_seqlens_buffer}
+                if self.visual.attn_backend == AttentionBackendEnum.FLASHINFER
+                else {}
+            ),
             out_hidden_size=self.visual.out_hidden_size,
             max_frames_per_video=max_frames,
         )

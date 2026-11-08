@@ -1554,16 +1554,17 @@ class TestInitInvariantValidation:
 
 
 # ---------------------------------------------------------------------------
-# FlashInfer cu_seqlens replay padding (no GPU required)
+# cu_seqlens replay padding (no GPU required)
 # ---------------------------------------------------------------------------
 
 
-class TestFlashInferCuSeqlensPadding:
+class TestCuSeqlensReplayPadding:
     """A replay pads its cu_seqlens into the buffer captured at a larger batch
     size. The padded buffer must equal the cu_seqlens computed for the same
-    inputs at the capture batch size. FlashInfer packs the q/k/o and v offsets
-    into one tensor and splits it at its midpoint, so each half has to stay in
-    its own half of the capture buffer."""
+    inputs at the capture batch size, i.e. the padding is zero-length
+    sequences. FlashInfer packs the q/k/o and v offsets into one tensor and
+    splits it at its midpoint, so each half has to stay in its own half of the
+    capture buffer."""
 
     HIDDEN_SIZE = 16
 
@@ -1593,7 +1594,14 @@ class TestFlashInferCuSeqlensPadding:
         )
 
     @staticmethod
-    def _qwen3_vl_padding_fn(flashinfer: bool):
+    def _padding_fn(model: str, flashinfer: bool):
+        from vllm.model_executor.models.glm4_1v import Glm4vForConditionalGeneration
+        from vllm.model_executor.models.kimi_k25 import (
+            KimiK25ForConditionalGeneration,
+        )
+        from vllm.model_executor.models.qwen2_vl import (
+            Qwen2VLForConditionalGeneration,
+        )
         from vllm.model_executor.models.qwen3_vl import (
             Qwen3VLForConditionalGeneration,
         )
@@ -1604,17 +1612,28 @@ class TestFlashInferCuSeqlensPadding:
             if flashinfer
             else AttentionBackendEnum.FLASH_ATTN
         )
-        model = SimpleNamespace(
-            is_multimodal_pruning_enabled=False,
-            get_max_frames_per_video=lambda: 16,
-            visual=SimpleNamespace(attn_backend=backend, out_hidden_size=8),
-        )
-        config = Qwen3VLForConditionalGeneration.get_encoder_cudagraph_config(
-            cast(Any, model)
-        )
-        # Same lookup as EncoderCudaGraphManager replay.
-        return config.padding_logics.get(
-            "cu_seqlens", EncoderCudaGraphManager._copy_padded_buffer
+        if model == "kimi_k25":
+            cls = KimiK25ForConditionalGeneration
+            attn = SimpleNamespace(attn_backend=backend)
+            encoder = SimpleNamespace(blocks=[SimpleNamespace(attn=attn)])
+            stub = SimpleNamespace(
+                vision_tower=SimpleNamespace(encoder=encoder),
+                config=SimpleNamespace(text_config=SimpleNamespace(hidden_size=8)),
+            )
+        else:
+            cls = {
+                "qwen2_vl": Qwen2VLForConditionalGeneration,
+                "qwen3_vl": Qwen3VLForConditionalGeneration,
+                "glm4v": Glm4vForConditionalGeneration,
+            }[model]
+            stub = SimpleNamespace(
+                is_multimodal_pruning_enabled=False,
+                get_max_frames_per_video=lambda: 16,
+                visual=SimpleNamespace(attn_backend=backend, out_hidden_size=8),
+            )
+        config = cls.get_encoder_cudagraph_config(cast(Any, stub))
+        return EncoderCudaGraphManager._get_padding_logic(
+            config.padding_logics, "cu_seqlens"
         )
 
     # (seq_lens, replay batch size, capture batch size). The FlashInfer batch
@@ -1624,12 +1643,25 @@ class TestFlashInferCuSeqlensPadding:
         ([49, 196], 2, 16),
         ([64] * 9, 9, 32),  # bucket 16 replayed into bucket 32
         ([49] * 3, 3, 8),  # same bucket
+        ([49], 1, 9),  # unpadded replay (Kimi-K2.5) into max_batch_size + 1
     ]
 
-    @pytest.mark.parametrize("flashinfer", [True, False])
+    # Qwen2-VL's vision tower has no FlashInfer layout.
+    MODELS = [
+        ("qwen3_vl", True),
+        ("qwen3_vl", False),
+        ("qwen2_vl", False),
+        ("glm4v", True),
+        ("glm4v", False),
+        ("kimi_k25", True),
+        ("kimi_k25", False),
+    ]
+
+    @pytest.mark.parametrize(("model", "flashinfer"), MODELS)
     @pytest.mark.parametrize(("seq_lens", "replay_batch", "capture_batch"), CASES)
     def test_replay_padding_matches_capture_size_metadata(
         self,
+        model: str,
         flashinfer: bool,
         seq_lens: list[int],
         replay_batch: int,
@@ -1641,5 +1673,5 @@ class TestFlashInferCuSeqlensPadding:
         assert want.shape == capture.shape
 
         buf = torch.full_like(capture, -1)
-        self._qwen3_vl_padding_fn(flashinfer)(buf, replay)
+        self._padding_fn(model, flashinfer)(buf, replay)
         assert torch.equal(buf, want)
