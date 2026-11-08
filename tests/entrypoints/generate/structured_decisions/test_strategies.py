@@ -589,6 +589,31 @@ JOINT_SCHEMA_REQUEST: dict[str, Any] = dict(
 )
 
 
+def test_joint_schema_limits_do_not_cap_options_by_label_count():
+    """#66392: the joint-schema read has no labels, so its option cap must not
+    be the label-set size (26). Removing the fix (labeled=True, or a
+    label-set-sized cap) fails this test."""
+    for cls in (JointSchemaStrategy, ClefFlashStrategy):
+        limits = cls.__new__(cls).limits()
+        assert limits.labeled is False
+        assert limits.max_options > len(LABELS)
+
+
+def test_joint_schema_accepts_more_options_than_labels():
+    """Behavioral: a 30-option choice question parses under the joint-schema
+    limits; with the old limits (26, labeled) it raised."""
+    limits = JointSchemaStrategy.__new__(JointSchemaStrategy).limits()
+    q = build_question(
+        "q1",
+        "choice",
+        None,
+        {f"opt{i}": None for i in range(30)},
+        limits.max_options,
+        labeled=limits.labeled,
+    )
+    assert len(q.options) == 30
+
+
 @pytest.fixture(params=[JointSchemaStrategy, ClefFlashStrategy])
 def joint_schema(request, qwen, engine_and_renderer):
     tokenizer, _ = qwen

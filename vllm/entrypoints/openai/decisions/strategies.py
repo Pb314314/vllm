@@ -888,7 +888,11 @@ class JointSchemaStrategy(ReadStrategy):
         )
 
     def limits(self) -> DecisionLimits:
-        return DecisionLimits(max_questions=64, max_options=len(LABELS))
+        # The joint schema head scores each option directly, so a read has no
+        # labels and the label-set size (26) is not a bound (fixes #66392).
+        # Keep a generous cap to bound a request's schema; the real constraint
+        # is the prompt token budget.
+        return DecisionLimits(max_questions=64, max_options=1024, labeled=False)
 
     def render_state(self, state: Any) -> str:
         return self._render(state)
