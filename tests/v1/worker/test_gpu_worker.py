@@ -663,6 +663,29 @@ def test_extensible_init_defers_the_connector(monkeypatch: pytest.MonkeyPatch):
     assert worker._kv_cache_config is kv_cache_config
 
 
+def test_final_kv_cache_size_agrees_within_the_engine(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Data parallel engines size their own KV caches: the final block count is
+    reduced over this engine's tensor, pipeline and context parallel peers, not
+    the world group, which also spans MoE data parallel ranks."""
+
+    def no_world_group():
+        raise AssertionError("the final size must not be reduced over DP ranks")
+
+    peer_minimum = {"tp": 90, "pp": 80, "pcp": 100}
+    monkeypatch.setattr(gpu_worker, "get_world_group", no_world_group)
+    for name in peer_minimum:
+        group = SimpleNamespace(cpu_group=name)
+        monkeypatch.setattr(gpu_worker, f"get_{name}_group", lambda g=group: g)
+    monkeypatch.setattr(
+        gpu_worker,
+        "all_reduce_int",
+        lambda group, value: min(value, peer_minimum[group]),
+    )
+    assert gpu_worker._min_across_engine_ranks(95) == 80
+
+
 @pytest.mark.parametrize(
     ("local_reason", "any_rank_unsupported", "expected"),
     [
