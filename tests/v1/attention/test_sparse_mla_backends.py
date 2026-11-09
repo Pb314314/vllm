@@ -401,6 +401,14 @@ _MQA = SparseMLAPrefillRoute.SPARSE_MQA
 
 
 @pytest.mark.parametrize(
+    ("route", "uses_mha"), [(_DENSE, True), (_MASKED, True), (_MQA, False)]
+)
+def test_layer_takes_mha_for_mha_routes(route, uses_mha):
+    metadata = SimpleNamespace(prefill=SimpleNamespace(route=route))
+    assert mla_attention.MLAAttention._use_sparse_mha(None, metadata) is uses_mha
+
+
+@pytest.mark.parametrize(
     ("seq_len", "overrides", "expected"),
     [
         (2048, {}, _DENSE),

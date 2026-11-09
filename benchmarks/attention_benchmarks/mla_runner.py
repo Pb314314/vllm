@@ -862,10 +862,7 @@ def _run_single_benchmark(
         is_sparse
         and mha_mode == "auto"
         and metadata.num_prefills > 0
-        and (
-            metadata.prefill is None
-            or metadata.prefill.route is SparseMLAPrefillRoute.SPARSE_MQA
-        )
+        and metadata.prefill.route is SparseMLAPrefillRoute.SPARSE_MQA
     )
     force_dense_mha = mha_mode == "dense"
     if mqa_only:
