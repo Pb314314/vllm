@@ -44,3 +44,30 @@ def test_constructor_applies_the_clamp():
     src = inspect.getsource(experts_runtime.PersistentExperts.__init__)
     assert "_fit_grids_to_device(" in src
     assert "self.grid, self.grids = " in src
+
+
+def test_persistent_experts_grids_fit_real_device():
+    """Real construction on the current device: every grid entry and the
+    default grid must be co-resident (<= SM count) or startup fails (#66524).
+    Rejects mutations that pass a hardcoded count instead of the device SM
+    count, which the pure-helper tests cannot see."""
+    import pytest
+    import torch
+
+    if not torch.cuda.is_available():
+        pytest.skip("needs a CUDA device")
+
+    from vllm.models.kimi_k3.nvidia.specialized_decode.cutedsl.moe import (
+        experts_runtime,
+    )
+
+    sms = torch.cuda.get_device_properties(0).multi_processor_count
+    experts, rows = 8, 768  # rows==768 selects the TP8 tuned table
+    w13 = torch.zeros(experts, rows, 1792, dtype=torch.uint8, device="cuda")
+    s13 = torch.zeros(experts, rows, 28, dtype=torch.float8_e4m3fn, device="cuda")
+    w2 = torch.zeros(experts, 3584, 192 * 3, dtype=torch.uint8, device="cuda")
+    s2 = torch.zeros(experts, 3584, 24, dtype=torch.float8_e4m3fn, device="cuda")
+
+    pe = experts_runtime.PersistentExperts(w13, s13, w2, s2)
+    assert pe.grid <= sms
+    assert max(pe.grids.values()) <= sms
