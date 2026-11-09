@@ -76,3 +76,52 @@ def test_qwen3_5_mtp_lm_head_receives_quant_config():
         MockLMHead.assert_called_once()
         call_kwargs = MockLMHead.call_args.kwargs
         assert call_kwargs["quant_config"] is mock_quant_config
+
+
+def test_qwen3_5_embed_tokens_receives_quant_config():
+    # The embedding is part of the quantized graph too: without the
+    # quant_config, GGUF/compressed-tensors embeddings silently fall back to
+    # a dense unquantized method (fixes #66573).
+    from vllm.model_executor.models.qwen3_5 import Qwen3_5Model
+
+    mock_quant_config = Mock()
+
+    mock_hf_config = Mock()
+    mock_hf_config.vocab_size = 128
+    mock_hf_config.hidden_size = 64
+    mock_hf_config.num_hidden_layers = 0
+    mock_hf_config.layer_types = []
+    mock_hf_config.num_experts = 0
+
+    from vllm.config import CompilationConfig, CompilationMode
+
+    mock_vllm_config = Mock()
+    mock_vllm_config.model_config.hf_text_config = mock_hf_config
+    mock_vllm_config.quant_config = mock_quant_config
+    mock_vllm_config.compilation_config = CompilationConfig(
+        mode=CompilationMode.VLLM_COMPILE
+    )
+
+    mock_pp_group = Mock()
+    mock_pp_group.is_first_rank = True
+    mock_pp_group.is_last_rank = True
+
+    with (
+        patch("vllm.model_executor.models.qwen3_5.VocabParallelEmbedding") as MockEmbed,
+        patch("vllm.model_executor.models.qwen3_5.make_layers") as mock_layers,
+        patch(
+            "vllm.model_executor.models.qwen3_5.get_pp_group",
+            return_value=mock_pp_group,
+        ),
+        patch("vllm.model_executor.models.qwen3_5.Qwen3_5RMSNorm"),
+    ):
+        mock_layers.return_value = (0, 0, [])
+
+        from vllm.config import set_current_vllm_config
+
+        with set_current_vllm_config(mock_vllm_config):
+            Qwen3_5Model(vllm_config=mock_vllm_config, prefix="model")
+
+        MockEmbed.assert_called_once()
+        call_kwargs = MockEmbed.call_args.kwargs
+        assert call_kwargs["quant_config"] is mock_quant_config
