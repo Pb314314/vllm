@@ -39,7 +39,6 @@ import torch
 
 from vllm.config import VllmConfig
 from vllm.config.cache import CacheDType
-from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.model_executor.layers.attention.sparse_mla_attention import (
     SparseMLACommonImpl,
 )
@@ -532,14 +531,6 @@ class FlashInferMLASparseSM90Builder(FlashInferMLASparseMetadataBuilder):
         # Plan outside any CUDA graph capture; captured runs read the
         # refreshed buffers.
         num_rows, kv_lens, exact = self._kv_lens_host(common_attn_metadata)
-        # MHA prefills are removed from q before forward_mqa. Plan only the
-        # decode prefix in that case.
-        if (
-            metadata.prefill is not None
-            and metadata.prefill.route is not SparseMLAPrefillRoute.SPARSE_MQA
-        ):
-            num_rows = metadata.num_decode_tokens
-            kv_lens = kv_lens[:num_rows]
         if exact:
             self.state.plan(num_rows, kv_lens, None, None)
         else:

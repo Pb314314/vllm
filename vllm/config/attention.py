@@ -183,8 +183,9 @@ class AttentionConfig:
 
     sparse_mla_force_mqa: bool = False
     """Force sparse MLA to use forward_mqa for all requests, including prefill.
-    When False (default), pure prefill batches use forward_mha when implemented.
-    Set to True to always use the MQA path."""
+    When False (default), prefills use masked MHA (forward_mha) when the backend,
+    KV cache dtype and thresholds allow it. Set to True to always use the MQA
+    path."""
 
     sparse_mla_prefill_workspace_factor: int | None = Field(default=None, ge=2)
     """Sparse MLA prefill workspace size, in multiples of `max_model_len`.

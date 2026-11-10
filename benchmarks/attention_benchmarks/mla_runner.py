@@ -864,7 +864,6 @@ def _run_single_benchmark(
         and metadata.num_prefills > 0
         and metadata.prefill.route is SparseMLAPrefillRoute.SPARSE_MQA
     )
-    force_dense_mha = mha_mode == "dense"
     if mqa_only:
         has_decode = True
         has_prefill = False
@@ -876,17 +875,8 @@ def _run_single_benchmark(
         has_prefill = metadata.prefill is not None
     if not has_decode and not has_prefill:
         raise RuntimeError("Metadata has neither decode nor prefill metadata")
-    if is_sparse and force_dense_mha and not has_prefill:
-        raise RuntimeError(
-            "Sparse MLA dense_mha benchmark did not produce prefill metadata. "
-            "Check reorder_batch_threshold/path forcing."
-        )
-    if is_sparse and has_prefill and mha_mode != "auto":
-        metadata.prefill.route = (
-            SparseMLAPrefillRoute.MASKED_MHA
-            if mha_mode == "masked"
-            else SparseMLAPrefillRoute.DENSE_MHA
-        )
+    if is_sparse and has_prefill and mha_mode == "masked":
+        metadata.prefill.route = SparseMLAPrefillRoute.MASKED_MHA
 
     num_decode = (
         metadata.num_decode_tokens
@@ -1230,20 +1220,9 @@ def _run_mla_benchmark_batched(
 
             # Set threshold for this benchmark (FlashAttn/FlashMLA only)
             original_threshold = None
-            effective_threshold = threshold
-            force_dense_mha = (
-                is_sparse
-                and getattr(config, "sparse_mla_mha_mode", "auto") == "dense"
-                and not getattr(config, "sparse_mla_force_mqa", False)
-            )
-            if force_dense_mha:
-                # Sparse MLA normally treats q_len <= 1 as decode. Use an
-                # impossible threshold so dense_mha benchmarks actually run
-                # the prefill/MHA path, including q_len=1 short extends.
-                effective_threshold = -1
-            if effective_threshold is not None and builder_instance:
+            if threshold is not None and builder_instance:
                 original_threshold = builder_instance.reorder_batch_threshold
-                builder_instance.reorder_batch_threshold = effective_threshold
+                builder_instance.reorder_batch_threshold = threshold
 
             # Set num_splits for CUTLASS
             original_num_splits = None

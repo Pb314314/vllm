@@ -153,7 +153,6 @@ def _skip_cuda_specific_sparse_mla_tests_on_rocm(request):
     """Skip tests whose helpers exercise CUDA-only sparse MLA APIs."""
     rocm_portable_tests = {
         "test_sparse_backend_decode_correctness",
-        "test_sparse_backend_prefill_correctness",
         "test_rocm_fused_v32_dense_prefill_matches_mqa",
         "test_rocm_long_bf16_prefill_avoids_nonpersistent_aiter",
         "test_split_indexer_prefill_chunks",
@@ -395,14 +394,11 @@ def test_flashinfer_sparse_mla_attends_tokens_past_grid_limit(
         torch.testing.assert_close(out[t].float(), ref, atol=2e-2, rtol=2e-2)
 
 
-_DENSE = SparseMLAPrefillRoute.DENSE_MHA
 _MASKED = SparseMLAPrefillRoute.MASKED_MHA
 _MQA = SparseMLAPrefillRoute.SPARSE_MQA
 
 
-@pytest.mark.parametrize(
-    ("route", "uses_mha"), [(_DENSE, True), (_MASKED, True), (_MQA, False)]
-)
+@pytest.mark.parametrize(("route", "uses_mha"), [(_MASKED, True), (_MQA, False)])
 def test_layer_takes_mha_for_mha_routes(route, uses_mha):
     metadata = SimpleNamespace(prefill=SimpleNamespace(route=route))
     assert mla_attention.MLAAttention._use_sparse_mha(None, metadata) is uses_mha
@@ -411,12 +407,11 @@ def test_layer_takes_mha_for_mha_routes(route, uses_mha):
 @pytest.mark.parametrize(
     ("seq_len", "overrides", "expected"),
     [
-        (2048, {}, _DENSE),
-        (2049, {}, _MASKED),
-        (2048, {"force_mqa": True}, _MQA),
-        (2048, {"hisparse": True}, _MQA),
-        (2048, {"pcp": True, "dcp": 2}, _MQA),
-        (2048, {"dcp": 2}, _DENSE),
+        (512, {}, _MASKED),
+        (512, {"workspace_numel": None}, _MQA),
+        (512, {"force_mqa": True}, _MQA),
+        (512, {"hisparse": True}, _MQA),
+        (512, {"dcp": 2}, _MQA),
         (8192, {}, _MASKED),
         (8192, {"force_mqa": True}, _MQA),
         (8192, {"hisparse": True}, _MQA),
@@ -441,8 +436,6 @@ def test_prefill_route(seq_len, overrides, expected):
         ),
         parallel_config=SimpleNamespace(tensor_parallel_size=1),
     )
-    builder.topk_tokens = 2048
-    builder.use_pcp = overrides.get("pcp", False)
     builder.dcp_world_size = overrides.get("dcp", 1)
     builder.topk_mask_workspace = (
         None
@@ -793,12 +786,6 @@ def test_sparse_backend_decode_correctness(
             "attn_module_list_cfg": [{"topk_tokens": topk_tokens}],
         },
     )
-    # This shared correctness test constructs a sparse SDPA reference for every
-    # query token. ROCm normally routes short prefills to dense MHA, whose
-    # output intentionally differs from that sparse reference. Keep this test
-    # on the sparse-MQA path; dense-prefill routing has dedicated ROCm tests.
-    if current_platform.is_rocm():
-        vllm_config.attention_config.sparse_mla_force_mqa = True
     model_config = vllm_config.model_config
     model_config.hf_text_config = SimpleNamespace(
         index_topk=topk_tokens,
@@ -1006,7 +993,7 @@ def test_sparse_backend_decode_correctness(
         slot = int(common_attn_metadata.slot_mapping[-1])
         query_row = kv_cache[slot // block_size, 0, slot % block_size].zero_()
 
-    # The sparse builder clones the layer's dense-MHA prefill backend from
+    # The sparse builder clones the layer's MHA prefill backend from
     # static_forward_context; register a mock layer carrying one.
     prefill_backend = get_mla_prefill_backend(vllm_config)(
         num_heads=num_heads,
@@ -1565,7 +1552,7 @@ def test_flashmla_bf16_preserves_unused_output_heads(
     reason="FlashMLASparseBackend requires CUDA 9.0 or higher",
 )
 def test_flashmla_forward_bf16_kv_slices_req_id_to_mqa_tokens():
-    """Guard against the #47327 regression: when the dense-MHA prefill split
+    """Guard against the #47327 regression: when the MHA prefill split
     is active, forward_mqa only receives the leading decode tokens, but
     _forward_bf16_kv passed the full-batch req_id_per_token to the index
     conversion, making it write past the end of its output buffer. The call
@@ -1816,21 +1803,17 @@ def test_masked_mha_workspace_fits_accounts_for_batch_and_context():
 
 
 PREFILL_BATCH_SPECS = {
-    "short_dense_mha": BatchSpec(seq_lens=[64, 128], query_lens=[64, 128]),
-    "short_context_dense_mha": BatchSpec(seq_lens=[128, 160], query_lens=[64, 32]),
     "masked_mha": BatchSpec(seq_lens=[256], query_lens=[256]),
     "masked_mha_chunked_context": BatchSpec(seq_lens=[448, 384], query_lens=[256, 256]),
 }
 
 
 @pytest.mark.skipif(
-    current_platform.is_cuda() and torch.cuda.get_device_capability()[0] < 10,
+    not current_platform.is_cuda() or torch.cuda.get_device_capability()[0] < 10,
     reason="Sparse MLA forward_mha requires FA4 (SM100+)",
 )
 @pytest.mark.parametrize("batch_name", list(PREFILL_BATCH_SPECS.keys()))
-@pytest.mark.parametrize(
-    "kv_cache_dtype", (["auto", "fp8"] if current_platform.is_rocm() else ["auto"])
-)
+@pytest.mark.parametrize("kv_cache_dtype", ["auto"])
 @pytest.mark.parametrize(
     ("num_heads", "qk_nope_head_dim", "qk_rope_head_dim", "v_head_dim"),
     [
@@ -1851,16 +1834,8 @@ def test_sparse_backend_prefill_correctness(
     workspace_init,
     monkeypatch,
 ):
-    """Test the normal dense forward_mha path for sparse MLA short prefill."""
-    backend_cls = (
-        ROCMAiterMLASparseBackend
-        if current_platform.is_rocm()
-        else FlashMLASparseBackend
-    )
-    if current_platform.is_rocm() and (
-        batch_name.startswith("masked_mha") or qk_nope_head_dim != 128
-    ):
-        pytest.skip("ROCm dense prefill requires the DeepSeek MLA layout")
+    """Test the masked forward_mha path for sparse MLA prefill."""
+    backend_cls = FlashMLASparseBackend
     batch_spec = PREFILL_BATCH_SPECS[batch_name]
 
     device = torch.device(DEVICE_TYPE)
@@ -1869,8 +1844,7 @@ def test_sparse_backend_prefill_correctness(
 
     kv_lora_rank = 512
     head_size = kv_lora_rank + qk_rope_head_dim
-    masked_mha = batch_name.startswith("masked_mha")
-    topk_tokens = 200 if masked_mha else 512
+    topk_tokens = 200
 
     max_seqlen = max(batch_spec.seq_lens)
     total_cache_tokens = sum(batch_spec.seq_lens)
@@ -1971,15 +1945,11 @@ def test_sparse_backend_prefill_correctness(
         for j in range(q_len):
             attend_end = ctx_len + j + 1
             q_tok = q_mha[j : j + 1]  # (1, H, D_qk)
-            if masked_mha:
-                actual_topk = min(topk_tokens, attend_end)
-                attend_indices = torch.randperm(attend_end, device=device)[:actual_topk]
-                sparse_indices[global_token_idx, :actual_topk] = attend_indices
-                k_attend = k_all[attend_indices]
-                v_attend = v_all[attend_indices]
-            else:
-                k_attend = k_all[:attend_end]  # (N, H, D_qk)
-                v_attend = v_all[:attend_end]  # (N, H, D_v)
+            actual_topk = min(topk_tokens, attend_end)
+            attend_indices = torch.randperm(attend_end, device=device)[:actual_topk]
+            sparse_indices[global_token_idx, :actual_topk] = attend_indices
+            k_attend = k_all[attend_indices]
+            v_attend = v_all[attend_indices]
 
             q_sdpa = q_tok.unsqueeze(0).transpose(1, 2).float()
             k_sdpa = k_attend.unsqueeze(0).transpose(1, 2).float()
@@ -2026,7 +1996,7 @@ def test_sparse_backend_prefill_correctness(
         kv_cache_dtype=kv_cache_dtype,
     )
 
-    # The sparse builder clones the layer's dense-MHA prefill backend from
+    # The sparse builder clones the layer's MHA prefill backend from
     # static_forward_context; register a mock layer carrying one.
     prefill_backend = get_mla_prefill_backend(vllm_config)(
         num_heads=num_heads,
@@ -2054,17 +2024,16 @@ def test_sparse_backend_prefill_correctness(
             dtype=dtype,
             device=device,
         )
-    # Drive the queries through the dense-MHA prefill path directly (the routing
+    # Drive the queries through the MHA prefill path directly (the routing
     # threshold would otherwise classify these short queries as MQA decodes).
     builder.reorder_batch_threshold = 1
     metadata = builder.build(
         common_prefix_len=0, common_attn_metadata=common_attn_metadata
     )
     assert metadata.prefill is not None
-    if masked_mha:
-        # These batches may be below the masked-MHA thresholds; run the
-        # masked path regardless.
-        metadata.prefill.route = SparseMLAPrefillRoute.MASKED_MHA
+    # These batches may be below the masked-MHA thresholds; run the masked
+    # path regardless.
+    metadata.prefill.route = SparseMLAPrefillRoute.MASKED_MHA
 
     mock_indexer = SimpleNamespace(topk_indices_buffer=sparse_indices)
 
@@ -5285,7 +5254,7 @@ def _build_sparse_dcp_vllm_config(
     vllm_config.cache_config.cache_dtype = cache_dtype
     vllm_config.parallel_config.decode_context_parallel_size = dcp_world_size
     vllm_config.parallel_config.dcp_comm_backend = comm_backend
-    # The base builder clones the layer's dense-MHA prefill backend from
+    # The base builder clones the layer's MHA prefill backend from
     # static_forward_context; the guard tests never run prefill.
     vllm_config.compilation_config.static_forward_context["placeholder"] = (
         SimpleNamespace(
@@ -5662,9 +5631,8 @@ def test_rocm_fused_v32_dense_prefill_matches_mqa(
 ):
     """Fused normalization, RoPE and mixed dispatch preserve generation/logprobs.
 
-    Chunking unequal prompts exercises prefill alongside decode. The two long
-    prompts straddle the dense-prefill threshold. No pretrained weights or
-    tokenizer download is needed.
+    Chunking unequal prompts exercises prefill alongside decode. No pretrained
+    weights or tokenizer download is needed.
     """
     import json
 

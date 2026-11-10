@@ -624,7 +624,7 @@ def main():
         "--sparse-mla-mha-variants",
         nargs="+",
         default=None,
-        choices=["dense_mha", "masked_mha", "mqa"],
+        choices=["masked_mha", "mqa"],
         help="Sparse MLA variants to run in mha_vs_mqa mode. Defaults to both.",
     )
 
@@ -748,9 +748,6 @@ def main():
             args.torch_profile_iters = yaml_config["torch_profile_iters"]
         args.sparse_mla_topk_pattern = yaml_config.get(
             "sparse_mla_topk_pattern", "random"
-        )
-        args.sparse_mla_dense_mha_max_seq_len = yaml_config.get(
-            "sparse_mla_dense_mha_max_seq_len", None
         )
         args.sparse_mla_mha_variants = yaml_config.get(
             "sparse_mla_mha_variants", args.sparse_mla_mha_variants
@@ -1127,12 +1124,10 @@ def main():
         console.print("[yellow]Mode: MHA vs MQA comparison for sparse MLA[/]")
 
         sparse_mla_topk_pattern = getattr(args, "sparse_mla_topk_pattern", "random")
-        dense_mha_max_seq_len = getattr(args, "sparse_mla_dense_mha_max_seq_len", None)
         prefill_backend = getattr(args, "prefill_backend", None)
         if prefill_backend:
             console.print(f"Prefill backend: {prefill_backend}")
         available_variants = [
-            ("dense_mha", False, "dense"),
             ("masked_mha", False, "masked"),
             ("mqa", True, "auto"),
         ]
@@ -1177,10 +1172,6 @@ def main():
             q_len = max(request.q_len for request in parse_batch_spec(spec))
             for variant_label, _, _ in variants:
                 if (
-                    variant_label == "dense_mha"
-                    and dense_mha_max_seq_len is not None
-                    and q_len > dense_mha_max_seq_len
-                ) or (
                     variant_label == "masked_mha"
                     and masked_mha_max_seq_len is not None
                     and q_len > masked_mha_max_seq_len
@@ -1194,10 +1185,6 @@ def main():
                 for backend in backends:
                     for variant_label, force_mqa, mha_mode in variants:
                         if (
-                            variant_label == "dense_mha"
-                            and dense_mha_max_seq_len is not None
-                            and q_len > dense_mha_max_seq_len
-                        ) or (
                             variant_label == "masked_mha"
                             and masked_mha_max_seq_len is not None
                             and q_len > masked_mha_max_seq_len
@@ -1233,7 +1220,6 @@ def main():
                             v_head_dim=getattr(args, "v_head_dim", None),
                             sparse_mla_force_mqa=force_mqa,
                             sparse_mla_mha_mode=mha_mode,
-                            sparse_mla_dense_mha_max_seq_len=dense_mha_max_seq_len,
                             sparse_mla_topk_pattern=sparse_mla_topk_pattern,
                             prefill_backend=prefill_backend,
                             sparse_mla_masked_mha_max_seq_len=masked_mha_max_seq_len,
