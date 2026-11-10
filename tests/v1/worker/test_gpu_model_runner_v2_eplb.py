@@ -198,9 +198,9 @@ def test_v2_setup_eplb_from_mapping_updates_state_in_place():
 def test_v2_load_model_registers_dspark_speculator_with_eplb(
     monkeypatch, context_kv_only, freed
 ):
-    """A drafter is left out of EPLB only if it freed weights: one that keeps
-    its weights (option off, or not declaring what to keep) still runs its MoE
-    layers, which need EPLB state."""
+    """A drafter is left out of EPLB only if it freed weights; one that keeps
+    them (option off, or not declaring what to keep) may run its MoE layers,
+    as an undeclared MTP drafter does, which then need EPLB state."""
     FakeEplbState.instances.clear()
     target_model = SimpleNamespace(is_moe=True)
     draft_model = SimpleNamespace(is_moe=True)
