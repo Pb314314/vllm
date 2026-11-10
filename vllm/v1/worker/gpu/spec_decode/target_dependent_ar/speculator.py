@@ -29,6 +29,11 @@ class TargetDependentARSpeculator(AutoRegressiveSpeculator):
 
     def __init__(self, vllm_config: VllmConfig, device: torch.device):
         super().__init__(vllm_config, device)
+        # See SpeculativeConfig.prefill_context_kv_only.
+        spec_config = vllm_config.speculative_config
+        self.context_kv_only = (
+            spec_config is not None and spec_config.prefill_context_kv_only
+        )
 
         self.hidden_states = torch.zeros(
             self.max_num_tokens, self.hidden_size, dtype=self.dtype, device=device
@@ -50,7 +55,10 @@ class TargetDependentARSpeculator(AutoRegressiveSpeculator):
             # Draft prefill shares the target's padded attention metadata.
             varlen_decode=self.enable_adaptive_verification,
         )
-        super().init_cudagraph_manager(cudagraph_mode)
+        # With context_kv_only there are no draft decodes to capture.
+        super().init_cudagraph_manager(
+            CUDAGraphMode.NONE if self.context_kv_only else cudagraph_mode
+        )
 
     def load_model(self, target_model: nn.Module) -> None:
         super().load_model(target_model)
@@ -129,7 +137,11 @@ class TargetDependentARSpeculator(AutoRegressiveSpeculator):
         num_speculative_tokens: int | None = None,
     ) -> torch.Tensor:
         num_reqs = input_batch.num_reqs
-        if num_speculative_tokens is None:
+        if self.context_kv_only:
+            # Including dummy runs (e.g. an idle DP rank's), so that every rank
+            # runs the same single draft forward.
+            num_speculative_tokens = 0
+        elif num_speculative_tokens is None:
             num_speculative_tokens = self.num_speculative_steps
         num_tokens = input_batch.num_tokens
         num_tokens_padded = input_batch.num_tokens_after_padding

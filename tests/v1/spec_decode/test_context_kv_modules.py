@@ -107,3 +107,63 @@ def test_freeing_keeps_context_kv(dist_init, monkeypatch, target, draft, method,
 
     assert len(before) == len(after) == 2 * len(attn_layers)
     assert all(torch.equal(b, a) for b, a in zip(before, after))
+
+
+class _ToyMTPLayer(nn.Module):
+    def __init__(self, feed_forward_name: str, opt_in: bool):
+        super().__init__()
+        self.mtp_block = nn.Module()
+        self.mtp_block.self_attn = nn.Linear(8, 8)
+        setattr(self.mtp_block, feed_forward_name, nn.Linear(8, 8))
+        if opt_in:
+            self.context_kv_only_block = lambda: self.mtp_block
+
+
+def _toy_mtp(feed_forward_name: str = "mlp", opt_in: bool = True) -> nn.Module:
+    model = nn.Module()
+    model.model = nn.Module()
+    model.model.layers = nn.ModuleDict({"61": _ToyMTPLayer(feed_forward_name, opt_in)})
+    return model
+
+
+@pytest.mark.parametrize("feed_forward_name", ["mlp", "ffn"])
+def test_drop_mtp_feed_forwards(feed_forward_name):
+    from vllm.v1.worker.gpu.spec_decode.mtp.speculator import drop_mtp_feed_forwards
+
+    model = _toy_mtp(feed_forward_name)
+    block = model.model.layers["61"].mtp_block
+    feed_forward = getattr(block, feed_forward_name)
+    # A weight shared with the target (e.g. a tied projection) must stay.
+    target = nn.Module()
+    target.shared = feed_forward.bias
+    attn_weight = block.self_attn.weight
+
+    freed = drop_mtp_feed_forwards(model, target)
+
+    assert freed == 8 * 8 * 4  # the weight; the shared bias stays
+    assert feed_forward.weight.numel() == 0
+    assert feed_forward.bias.numel() == 8
+    assert block.self_attn.weight is attn_weight and attn_weight.numel() == 64
+    hidden_states = torch.randn(3, 8)
+    out = getattr(block, feed_forward_name)(hidden_states, "extra", key=None)
+    assert torch.equal(out, torch.zeros(3, 8))
+
+
+def test_drop_mtp_feed_forwards_needs_opt_in():
+    from vllm.v1.worker.gpu.spec_decode.mtp.speculator import drop_mtp_feed_forwards
+
+    # MTP layers that don't declare context_kv_only_block() keep every weight,
+    # including those of the Transformers backend (an nn.ModuleList of layers).
+    undeclared = _toy_mtp(opt_in=False)
+    module_list = nn.Module()
+    module_list.model = nn.Module()
+    module_list.model.layers = nn.ModuleList([_ToyMTPLayer("mlp", opt_in=False)])
+    for model in (undeclared, module_list):
+        params = [p.numel() for p in model.parameters()]
+        assert drop_mtp_feed_forwards(model, nn.Module()) is None
+        assert [p.numel() for p in model.parameters()] == params
+
+    both = _toy_mtp("mlp")
+    both.model.layers["61"].mtp_block.ffn = nn.Linear(8, 8)
+    with pytest.raises(ValueError, match="Expected one feed-forward"):
+        drop_mtp_feed_forwards(both, nn.Module())

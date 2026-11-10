@@ -22,6 +22,8 @@ class MTPSpeculatorConfig(EagleSpeculatorConfig):
         "index_share_for_mtp_iteration"
     }
     supports_pcp = True
+    # The draft prefill still runs and stores the MTP layers' K/V.
+    supports_prefill_context_kv_only = True
 
     @classmethod
     def matches(cls, spec: "SpeculativeConfig") -> bool:

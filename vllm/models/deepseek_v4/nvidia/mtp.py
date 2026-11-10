@@ -206,6 +206,11 @@ class DeepSeekV4MultiTokenPredictorLayer(nn.Module):
         # num_speculative_tokens > 1. hc_head is deferred to compute_logits.
         return hidden_states.flatten(1)
 
+    def context_kv_only_block(self) -> nn.Module:
+        """The decoder block whose feed-forward `prefill_context_kv_only` drops:
+        it runs after the block's only attention and only feeds the residual."""
+        return self.mtp_block
+
 
 class DeepSeekV4MultiTokenPredictor(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

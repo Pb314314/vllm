@@ -24,6 +24,8 @@ from vllm.v1.structured_output import StructuredOutputManager
 
 DFLASH_TARGET_DIR = "Qwen/Qwen3-8B"
 DFLASH_DRAFT_DIR = "z-lab/Qwen3-8B-DFlash-b16"
+# Single-module MTP (num_nextn_predict_layers = 1).
+MTP_TARGET_DIR = "deepseek-ai/DeepSeek-V3"
 
 BLOCK_SIZE = 16
 NUM_BLOCKS = 8
@@ -49,10 +51,40 @@ def _dflash_speculative_config(
     )
 
 
+def _set_num_mtp_layers(config, num_mtp_layers: int):
+    config.num_nextn_predict_layers = num_mtp_layers
+    if hasattr(config, "n_predict"):  # the draft (deepseek_mtp) config
+        config.n_predict = num_mtp_layers
+    return config
+
+
+def _mtp_speculative_config(
+    num_speculative_tokens: int, num_mtp_layers: int = 1, **kwargs
+) -> SpeculativeConfig:
+    model_config = ModelConfig(
+        model=MTP_TARGET_DIR,
+        runner="generate",
+        max_model_len=100,
+        # A callable, unlike a dict, also applies to the draft model's config.
+        hf_overrides=lambda config: _set_num_mtp_layers(config, num_mtp_layers),
+    )
+    return SpeculativeConfig(
+        target_model_config=model_config,
+        target_parallel_config=ParallelConfig(),
+        method="mtp",
+        num_speculative_tokens=num_speculative_tokens,
+        **kwargs,
+    )
+
+
 def _create_dflash_scheduler(
-    num_speculative_tokens: int, enable_prefix_caching: bool = False, **kwargs
+    num_speculative_tokens: int,
+    enable_prefix_caching: bool = False,
+    mtp: bool = False,
+    **kwargs,
 ) -> Scheduler:
-    speculative_config = _dflash_speculative_config(num_speculative_tokens, **kwargs)
+    make_config = _mtp_speculative_config if mtp else _dflash_speculative_config
+    speculative_config = make_config(num_speculative_tokens, **kwargs)
     model_config = speculative_config.target_model_config
     scheduler_config = SchedulerConfig(
         max_num_seqs=16,
@@ -215,3 +247,36 @@ def test_dflash_first_prefill_query_window_fits_allocated_blocks():
     query_positions = range(BLOCK_SIZE, BLOCK_SIZE + scheduler.num_lookahead_tokens)
 
     assert all(pos // BLOCK_SIZE < len(block_ids) for pos in query_positions)
+
+
+@pytest.mark.parametrize(
+    ("prefill_context_kv_only", "num_spec_tokens", "num_blocks"),
+    [(True, 0, 1), (False, NUM_SPECULATIVE_TOKENS, 2)],
+)
+def test_mtp_prefill_context_kv_only_schedules_no_drafts(
+    monkeypatch, prefill_context_kv_only, num_spec_tokens, num_blocks
+):
+    # The MTP layers only store their K/V for the prompt (MRV2): no drafts,
+    # and no lookahead block past the prompt's.
+    monkeypatch.setenv("VLLM_USE_V2_MODEL_RUNNER", "1")
+    scheduler = _create_dflash_scheduler(
+        NUM_SPECULATIVE_TOKENS,
+        mtp=True,
+        prefill_context_kv_only=prefill_context_kv_only,
+    )
+    (request,) = create_requests(
+        num_requests=1,
+        num_tokens=BLOCK_SIZE,
+        block_size=BLOCK_SIZE,
+    )
+    scheduler.add_request(request)
+
+    output = scheduler.schedule()
+
+    assert output.num_spec_tokens_to_schedule == num_spec_tokens
+    assert len(output.scheduled_new_reqs[0].block_ids[0]) == num_blocks
+
+
+def test_multi_module_mtp_rejects_prefill_context_kv_only():
+    with pytest.raises(ValueError, match="prefill_context_kv_only is not supported"):
+        _mtp_speculative_config(2, num_mtp_layers=2, prefill_context_kv_only=True)
