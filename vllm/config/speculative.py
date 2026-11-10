@@ -677,9 +677,9 @@ class SpeculativeConfig:
     and single-module MTP) to only store the drafter's context K/V, which the
     decode instance reads: no drafts, no lookahead KV slots, and, for draft
     models that support it, the draft weights only drafting reads are freed.
-    With single-module MTP, the feed-forward (e.g. MoE) of each
-    `model.layers[*].mtp_block` is replaced with zeros and its weights are
-    freed; MTP models without that structure fail at load.
+    With single-module MTP, MTP layers that declare `context_kv_only_block()`
+    have that block's feed-forward (e.g. MoE) replaced with zeros and its
+    weights freed; other MTP layers keep all weights.
     Requests that decode there run without speculation. Keep the rest of the
     speculative config as on the decode instance; adaptive verification and
     dynamic speculative decoding are turned off."""

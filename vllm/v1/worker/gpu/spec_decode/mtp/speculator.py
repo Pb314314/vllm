@@ -84,19 +84,20 @@ class MTPSpeculator(TargetDependentARSpeculator):
         )
         return draft_model
 
-    def free_unused_weights(self, target_model: nn.Module) -> None:
+    def free_unused_weights(self, target_model: nn.Module) -> bool:
         """With prefill_context_kv_only, replace the feed-forward of every MTP
         layer with zeros and free its weights; see `drop_mtp_feed_forwards`."""
         if not self.context_kv_only:
-            return
+            return False
         freed_bytes = drop_mtp_feed_forwards(self.model, target_model)
         if freed_bytes is None:
-            return
+            return False
         logger.info(
             "MTP drafter only stores its context K/V (prefill_context_kv_only); "
             "freed %.2f GiB of its feed-forward weights.",
             freed_bytes / (1 << 30),
         )
+        return True
 
     def on_prefill_begin(self, num_reqs: int) -> None:
         # Step 0 computes its own top-k. Unconditional, so a step that died

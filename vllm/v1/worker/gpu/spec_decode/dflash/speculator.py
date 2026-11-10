@@ -256,12 +256,12 @@ class DFlashSpeculator(DraftModelSpeculator):
     ) -> nn.Module:
         return load_dflash_model(target_model, self.vllm_config)
 
-    def free_unused_weights(self, target_model: nn.Module) -> None:
+    def free_unused_weights(self, target_model: nn.Module) -> bool:
         """With context_kv_only, keep only the weights of the modules that store
         the context K/V and those shared with the target. A draft model without
         `context_kv_modules` keeps all of its weights."""
         if not self.context_kv_only or not hasattr(self.model, "context_kv_modules"):
-            return
+            return False
         keep = {id(p) for m in self.model.context_kv_modules() for p in m.parameters()}
         keep.update(id(p) for p in target_model.parameters())
         freed_bytes = 0
@@ -275,6 +275,7 @@ class DFlashSpeculator(DraftModelSpeculator):
             self._speculator_name,
             freed_bytes / (1 << 30),
         )
+        return True
 
     def set_attn(
         self,

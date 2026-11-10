@@ -5,6 +5,7 @@
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
 import torch
 
 from vllm.config import CompilationConfig, CompilationMode
@@ -189,7 +190,17 @@ def test_v2_setup_eplb_from_mapping_updates_state_in_place():
     assert state.update_mapping_calls == [(runner.model_config, mapping)]
 
 
-def test_v2_load_model_registers_dspark_speculator_with_eplb(monkeypatch):
+@pytest.mark.parametrize(
+    "context_kv_only,freed",
+    [(False, False), (True, False), (True, True)],
+    ids=["option_off", "option_on_nothing_freed", "option_on_freed"],
+)
+def test_v2_load_model_registers_dspark_speculator_with_eplb(
+    monkeypatch, context_kv_only, freed
+):
+    """A drafter is left out of EPLB only if it freed weights: one that keeps
+    its weights (option off, or not declaring what to keep) still runs its MoE
+    layers, which need EPLB state."""
     FakeEplbState.instances.clear()
     target_model = SimpleNamespace(is_moe=True)
     draft_model = SimpleNamespace(is_moe=True)
@@ -210,8 +221,8 @@ def test_v2_load_model_registers_dspark_speculator_with_eplb(monkeypatch):
         def set_eplb_state(self, state) -> None:
             self.eplb_state = state
 
-        def free_unused_weights(self, target_model) -> None:
-            return None
+        def free_unused_weights(self, target_model) -> bool:
+            return freed
 
     monkeypatch.setattr(mrv2, "DeviceMemoryProfiler", FakeMemoryProfiler)
     monkeypatch.setattr(eplb, "EplbState", FakeEplbState)
@@ -238,18 +249,20 @@ def test_v2_load_model_registers_dspark_speculator_with_eplb(monkeypatch):
         speculative_config=SimpleNamespace(
             method="dspark",
             draft_model_config=draft_model_config,
-            prefill_context_kv_only=False,
+            prefill_context_kv_only=context_kv_only,
         ),
         speculator=speculator,
     )
     mrv2.GPUModelRunner.load_model(runner)
 
     assert runner.eplb_state is not None
-    assert runner.eplb_state.add_model_calls == [
-        (draft_model, draft_model_config, "dspark-draft (draft)"),
-        (target_model, runner.model_config, None),
-    ]
-    assert speculator.eplb_state is runner.eplb_state
+    draft_call = (draft_model, draft_model_config, "dspark-draft (draft)")
+    target_call = (target_model, runner.model_config, None)
+    if freed:
+        assert runner.eplb_state.add_model_calls == [target_call]
+    else:
+        assert runner.eplb_state.add_model_calls == [draft_call, target_call]
+        assert speculator.eplb_state is runner.eplb_state
 
 
 def test_v2_sample_tokens_runs_eplb_on_non_last_pp_rank(monkeypatch):

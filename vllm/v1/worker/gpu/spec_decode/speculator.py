@@ -324,10 +324,11 @@ class DraftModelSpeculator(BaseSpeculator):
                 self.device,
             )
 
-    def free_unused_weights(self, target_model: nn.Module) -> None:
-        """Free the draft weights this instance never reads. The model runner
-        calls this after `load_model` (and its overrides) and EPLB setup."""
-        return
+    def free_unused_weights(self, target_model: nn.Module) -> bool:
+        """Free the draft weights this instance never reads, and return whether
+        any were freed. The model runner calls this after `load_model` (and its
+        overrides) and registers the drafter with EPLB only if it returns False."""
+        return False
 
     def supports_batch_sharded_draft_logits(self) -> bool:
         """Whether every draft logits write on this speculator's path honors
