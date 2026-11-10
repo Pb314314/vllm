@@ -357,90 +357,6 @@ def test_sparse_persistent_metadata_syncs_only_after_recompute(monkeypatch):
     assert fake_get_mla_metadata_v1_mock.call_count == 1
 
 
-def test_mha_prefill_builds_sparse_metadata_for_decode_subset(monkeypatch):
-    """Dense prefill must exclude prefill tokens from AITER sparse metadata.
-
-    A mixed batch is routed as sparse MQA for its leading decode requests and
-    MHA for its trailing prefill requests.  The AITER metadata
-    buffers therefore must describe only the decode subset; including prefill
-    tokens would mismatch the query passed to ``forward_mqa``.
-    """
-    builder = _make_builder()
-    builder.vllm_config = SimpleNamespace(
-        attention_config=SimpleNamespace(sparse_mla_force_mqa=False)
-    )
-
-    query_start_loc = torch.tensor([0, 1, 5], dtype=torch.int32)
-    seq_lens = torch.tensor([16, 4], dtype=torch.int32)
-    common_metadata = SimpleNamespace(
-        query_start_loc=query_start_loc,
-        query_start_loc_cpu=query_start_loc,
-        seq_lens=seq_lens,
-        seq_lens_cpu=seq_lens,
-        max_query_len=4,
-        max_seq_len=16,
-    )
-    metadata = sparse_mod.ROCMAiterMLASparseMetadata(
-        num_reqs=2,
-        max_query_len=4,
-        max_seq_len=16,
-        num_actual_tokens=5,
-        query_start_loc=query_start_loc,
-        slot_mapping=torch.arange(5),
-        block_table=torch.arange(16, dtype=torch.int32).view(2, 8),
-        req_id_per_token=torch.tensor([0, 1, 1, 1, 1], dtype=torch.int32),
-        topk_tokens=4,
-        num_decodes=1,
-        num_prefills=1,
-        num_decode_tokens=1,
-        seq_lens=seq_lens,
-        prefill_max_seq_len=4,
-        prefill=SimpleNamespace(route=SparseMLAPrefillRoute.MASKED_MHA),
-    )
-
-    monkeypatch.setattr(
-        sparse_mod.SparseMLACommonMetadataBuilder,
-        "build",
-        lambda *args, **kwargs: metadata,
-    )
-    sparse_call: dict[str, torch.Tensor] = {}
-
-    def fake_generate_sparse_seqlen(
-        sparse_seq_lens, sparse_query_start_loc, topk, num_tokens, max_q
-    ):
-        sparse_call.update(
-            query_lens=torch.diff(sparse_query_start_loc),
-            seq_lens=sparse_seq_lens.clone(),
-            query_start_loc=sparse_query_start_loc.clone(),
-            num_tokens=num_tokens,
-        )
-        return torch.ones(num_tokens, dtype=torch.int32)
-
-    monkeypatch.setattr(
-        sparse_mod, "generate_sparse_seqlen_triton", fake_generate_sparse_seqlen
-    )
-    fake_aiter = _FakeAiter("aiter")
-    fake_aiter.get_mla_metadata_v1 = Mock()
-    monkeypatch.setitem(sys.modules, "aiter", fake_aiter)
-    monkeypatch.setattr(
-        sparse_mod.torch.cuda,
-        "current_stream",
-        lambda device=None: SimpleNamespace(synchronize=lambda: None),
-    )
-
-    result = builder.build(0, common_metadata)
-
-    assert result.prefill is metadata.prefill
-    assert result.num_prefills == 1
-    assert result.req_id_per_token.tolist() == [0]
-    assert result.qo_indptr.numel() == 2
-    assert result.paged_kv_indptr.numel() == 2
-    assert sparse_call["num_tokens"] == 1
-    assert sparse_call["query_lens"].tolist() == [1]
-    assert sparse_call["seq_lens"].tolist() == [16]
-    assert sparse_call["query_start_loc"].tolist() == [0, 1]
-
-
 def test_long_prefill_shares_full_sparse_metadata_with_decode(monkeypatch):
     """A prefill longer than top-k must remain in shared sparse metadata.
 
@@ -711,11 +627,7 @@ def test_sparse_metadata_workload_length_dtype_matrix(
         seq_lens=seq_lens,
         prefill_max_seq_len=prefill_len if num_prefills else 0,
         prefill=(
-            SimpleNamespace(
-                route=SparseMLAPrefillRoute.SPARSE_MQA
-                if is_long
-                else SparseMLAPrefillRoute.MASKED_MHA
-            )
+            SimpleNamespace(route=SparseMLAPrefillRoute.SPARSE_MQA)
             if num_prefills
             else None
         ),
@@ -742,8 +654,7 @@ def test_sparse_metadata_workload_length_dtype_matrix(
 
     result = builder.build(0, common_metadata)
 
-    uses_mha_prefill = workload in ("prefill", "mixed") and not is_long
-    expected_sparse_tokens = num_decodes if uses_mha_prefill else num_tokens
+    expected_sparse_tokens = num_tokens
     assert result.req_id_per_token.numel() == expected_sparse_tokens
     assert result.qo_indptr.numel() == expected_sparse_tokens + 1
     assert result.paged_kv_indptr.numel() == expected_sparse_tokens + 1

@@ -12,7 +12,6 @@ from vllm._aiter_ops import rocm_aiter_ops
 from vllm.config import VllmConfig, get_current_vllm_config
 from vllm.config.cache import CacheDType
 from vllm.logger import init_logger
-from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.model_executor.layers.attention.sparse_mla_attention import (
     SparseMLACommonImpl,
     SparseMLACommonMetadata,
@@ -594,11 +593,7 @@ class ROCMAiterMLASparseMetadataBuilder(
         metadata = super().build(
             common_prefix_len, common_attn_metadata, fast_build=fast_build
         )
-        use_mha_prefill = (
-            metadata.prefill is not None
-            and metadata.prefill.route is not SparseMLAPrefillRoute.SPARSE_MQA
-        )
-        num_reqs = metadata.num_decodes if use_mha_prefill else metadata.num_reqs
+        num_reqs = metadata.num_reqs
         num_tokens = int(common_attn_metadata.query_start_loc_cpu[num_reqs].item())
         num_decodes = metadata.num_decodes
         num_prefills = metadata.num_prefills

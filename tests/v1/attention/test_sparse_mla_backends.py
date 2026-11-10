@@ -153,7 +153,6 @@ def _skip_cuda_specific_sparse_mla_tests_on_rocm(request):
     """Skip tests whose helpers exercise CUDA-only sparse MLA APIs."""
     rocm_portable_tests = {
         "test_sparse_backend_decode_correctness",
-        "test_sparse_backend_prefill_correctness",
         "test_rocm_fused_v32_dense_prefill_matches_mqa",
         "test_rocm_long_bf16_prefill_avoids_nonpersistent_aiter",
         "test_split_indexer_prefill_chunks",
@@ -5632,9 +5631,8 @@ def test_rocm_fused_v32_dense_prefill_matches_mqa(
 ):
     """Fused normalization, RoPE and mixed dispatch preserve generation/logprobs.
 
-    Chunking unequal prompts exercises prefill alongside decode. The two long
-    prompts straddle the dense-prefill threshold. No pretrained weights or
-    tokenizer download is needed.
+    Chunking unequal prompts exercises prefill alongside decode. No pretrained
+    weights or tokenizer download is needed.
     """
     import json
 

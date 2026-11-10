@@ -327,7 +327,7 @@ def _run_sparse_backend_vs_sdpa(
         scale=kv_cache_scale,
     )
 
-    # The sparse builder clones the layer's dense-MHA prefill backend from
+    # The sparse builder clones the layer's MHA prefill backend from
     # static_forward_context; register a mock layer carrying one.
     from vllm.v1.attention.backends.mla.prefill import get_mla_prefill_backend
 
