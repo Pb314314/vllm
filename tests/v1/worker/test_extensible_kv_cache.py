@@ -438,6 +438,10 @@ def test_block_outermost_views_have_mapped_memory_past_their_start(vmm, num_laye
         last_view_start = views[layers[-1]].data_ptr() - kv_cache.buffer.base_ptr
         granule = kv_cache.buffer.granularity
         assert kv_cache.physical_bytes - last_view_start >= granule // 2
+        # Releasing warmup's blocks before capture keeps it so.
+        kv_cache.commit(NUM_BLOCKS)
+        _release_warmup_blocks(kv_cache)
+        assert kv_cache.physical_bytes - last_view_start >= granule // 2
     finally:
         kv_cache.free()
 
@@ -544,6 +548,37 @@ def test_shrinking_commit_remaps_to_the_smaller_prefix(vmm, layout):
             assert torch.count_nonzero(view) == 0
         tensors = kv_cache.committed_kv_cache_tensors(final, layout, 4)
         assert all(t.size == 4 * kv_cache.bytes_per_block for t in tensors)
+    finally:
+        kv_cache.free()
+
+
+def _release_warmup_blocks(kv_cache: ExtensibleKVCache) -> list[str]:
+    calls: list[str] = []
+    runner = SimpleNamespace(
+        extensible_kv_cache=kv_cache,
+        block_tables=SimpleNamespace(clear=lambda: calls.append("clear")),
+    )
+    extensible_kv_cache.release_kv_cache_blocks(runner)
+    return calls
+
+
+@requires_cuda
+@pytest.mark.parametrize("layout", [KVCacheLayout.LBNHC, KVCacheLayout.BLNHC])
+def test_release_before_capture_keeps_only_the_null_blocks(vmm, layout):
+    """Before CUDA graph capture, startup gives back what warmup committed: the
+    cache keeps exactly what allocate committed, and the block tables drop
+    warmup's block ids, which draft steps would otherwise write to."""
+    config, _ = _make_config(layout)
+    kv_cache = ExtensibleKVCache(config, torch.device("cuda"), layout)
+    try:
+        allocate_kv_cache(
+            config, torch.device("cuda"), layout, allocate=kv_cache.allocate
+        )
+        allocated = (kv_cache.num_committed_blocks, kv_cache.physical_bytes)
+        kv_cache.commit(NUM_BLOCKS)
+
+        assert _release_warmup_blocks(kv_cache) == ["clear"]
+        assert (kv_cache.num_committed_blocks, kv_cache.physical_bytes) == allocated
     finally:
         kv_cache.free()
 
