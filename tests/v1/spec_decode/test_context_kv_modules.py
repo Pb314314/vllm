@@ -20,7 +20,7 @@ from vllm.v1.worker.gpu.spec_decode import init_speculator
 NUM_CONTEXT_TOKENS = 37
 
 
-def _load_speculator(target: str, draft: str, method: str, k: int):
+def _load_speculator(target: str, draft: str, method: str, k: int, **engine_kwargs):
     vllm_config = EngineArgs(
         model=target,
         speculative_config={
@@ -39,6 +39,7 @@ def _load_speculator(target: str, draft: str, method: str, k: int):
         max_model_len=1024,
         max_num_seqs=8,
         enforce_eager=True,
+        **engine_kwargs,
     ).create_engine_config()
     model_config = vllm_config.model_config
     vocab_size = model_config.get_vocab_size()
@@ -106,4 +107,53 @@ def test_freeing_keeps_context_kv(dist_init, monkeypatch, target, draft, method,
         after = context_kv()
 
     assert len(before) == len(after) == 2 * len(attn_layers)
+    assert all(torch.equal(b, a) for b, a in zip(before, after))
+
+
+@pytest.mark.skipif(
+    not current_platform.is_device_capability_family(100), reason="Blackwell required"
+)
+def test_freeing_keeps_context_kv_deepseek_v41(dist_init, monkeypatch):
+    # The DeepSeek-V4.1 draft writes its context K/V with a fused insert op, so
+    # compare that op's inputs; everything else it reads is buffers.
+    from vllm.models.deepseek_v41.nvidia import dspark
+
+    target = "deepseek-ai/DeepSeek-V4.1-Flash"
+    speculator, target_model = _load_speculator(
+        target, target, "dspark", 7, language_model_only=True
+    )
+    model = speculator.model.model
+    num_layers = len(model.layers)
+    written: list[torch.Tensor] = []
+    monkeypatch.setattr(
+        dspark,
+        "_insert_context_kv",
+        lambda attn, kv, positions, slot_mapping: written.append(kv.clone()),
+    )
+
+    def context_kv() -> list[torch.Tensor]:
+        written.clear()
+        generator = torch.Generator("cuda").manual_seed(0)
+        aux_hidden_states = torch.randn(
+            NUM_CONTEXT_TOKENS,
+            model.main_proj.input_size,
+            generator=generator,
+            device="cuda",
+            dtype=speculator.dtype,
+        )
+        positions = torch.arange(NUM_CONTEXT_TOKENS, device="cuda")
+        model.precompute_and_store_context_kv(
+            model.combine_hidden_states(aux_hidden_states),
+            positions,
+            [positions] * num_layers,
+        )
+        return list(written)
+
+    with torch.inference_mode():
+        before = context_kv()
+        speculator.free_unused_weights(target_model)
+        assert any(param.numel() == 0 for param in model.layers.parameters())
+        after = context_kv()
+
+    assert len(before) == len(after) == num_layers
     assert all(torch.equal(b, a) for b, a in zip(before, after))

@@ -168,6 +168,10 @@ class DSparkDeepseekV4Model(nn.Module):
     def embed_input_ids(self, input_ids: torch.Tensor) -> torch.Tensor:
         return self.embed_tokens(input_ids)
 
+    def context_kv_modules(self) -> list[nn.Module]:
+        kv_norms = [layer.attn.kv_norm for layer in self.layers]
+        return [self.main_proj, self.main_norm, self.context_wkv_proj, *kv_norms]
+
     def combine_hidden_states(self, aux_hidden_states: torch.Tensor) -> torch.Tensor:
         """main_x = main_norm(main_proj(concat of target aux hidden states)).
 
@@ -345,6 +349,10 @@ class DSparkDeepseekV4ForCausalLM(nn.Module):
 
     def combine_hidden_states(self, aux_hidden_states: torch.Tensor) -> torch.Tensor:
         return self.model.combine_hidden_states(aux_hidden_states)
+
+    def context_kv_modules(self) -> list[nn.Module]:
+        """See `DFlashSpeculator.free_unused_weights`."""
+        return self.model.context_kv_modules()
 
     def get_draft_kv_cache_layer_names(self) -> list[str]:
         # DSV4 MLA path: each draft layer's sliding-window cache is a separate
