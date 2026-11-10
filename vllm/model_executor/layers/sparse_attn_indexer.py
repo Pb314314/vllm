@@ -12,7 +12,6 @@ from vllm import _custom_ops as ops
 from vllm._aiter_ops import rocm_aiter_ops
 from vllm.compilation.breakable_cudagraph import eager_break_during_capture
 from vllm.config import (
-    CUDAGraphMode,
     get_current_vllm_config,
     get_current_vllm_config_or_none,
 )
@@ -36,7 +35,6 @@ from vllm.model_executor.kernels.attention.dsa.fused_mqa_topk import (
     get_fused_mqa_topk_workspaces,
     use_fused_mqa_topk,
 )
-from vllm.model_executor.layers.attention.mla_attention import SparseMLAPrefillRoute
 from vllm.model_executor.layers.indexer_topk import (
     RADIX_TOPK_WORKSPACE_SIZE,
     deep_select_topk,
@@ -509,7 +507,6 @@ def sparse_attn_indexer(
     skip_k_cache_insert: bool,
     use_pcp: bool,
     pcp_shard_decode_requests: bool,
-    dense_mha_metadata_layer_name: LayerNameType,
     use_fp4_cache: bool = False,
     dcp_rank: int = 0,
     dcp_world_size: int = 1,
@@ -640,7 +637,6 @@ def sparse_attn_indexer(
             skip_k_cache_insert,
             use_pcp,
             pcp_shard_decode_requests,
-            dense_mha_metadata_layer_name,
             use_fp4_cache,
             candidate_blocks=candidate_blocks,
             candidate_block_size=candidate_block_size,
@@ -695,25 +691,6 @@ def sparse_attn_indexer(
             quant_block_size,
             "mxfp8" if mqa_logits_use_mx_scales() else scale_fmt,
         )
-    # The indexer and main MLA may classify the same short extend differently
-    # because they use independent decode thresholds. Only the main MLA route
-    # can determine whether the top-k indices will be consumed.
-    if forward_context.cudagraph_runtime_mode != CUDAGraphMode.FULL:
-        dense_mha_layer = _resolve_layer_name(dense_mha_metadata_layer_name)
-        if dense_mha_layer:
-            mla_metadata = attn_metadata.get(dense_mha_layer)
-            prefill_metadata = getattr(mla_metadata, "prefill", None)
-            if (
-                getattr(prefill_metadata, "route", None)
-                is SparseMLAPrefillRoute.DENSE_MHA
-                and getattr(mla_metadata, "num_decode_tokens", -1) == 0
-                and not torch.cuda.is_current_stream_capturing()
-            ):
-                # Deliberately leave the buffer untouched. Dense MHA does not
-                # consume top-k indices for this batch; clearing it would be
-                # unnecessary work.
-                return topk_indices_buffer
-
     # The buffer must be pre-filled with -1 (the "no token" sentinel) before the
     # top-k kernels scatter valid indices into it. On the fused deepseek_v32
     # nvidia path, _fused_norm_rope_kernel already cleared the same
@@ -1195,7 +1172,6 @@ def sparse_attn_indexer_fake(
     skip_k_cache_insert: bool,
     use_pcp: bool,
     pcp_shard_decode_requests: bool,
-    dense_mha_metadata_layer_name: LayerNameType,
     use_fp4_cache: bool = False,
     dcp_rank: int = 0,
     dcp_world_size: int = 1,
@@ -1266,7 +1242,6 @@ class SparseAttnIndexer(CustomOp):
         self.candidate_blocks = candidate_blocks
         self.candidate_block_size = candidate_block_size
         self.candidate_write = candidate_write
-        self.dense_mha_metadata_layer_name = ""
         # DCP scalars are constant for the run; resolve them here (config is set
         # during model construction) and pass them into the custom op, rather
         # than threading them through per-step metadata.
@@ -1363,7 +1338,6 @@ class SparseAttnIndexer(CustomOp):
             self.skip_k_cache_insert,
             self.use_pcp,
             self.pcp_shard_decode_requests,
-            _encode_layer_name(self.dense_mha_metadata_layer_name),
             self.use_fp4_cache,
             self.dcp_rank,
             self.dcp_world_size,

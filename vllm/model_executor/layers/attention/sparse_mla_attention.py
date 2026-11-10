@@ -494,11 +494,6 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             or use_shardq
         ):
             return SparseMLAPrefillRoute.SPARSE_MQA
-        if prefill_max_seq_len <= self.topk_tokens:
-            # Dense MHA cannot be used under PCP+DCP.
-            if self.use_pcp and self.dcp_world_size > 1:
-                return SparseMLAPrefillRoute.SPARSE_MQA
-            return SparseMLAPrefillRoute.DENSE_MHA
         if (
             self.topk_mask_workspace is not None
             and self.dcp_world_size <= 1
@@ -1261,18 +1256,6 @@ class SparseMLACommonImpl(MLACommonBaseImpl[T], SharedTopkIndicesBuffer, Generic
     ) -> None:
         prefill_metadata = attn_metadata.prefill
         assert prefill_metadata is not None
-        if prefill_metadata.route is SparseMLAPrefillRoute.DENSE_MHA:
-            return super().forward_mha(
-                q,
-                kv_c_normed,
-                k_pe,
-                kv_c_and_k_pe_cache,
-                attn_metadata,
-                k_scale,
-                output,
-                output_scale,
-            )
-
         assert prefill_metadata.route is SparseMLAPrefillRoute.MASKED_MHA
         assert output_scale is None
         assert prefill_metadata.query_lens_cpu is not None

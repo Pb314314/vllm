@@ -438,7 +438,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
     3. Return the output tensor.
     """
 
-    supports_dense_mha_prefill: ClassVar[bool] = True
+    supports_mha_prefill: ClassVar[bool] = True
     # PCP+DCP is validated per model; subclasses opt in.
     supports_pcp_dcp: ClassVar[bool] = False
 
@@ -654,10 +654,10 @@ class MLAAttention(nn.Module, AttentionLayerBase):
 
         self.prefill_backend: MLAPrefillBackend | None
         if self.impl.is_sparse and not (
-            self.impl.supports_dense_mha_prefill and self.supports_dense_mha_prefill
+            self.impl.supports_mha_prefill and self.supports_mha_prefill
         ):
             logger.warning_once(
-                "Sparse MLA layer has no dense-MHA prefill path; using the top-k "
+                "Sparse MLA layer has no MHA prefill path; using the top-k "
                 "MQA path only."
             )
             self.prefill_backend = None
@@ -674,7 +674,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                     raise
                 logger.warning_once(
                     "No MLA prefill backend supports this model; sparse MLA will "
-                    "use the top-k MQA path only (no dense-MHA prefill)."
+                    "use the top-k MQA path only (no MHA prefill)."
                 )
                 self.prefill_backend = None
             else:
@@ -1046,13 +1046,9 @@ class MLAAttention(nn.Module, AttentionLayerBase):
             quant_key is not None
             and self.prefill_backend is not None
             and self.prefill_backend.supports_quant_output(quant_key)
+            and not self.impl.is_sparse
             and attn_metadata is not None
             and attn_metadata.prefill is not None
-            and (
-                not self.impl.is_sparse
-                or attn_metadata.prefill.route  # type: ignore[attr-defined]
-                is SparseMLAPrefillRoute.DENSE_MHA
-            )
             and attn_metadata.prefill.chunked_context is None
             and self.impl.dcp_world_size <= 1
         )
@@ -1608,12 +1604,10 @@ class QueryLenSupport(Enum):
 class SparseMLAPrefillRoute(Enum):
     """How a sparse MLA step runs its prefill tokens.
 
-    - DENSE_MHA: every prefill fits in the top-k, so MHA over all keys.
     - MASKED_MHA: MHA with the top-k as a per-query key mask.
     - SPARSE_MQA: the prefill tokens join the decodes in forward_mqa.
     """
 
-    DENSE_MHA = "dense_mha"
     MASKED_MHA = "masked_mha"
     SPARSE_MQA = "sparse_mqa"
 

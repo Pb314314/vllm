@@ -594,11 +594,11 @@ class ROCMAiterMLASparseMetadataBuilder(
         metadata = super().build(
             common_prefix_len, common_attn_metadata, fast_build=fast_build
         )
-        use_dense_prefill = (
+        use_mha_prefill = (
             metadata.prefill is not None
-            and metadata.prefill.route is SparseMLAPrefillRoute.DENSE_MHA
+            and metadata.prefill.route is not SparseMLAPrefillRoute.SPARSE_MQA
         )
-        num_reqs = metadata.num_decodes if use_dense_prefill else metadata.num_reqs
+        num_reqs = metadata.num_decodes if use_mha_prefill else metadata.num_reqs
         num_tokens = int(common_attn_metadata.query_start_loc_cpu[num_reqs].item())
         num_decodes = metadata.num_decodes
         num_prefills = metadata.num_prefills
@@ -831,7 +831,7 @@ class ROCMAiterMLASparseImpl(SparseMLACommonImpl[ROCMAiterMLASparseMetadata]):
             **mla_args,
         )
         self.softmax_scale = scale
-        self.supports_dense_mha_prefill = sinks is None  # type: ignore[misc]
+        self.supports_mha_prefill = sinks is None  # type: ignore[misc]
 
         vllm_config = get_current_vllm_config()
         self.owns_indexer: bool = indexer is not None

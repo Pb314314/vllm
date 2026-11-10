@@ -357,11 +357,11 @@ def test_sparse_persistent_metadata_syncs_only_after_recompute(monkeypatch):
     assert fake_get_mla_metadata_v1_mock.call_count == 1
 
 
-def test_dense_prefill_builds_sparse_metadata_for_decode_subset(monkeypatch):
+def test_mha_prefill_builds_sparse_metadata_for_decode_subset(monkeypatch):
     """Dense prefill must exclude prefill tokens from AITER sparse metadata.
 
     A mixed batch is routed as sparse MQA for its leading decode requests and
-    dense MHA for its trailing short prefill requests.  The AITER metadata
+    MHA for its trailing prefill requests.  The AITER metadata
     buffers therefore must describe only the decode subset; including prefill
     tokens would mismatch the query passed to ``forward_mqa``.
     """
@@ -395,7 +395,7 @@ def test_dense_prefill_builds_sparse_metadata_for_decode_subset(monkeypatch):
         num_decode_tokens=1,
         seq_lens=seq_lens,
         prefill_max_seq_len=4,
-        prefill=SimpleNamespace(route=SparseMLAPrefillRoute.DENSE_MHA),
+        prefill=SimpleNamespace(route=SparseMLAPrefillRoute.MASKED_MHA),
     )
 
     monkeypatch.setattr(
@@ -455,7 +455,7 @@ def test_long_prefill_shares_full_sparse_metadata_with_decode(monkeypatch):
     )
 
     # One decode token followed by a five-token prefill.  topk_tokens is four,
-    # so the prefill must not be split onto the dense-MHA path.
+    # so the prefill must not be split onto the MHA path.
     query_start_loc = torch.tensor([0, 1, 6], dtype=torch.int32)
     seq_lens = torch.tensor([16, 5], dtype=torch.int32)
     common_metadata = SimpleNamespace(
@@ -535,7 +535,7 @@ def test_long_prefill_shares_full_sparse_metadata_with_decode(monkeypatch):
 def test_forward_mqa_slices_full_batch_metadata_to_query_tokens(monkeypatch):
     """The sparse kernel inputs must have the same token extent as its query.
 
-    In a mixed dense-prefill batch, ``forward_mqa`` receives only decode query
+    In a mixed MHA-prefill batch, ``forward_mqa`` receives only decode query
     tokens while some metadata buffers may represent the full batch.  This
     guards the slicing that prevents the index conversion from writing beyond
     the decode-sized output.
@@ -714,7 +714,7 @@ def test_sparse_metadata_workload_length_dtype_matrix(
             SimpleNamespace(
                 route=SparseMLAPrefillRoute.SPARSE_MQA
                 if is_long
-                else SparseMLAPrefillRoute.DENSE_MHA
+                else SparseMLAPrefillRoute.MASKED_MHA
             )
             if num_prefills
             else None
@@ -742,8 +742,8 @@ def test_sparse_metadata_workload_length_dtype_matrix(
 
     result = builder.build(0, common_metadata)
 
-    uses_dense_prefill = workload in ("prefill", "mixed") and not is_long
-    expected_sparse_tokens = num_decodes if uses_dense_prefill else num_tokens
+    uses_mha_prefill = workload in ("prefill", "mixed") and not is_long
+    expected_sparse_tokens = num_decodes if uses_mha_prefill else num_tokens
     assert result.req_id_per_token.numel() == expected_sparse_tokens
     assert result.qo_indptr.numel() == expected_sparse_tokens + 1
     assert result.paged_kv_indptr.numel() == expected_sparse_tokens + 1
