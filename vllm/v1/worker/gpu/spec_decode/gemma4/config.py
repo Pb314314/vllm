@@ -7,6 +7,8 @@ class Gemma4MTPSpeculatorConfig(MTPSpeculatorConfig):
     speculator_class = (
         "vllm.v1.worker.gpu.spec_decode.gemma4.speculator.Gemma4Speculator"
     )
+    # The drafter reads the target's K/V and stores none of its own.
+    supports_prefill_context_kv_only = False
     # Gemma-4 MTP scores tied embedding rows directly; no lm_head to share.
     supported_options = MTPSpeculatorConfig.supported_options - {
         "draft_lm_head_quantization"

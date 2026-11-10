@@ -162,6 +162,11 @@ class DeepseekV32MultiTokenPredictorLayer(nn.Module):
             )
         return hidden_states, hidden_states
 
+    def context_kv_only_block(self) -> nn.Module:
+        """The decoder block whose feed-forward `prefill_context_kv_only` drops:
+        it runs after the block's only attention and only feeds the residual."""
+        return self.mtp_block
+
 
 class DeepseekV32MultiTokenPredictor(nn.Module):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):

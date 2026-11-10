@@ -673,13 +673,16 @@ class SpeculativeConfig:
     confidence. Currently only supported for method="dspark"."""
 
     prefill_context_kv_only: bool = False
-    """Set on a P/D prefill instance (Model Runner V2, DFlash-based speculators)
-    to only store the drafter's context K/V, which the decode instance reads:
-    no drafts, no lookahead KV slots, and, for draft models that support it,
-    the draft weights only drafting reads are freed. Requests that decode there
-    run without speculation. Keep the rest of the speculative config as on the
-    decode instance; adaptive verification and dynamic speculative decoding are
-    turned off."""
+    """Set on a P/D prefill instance (Model Runner V2, DFlash-based speculators
+    and single-module MTP) to only store the drafter's context K/V, which the
+    decode instance reads: no drafts, no lookahead KV slots, and, for draft
+    models that support it, the draft weights only drafting reads are freed.
+    With single-module MTP, the feed-forward (e.g. MoE) of each
+    `model.layers[*].mtp_block` is replaced with zeros and its weights are
+    freed; MTP models without that structure fail at load.
+    Requests that decode there run without speculation. Keep the rest of the
+    speculative config as on the decode instance; adaptive verification and
+    dynamic speculative decoding are turned off."""
 
     @staticmethod
     def _acceptance_length_to_rates(length: float, n: int) -> list[float]:

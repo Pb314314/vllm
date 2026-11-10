@@ -4,6 +4,8 @@ from vllm.v1.worker.gpu.spec_decode.mtp.config import MTPSpeculatorConfig
 
 
 class MultiModuleMTPSpeculatorConfig(MTPSpeculatorConfig):
+    # Not supported yet (see SpeculativeConfig.prefill_context_kv_only).
+    supports_prefill_context_kv_only = False
     speculator_class = (
         "vllm.v1.worker.gpu.spec_decode.multi_module_mtp.speculator."
         "MultiModuleMTPSpeculator"

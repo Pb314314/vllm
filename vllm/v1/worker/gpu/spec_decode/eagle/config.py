@@ -54,7 +54,7 @@ class EagleSpeculatorConfig(DraftModelSpeculatorConfig):
 
     @property
     def num_lookahead_tokens(self) -> int:
-        return self.num_speculative_tokens
+        return self.num_scheduled_spec_tokens
 
 
 class Eagle3SpeculatorConfig(EagleSpeculatorConfig):
