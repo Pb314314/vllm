@@ -428,6 +428,21 @@ def _get_current_request_rate(
     return request_rate
 
 
+def _salted_warmup_input(test_input: RequestFuncInput, index: int) -> RequestFuncInput:
+    """Return a per-warmup copy of test_input that cannot prime the shared
+    prefix cache for the measured run (fixes #66698): without a cache_salt,
+    warmup request N>1 is a cache hit of warmup 1 and the first measured
+    request is a cache hit too, so its TTFT measures a lookup, not a prefill.
+    """
+    return replace(
+        test_input,
+        extra_body={
+            **(test_input.extra_body or {}),
+            "cache_salt": f"warmup-{index}-{uuid.uuid4().hex}",
+        },
+    )
+
+
 async def get_request(
     input_requests: list[SampleRequest],
     request_rate: float,
@@ -933,14 +948,26 @@ async def benchmark(
         )
         warmup_tasks = []
 
-        async def warmup_limited_request_func():
+        async def warmup_limited_request_func(warmup_input):
             async with warmup_semaphore:
                 return await request_func(
-                    request_func_input=test_input, session=session, pbar=warmup_pbar
+                    request_func_input=warmup_input, session=session, pbar=warmup_pbar
                 )
 
-        for _ in range(num_warmups):
-            request_task = asyncio.create_task(warmup_limited_request_func())
+        for i in range(num_warmups):
+            # Salt each warmup request so it cannot prime the shared prefix
+            # cache for the measured run (fixes #66698): without this, the
+            # first measured request is a cache hit and its TTFT is wrong.
+            warmup_input = replace(
+                test_input,
+                extra_body={
+                    **(test_input.extra_body or {}),
+                    "cache_salt": f"warmup-{i}-{uuid.uuid4().hex}",
+                },
+            )
+            request_task = asyncio.create_task(
+                warmup_limited_request_func(warmup_input)
+            )
             warmup_tasks.append(request_task)
         _ = await asyncio.gather(*warmup_tasks)
 
