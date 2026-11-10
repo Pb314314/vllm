@@ -2958,8 +2958,8 @@ def accumulate_mla_context_chunk(
 
 class MLACommonBaseImpl(MLAAttentionImpl[A], Generic[A]):
     """Shared MLA base providing MHA prefill (via the selected
-    MLAPrefillBackend) for both dense and sparse impls; subclasses add decode
-    (``forward_mqa``).
+    MLAPrefillBackend) for dense impls; sparse impls override ``forward_mha``
+    with masked MHA. Subclasses add decode (``forward_mqa``).
     """
 
     _use_flashinfer_concat_mla_k: bool
