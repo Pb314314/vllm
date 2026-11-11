@@ -32,6 +32,13 @@ def test_tp16_default_grid_clamped():
     assert grid == 152
 
 
+def test_tp16_batch8_tuning_preserved():
+    # Current main tunes TP16 batch 8 to 144 CTAs (shared expert runs beside
+    # the routed ones); the clamp must keep that entry.
+    _, grids = _fit(tp=16, grid=152, sms=152)
+    assert grids[8] == 144
+
+
 def test_constructor_applies_the_clamp():
     """Guard the wiring: removing the clamp call from the constructor must
     fail a test (the helper's own tests do not see that)."""
