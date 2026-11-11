@@ -911,6 +911,12 @@ class CompilationConfig:
     """time taken for compilation"""
     encoder_compilation_time: float = field(default=0.0, init=False)
     """time taken for multimodal encoder compilation"""
+    _default_cudagraph_fallback: dict[str, list[int]] | None = field(
+        default=None, init=False
+    )
+    """Set when the prefill or decode sizes are the SM100 default grids: for each
+    such kind ("prefill", "decode"), the sizes used off SM100, which startup
+    falls back to when the default graphs do not fit in memory."""
 
     static_forward_context: dict[str, Any] = field(default_factory=dict, init=False)
     """Per-model forward context
@@ -968,6 +974,7 @@ class CompilationConfig:
             "enabled_custom_ops",
             "disabled_custom_ops",
             "static_forward_context",
+            "_default_cudagraph_fallback",
         }
 
         return get_compile_factors(self, ignored_factors)

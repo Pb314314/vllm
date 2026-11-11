@@ -286,6 +286,14 @@ class CudaGraphManager:
             desc, num_ubatches=num_ubatches, uniform_token_count=uniform_token_count
         )
 
+    def reset_candidates(self) -> None:
+        """Rebuild the capture and dispatch tables from the current sizes."""
+        assert not self.graphs, "Graphs are already captured."
+        self._candidates.clear()
+        self._decode_descs.clear()
+        self._capture_descs.clear()
+        self._init_candidates()
+
     def _init_candidates(self) -> None:
         """Build the descriptors to capture and the dispatch tables."""
         if self.cudagraph_mode == CUDAGraphMode.NONE:
@@ -991,7 +999,9 @@ _MIN_PER_GRAPH_BYTES = 1 << 20
 
 
 @torch.inference_mode()
-def profile_cudagraph_memory(runner: "GPUModelRunner") -> int:
+def profile_cudagraph_memory(
+    runner: "GPUModelRunner", kv_cache_blocks: int | None = None
+) -> int:
     """Estimate the GPU memory needed for CUDA graph capture.
 
     Called during memory profiling, *before* the real KV cache is allocated,
@@ -1032,7 +1042,7 @@ def profile_cudagraph_memory(runner: "GPUModelRunner") -> int:
 
     try:
         with set_current_vllm_config(runner.vllm_config):
-            _init_minimal_kv_cache_for_profiling(runner)
+            _init_minimal_kv_cache_for_profiling(runner, kv_cache_blocks)
 
         manager = runner.cudagraph_manager
         assert manager is not None
@@ -1111,8 +1121,11 @@ def _extrapolate_full_graph_memory(mem_samples: list[int], total_graphs: int) ->
     return first_capture + (total_graphs - 1) * per_graph
 
 
-def _init_minimal_kv_cache_for_profiling(runner: "GPUModelRunner") -> None:
-    """Allocate the smallest KV cache that still lets every graph be captured."""
+def _init_minimal_kv_cache_for_profiling(
+    runner: "GPUModelRunner", num_blocks: int | None = None
+) -> None:
+    """Allocate the smallest KV cache that still lets every graph be captured,
+    or `num_blocks` blocks."""
     from vllm.v1.core.kv_cache_config_builder import get_kv_cache_config_builder
     from vllm.v1.core.kv_cache_planning import get_kv_cache_groups_from_builder
 
@@ -1122,7 +1135,7 @@ def _init_minimal_kv_cache_for_profiling(runner: "GPUModelRunner") -> None:
         builder, runner.vllm_config, kv_cache_spec
     )
     # At least one block per sequence is required to capture the graphs.
-    min_blocks = (
+    min_blocks = num_blocks or (
         min(runner.max_num_reqs, runner.compilation_config.max_cudagraph_capture_size)
         or 1
     )

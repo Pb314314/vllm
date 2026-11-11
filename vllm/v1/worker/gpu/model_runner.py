@@ -114,6 +114,7 @@ from vllm.v1.worker.gpu.buffer_utils import set_default_max_concurrency
 from vllm.v1.worker.gpu.cp_utils import prepare_dcp_local_seq_lens
 from vllm.v1.worker.gpu.cudagraph_utils import (
     BatchExecutionDescriptor,
+    CudaGraphManager,
     ModelCudaGraphManager,
     has_compiled_submodule,
     make_cudagraph_stats,
@@ -1132,14 +1133,31 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             self.pooling_runner.release_late_interaction_query_cache(query_keys)
 
     @torch.inference_mode()
-    def profile_cudagraph_memory(self) -> int:
-        """Estimate the GPU memory required to capture CUDA graphs."""
-        if self.cache_config.enable_extensible_kv_cache:
+    def profile_cudagraph_memory(self, measure: bool = False) -> int:
+        """Estimate the GPU memory required to capture CUDA graphs. With the
+        extensible KV cache this is 0 unless `measure` is set, which captures
+        them next to only the blocks capture addresses, as the real capture
+        can run with warmup's blocks released."""
+        extensible = self.cache_config.enable_extensible_kv_cache
+        if extensible and not measure:
             # The extensible KV cache measures the capture footprint after warmup.
             return 0
         # Runs before the KV cache exists, outside compile_or_warm_up_model.
         with self.eplb.suppress():
-            return _profile_cudagraph_memory(self)
+            return _profile_cudagraph_memory(self, 2 if extensible else None)
+
+    def reset_cudagraph_candidates(self) -> None:
+        """Rebuild the CUDA graph capture lists from the compilation config."""
+        managers = [self.cudagraph_manager]
+        if self.speculator is not None:
+            managers += [
+                v
+                for v in vars(self.speculator).values()
+                if isinstance(v, CudaGraphManager)
+            ]
+        for manager in managers:
+            if manager is not None:
+                manager.reset_candidates()
 
     def needs_cudagraph_capture(self) -> bool:
         """Whether capture_model() has any CUDA graphs left to capture."""

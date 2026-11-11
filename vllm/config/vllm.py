@@ -2394,16 +2394,7 @@ class VllmConfig:
                 max_cudagraph_capture_size is not None
                 or self.compilation_config.cudagraph_capture_sizes is not None
             )
-            try:
-                target_query_lens = self.get_decode_cudagraph_query_lens(
-                    self.uniform_decode_query_len
-                )
-            except ValueError:
-                # Validation lives elsewhere; an invalid dynamic speculative
-                # decoding schedule keeps the single static width.
-                target_query_lens = {
-                    self.uniform_decode_query_len: self.scheduler_config.max_num_seqs
-                }
+            target_query_lens = self._target_decode_cudagraph_query_lens()
             # Decode sizes to cover, in tokens. Populated only when the default
             # is computed here, so an explicit capture range is left exactly as
             # configured.
@@ -2568,6 +2559,38 @@ class VllmConfig:
         # complete the remaining process.
         self.compilation_config.post_init_cudagraph_sizes()
 
+    def _target_decode_cudagraph_query_lens(self) -> dict[int, int]:
+        try:
+            return self.get_decode_cudagraph_query_lens(self.uniform_decode_query_len)
+        except ValueError:
+            # Validation lives elsewhere; an invalid dynamic speculative
+            # decoding schedule keeps the single static width.
+            return {self.uniform_decode_query_len: self.scheduler_config.max_num_seqs}
+
+    def fall_back_from_default_cudagraph_sizes(self) -> None:
+        """Capture the sizes used off SM100 for the kinds that took the SM100
+        defaults, and re-record the token counts of every graph, as if those
+        sizes had been configured."""
+        compilation_config = self.compilation_config
+        fallback = compilation_config._default_cudagraph_fallback
+        assert fallback is not None
+        if "prefill" in fallback:
+            sizes = fallback["prefill"]
+            compilation_config.prefill_cudagraph_capture_token_sizes = list(sizes)
+            compilation_config.max_prefill_cudagraph_capture_tokens = max(
+                sizes, default=0
+            )
+        if "decode" in fallback:
+            sizes = fallback["decode"]
+            compilation_config.decode_cudagraph_capture_request_sizes = list(sizes)
+            compilation_config.max_decode_cudagraph_capture_requests = max(
+                sizes, default=0
+            )
+        self._split_cudagraph_capture_sizes(
+            False, self._target_decode_cudagraph_query_lens()
+        )
+        compilation_config.post_init_cudagraph_sizes()
+
     def _split_cudagraph_capture_sizes(
         self, legacy_sizes: bool, target_query_lens: dict[int, int]
     ) -> None:
@@ -2638,6 +2661,21 @@ class VllmConfig:
                 raise ValueError(f"{name} holds {kept[-1]}, above {cap_name}={cap}.")
             return kept
 
+        def shared_decode_sizes() -> list[int]:
+            # The request counts each target query length rounds the shared
+            # sizes up to within the shared bound.
+            return sorted(
+                {
+                    min(cdiv(s, q), max_num_seqs)
+                    for s in shared_sizes
+                    for q in target_query_lens
+                    if cdiv(s, q) * q <= shared_max
+                }
+            )
+
+        # Startup falls back from the SM100 defaults to the sizes used off SM100
+        # when their graphs do not fit in memory.
+        fallback: dict[str, list[int]] = {}
         if prefill_sizes is not None:
             prefill_sizes = explicit(
                 prefill_sizes,
@@ -2647,6 +2685,8 @@ class VllmConfig:
                 "max_prefill_cudagraph_capture_tokens",
             )
         elif max_prefill_tokens is not None or wide_defaults:
+            if max_prefill_tokens is None:
+                fallback["prefill"] = list(shared_sizes)
             prefill_sizes = prefill_cudagraph_capture_grid(
                 min(
                     8192 if max_prefill_tokens is None else max_prefill_tokens,
@@ -2666,22 +2706,17 @@ class VllmConfig:
                 "max_decode_cudagraph_capture_requests",
             )
         elif max_decode_requests is not None or wide_defaults:
+            if max_decode_requests is None:
+                fallback["decode"] = shared_decode_sizes()
             decode_sizes = decode_cudagraph_capture_grid(
                 max_num_seqs
                 if max_decode_requests is None
                 else min(max_decode_requests, max_num_seqs)
             )
         else:
-            # The request counts each target query length rounds the shared sizes
-            # up to within the shared bound.
-            decode_sizes = sorted(
-                {
-                    min(cdiv(s, q), max_num_seqs)
-                    for s in shared_sizes
-                    for q in target_query_lens
-                    if cdiv(s, q) * q <= shared_max
-                }
-            )
+            decode_sizes = shared_decode_sizes()
+        if fallback:
+            compilation_config._default_cudagraph_fallback = fallback
         compilation_config.prefill_cudagraph_capture_token_sizes = prefill_sizes
         compilation_config.max_prefill_cudagraph_capture_tokens = max(
             prefill_sizes, default=0
