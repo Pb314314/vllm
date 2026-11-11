@@ -97,12 +97,18 @@ from vllm.utils.mem_constants import GiB_bytes
 from vllm.utils.mem_utils import (
     MemoryProfilingResult,
     MemorySnapshot,
+    device_memory_info,
     format_gib,
     memory_profiling,
 )
 from vllm.utils.torch_utils import set_random_seed, set_torch_threads_for_runtime
 from vllm.utils.vmm_driver import vmm_unavailable_reason
 from vllm.v1.attention.backends.utils import record_kv_cache_layout
+from vllm.v1.core.kv_cache_planning import (
+    _pool_bytes_per_block,
+    get_kv_cache_groups,
+    max_memory_usage_bytes,
+)
 from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 from vllm.v1.kv_cache_interface import KVCacheConfig, KVCacheSpec
 from vllm.v1.outputs import (
@@ -112,9 +118,12 @@ from vllm.v1.outputs import (
 )
 from vllm.v1.utils import report_usage_stats
 from vllm.v1.worker.extensible_kv_cache import (
+    KV_CACHE_MARGIN_FLOOR_BYTES,
+    ExtensibleKVCache,
     extend_kv_cache,
     kv_cache_lent_for_weight_update,
     measure_kv_cache_blocks,
+    measure_kv_cache_bytes,
     pad_kv_cache_segments,
     registers_kv_cache_memory,
 )
@@ -780,6 +789,11 @@ class Worker(WorkerBase):
                 profile_result.total_consumed + profile_result.transient_peak_headroom
             )
 
+        if may_capture_graphs and envs.VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS:
+            cudagraph_memory_estimate = self._fit_default_cudagraphs(
+                profile_result.non_kv_cache_memory, cudagraph_memory_estimate
+            )
+
         self.total_consumed = profile_result.total_consumed
         self.peak_activation_memory = (
             profile_result.transient_peak_headroom + cudagraph_memory_estimate
@@ -852,6 +866,127 @@ class Worker(WorkerBase):
             self.model_config.multimodal_config,
             getattr(self.parallel_config, "_api_process_count", 1),
         )
+
+    def _kv_cache_bytes_for_one_request(self) -> int | None:
+        """Bytes `check_enough_kv_cache_memory` needs for one max_model_len
+        request (two blocks with an auto max_model_len), or None unless a kind
+        of CUDA graph took an SM100 default wider than its fallback."""
+        compilation_config = self.compilation_config
+        fallback = compilation_config._default_cudagraph_fallback
+        if fallback is None or self.vllm_config.is_mm_encoder_only:
+            return None
+        # Sizes only: the resolved cudagraph_mode may differ across ranks and
+        # between the two decisions.
+        wider_prefill = "prefill" in fallback and (
+            compilation_config.max_prefill_cudagraph_capture_tokens
+            > max(fallback["prefill"], default=0)
+        )
+        wider_decode = "decode" in fallback and (
+            compilation_config.max_decode_cudagraph_capture_requests
+            > max(fallback["decode"], default=0)
+        )
+        if not (wider_prefill or wider_decode):
+            return None
+        kv_cache_spec = self.model_runner.get_kv_cache_spec()
+        if not kv_cache_spec:
+            # Still takes part in every rank's decision.
+            return 0
+        groups = get_kv_cache_groups(self.vllm_config, dict(kv_cache_spec))
+        block_bytes = _pool_bytes_per_block(self.vllm_config, groups)
+        if self.model_config.original_max_model_len == -1:
+            return 2 * block_bytes
+        return (
+            max_memory_usage_bytes(self.vllm_config, kv_cache_spec.values())
+            + block_bytes
+        )
+
+    def _fall_back_from_default_cudagraphs(self, needed: int) -> None:
+        compilation_config = self.compilation_config
+        before = (
+            compilation_config.max_prefill_cudagraph_capture_tokens,
+            compilation_config.max_decode_cudagraph_capture_requests,
+        )
+        self.vllm_config.fall_back_from_default_cudagraph_sizes()
+        logger.warning(
+            "The SM100 default CUDA graphs (prefill up to %d tokens, decode up to "
+            "%d requests) leave too little memory for the KV cache of one "
+            "%d-token request (%s GiB); capturing up to %d tokens and %d requests "
+            "instead. Set max_prefill_cudagraph_capture_tokens and "
+            "max_decode_cudagraph_capture_requests to choose the bounds.",
+            *before,
+            self.model_config.max_model_len,
+            format_gib(needed),
+            compilation_config.max_prefill_cudagraph_capture_tokens,
+            compilation_config.max_decode_cudagraph_capture_requests,
+        )
+
+    def _fit_default_cudagraphs(
+        self, non_kv_cache_memory: int, cudagraph_memory_estimate: int
+    ) -> int:
+        """Fall back from the SM100 default CUDA graph grids when they leave too
+        little memory for one max_model_len request. The extensible KV cache
+        only measures them here and decides right before capture. Returns the
+        CUDA graph memory estimate to budget."""
+        needed = self._kv_cache_bytes_for_one_request()
+        if needed is None:
+            return cudagraph_memory_estimate
+        if self.cache_config.enable_extensible_kv_cache:
+            # Measuring may resolve cudagraph_mode, so keep this decision's inputs.
+            self._default_cudagraphs_kv_needed = needed
+            self._default_cudagraph_memory = self.model_runner.profile_cudagraph_memory(
+                measure=True
+            )
+            return cudagraph_memory_estimate
+        # As the engine's check of the KV cache sized from this estimate.
+        available = (
+            self.requested_memory - non_kv_cache_memory - cudagraph_memory_estimate
+        )
+        # Every rank must capture the same graphs.
+        if _min_across_ranks(int(available >= needed)):
+            return cudagraph_memory_estimate
+        self._fall_back_from_default_cudagraphs(needed)
+        return self.model_runner.profile_cudagraph_memory()
+
+    def _fit_default_cudagraphs_before_capture(
+        self, kv_cache: ExtensibleKVCache
+    ) -> None:
+        """With everything but the CUDA graphs allocated, give the graphs
+        warmup's KV blocks if they need them, and fall back from the SM100
+        default grids if the KV cache, sized as `measure_kv_cache_blocks` will,
+        could not hold one max_model_len request next to them."""
+        estimate = getattr(self, "_default_cudagraph_memory", None)
+        if estimate is None:
+            return
+        needed = self._default_cudagraphs_kv_needed
+        torch.accelerator.synchronize()
+        gc.collect()
+        torch.accelerator.empty_cache()
+        free_memory, _ = device_memory_info(self.device)
+        # Capture first runs the widest graphs eagerly. Warmup's blocks hold
+        # dummy data, and capture addresses only the null block, except DCP's
+        # FULL capture.
+        if (
+            free_memory
+            < estimate + kv_cache.reserved_headroom_bytes + KV_CACHE_MARGIN_FLOOR_BYTES
+            and self.parallel_config.decode_context_parallel_size == 1
+        ):
+            kv_cache.release_to_null_block()
+            free_memory, _ = device_memory_info(self.device)
+        available = reserve_mm_ipc_gpu_memory(
+            measure_kv_cache_bytes(
+                init_free_memory=self.init_free_memory,
+                free_memory=free_memory - estimate,
+                committed_bytes=kv_cache.physical_bytes,
+                requested_memory=int(self.requested_memory),
+                transient_peak_bytes=kv_cache.reserved_headroom_bytes,
+            ),
+            self.model_config.multimodal_config,
+            getattr(self.parallel_config, "_api_process_count", 1),
+        )
+        # Every rank must capture the same graphs.
+        if not _min_across_ranks(int(available >= needed)):
+            self._fall_back_from_default_cudagraphs(needed)
+            self.model_runner.reset_cudagraph_candidates()
 
     def get_kv_connector_handshake_metadata(
         self,
@@ -1099,6 +1234,7 @@ class Worker(WorkerBase):
                 stats.get("allocated_bytes.all.peak", 0)
                 - stats.get("allocated_bytes.all.current", 0),
             )
+            self._fit_default_cudagraphs_before_capture(kv_cache)
 
         cuda_graph_memory_bytes = 0
         if not self.model_config.enforce_eager:

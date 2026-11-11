@@ -599,6 +599,9 @@ def _mock_config_for_cudagraph_sizes(
     config.get_draft_decode_cudagraph_request_sizes = lambda: (
         VllmConfig.get_draft_decode_cudagraph_request_sizes(config)
     )
+    config._target_decode_cudagraph_query_lens = lambda: (
+        VllmConfig._target_decode_cudagraph_query_lens(config)
+    )
     config._split_cudagraph_capture_sizes = lambda *args: (
         VllmConfig._split_cudagraph_capture_sizes(config, *args)
     )
@@ -663,6 +666,52 @@ def test_sm100_defaults_cover_max_num_seqs_within_the_decode_budget(monkeypatch)
     # The 8192-token decode budget stops K=15 (q=16) at 512 requests.
     assert _widest_covered_request_count(compilation_config, 16, 1024) == 512
     assert compilation_config.max_cudagraph_capture_size == 8192
+
+
+def test_sm100_default_grids_fall_back_to_the_off_sm100_sizes(monkeypatch):
+    """Startup falls back from the SM100 default grids to the shared sizes they
+    replaced (the pre-split defaults, up to 1024 tokens on SM100) when their
+    graphs do not fit; a second resolution keeps them."""
+    compilation_config = _resolve_capture_sizes(monkeypatch, sm100=True)
+    fallback = compilation_config._default_cudagraph_fallback
+    assert fallback.keys() == {"prefill", "decode"}
+    assert max(fallback["prefill"]) == 1024
+    # 1 + 7 tokens per request within the shared 1024-token bound.
+    assert max(fallback["decode"]) == 128
+    config = _mock_config_for_cudagraph_sizes(
+        max_num_seqs=1024,
+        num_speculative_tokens=7,
+        max_num_batched_tokens=16384,
+        compilation_config=compilation_config,
+    )
+
+    VllmConfig.fall_back_from_default_cudagraph_sizes(config)
+
+    assert compilation_config.prefill_cudagraph_capture_token_sizes == (
+        fallback["prefill"]
+    )
+    assert compilation_config.decode_cudagraph_capture_request_sizes == (
+        fallback["decode"]
+    )
+    assert compilation_config.max_cudagraph_capture_size == 1024
+    resolved = {f: getattr(compilation_config, f) for f in _CAPTURE_SIZE_FIELDS}
+    VllmConfig._set_cudagraph_sizes(config)
+    assert resolved == {f: getattr(compilation_config, f) for f in _CAPTURE_SIZE_FIELDS}
+
+
+def test_explicit_bounds_are_never_narrowed(monkeypatch):
+    """Only the kinds left to the SM100 defaults may fall back."""
+    compilation_config = _resolve_capture_sizes(
+        monkeypatch, sm100=True, max_prefill_cudagraph_capture_tokens=8192
+    )
+    assert compilation_config._default_cudagraph_fallback.keys() == {"decode"}
+    compilation_config = _resolve_capture_sizes(
+        monkeypatch,
+        sm100=True,
+        max_prefill_cudagraph_capture_tokens=8192,
+        max_decode_cudagraph_capture_requests=1024,
+    )
+    assert compilation_config._default_cudagraph_fallback is None
 
 
 def test_full_decode_only_records_no_prefill_sizes(monkeypatch):

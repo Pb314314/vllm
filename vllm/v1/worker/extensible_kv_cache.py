@@ -209,6 +209,10 @@ class ExtensibleKVCache:
             self.physical_bytes / (1 << 30),
         )
 
+    def release_to_null_block(self) -> None:
+        """Remap to the blocks `allocate` commits, discarding the rest."""
+        self.commit(2 if self._is_block_outermost else 1, shrink=True)
+
     def committed_views(
         self,
         kv_cache_config: KVCacheConfig,
