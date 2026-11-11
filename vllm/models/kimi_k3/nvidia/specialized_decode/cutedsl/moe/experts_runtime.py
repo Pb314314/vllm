@@ -150,7 +150,9 @@ def _fit_grids_to_device(tp: int, grid: int, sms: int) -> tuple[int, dict]:
     grid = min(grid, sms)
     # TP8: B3-4 on 148 CTAs; B5-8 publish on 128-136 CTAs, leaving SMs for the
     # one-wave tail; grouped B9-64 on 152.
-    grids = f"3-4:148,5-6:128,7:132,9-64:{min(152, sms)}" if tp == 8 else ""
+    # TP16 B8: 144 CTAs leave SMs for the shared expert, which runs beside the
+    # routed experts (chosen by an end-to-end A/B at c = 1, k = 7).
+    grids = f"3-4:148,5-6:128,7:132,9-64:{min(152, sms)}" if tp == 8 else "8:144"
     grids += f",65-{WIDE_ROWS}:{min(WIDE_GRID, sms)}"  # wide: one CTA per SM
     return grid, batch_table(grids)
 
