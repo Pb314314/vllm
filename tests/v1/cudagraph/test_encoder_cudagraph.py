@@ -98,7 +98,7 @@ class _MockVllmConfig:
         self.parallel_config = _MockParallelConfig()
 
 
-class _MockModel(SupportsEncoderCudaGraph):
+class _MockModel(torch.nn.Module, SupportsEncoderCudaGraph):
     """Minimal mock implementing SupportsEncoderCudaGraph for __init__."""
 
     def __init__(
@@ -106,6 +106,7 @@ class _MockModel(SupportsEncoderCudaGraph):
         min_budget: int = 4,
         max_budget: int = 128,
     ):
+        super().__init__()
         self._min_budget = min_budget
         self._max_budget = max_budget
 
@@ -695,6 +696,7 @@ def _make_manager_for_gpu(
     mgr.log_stats_interval = 100
     mgr.model = model
     mgr.config = model.get_encoder_cudagraph_config()
+    mgr.padding_logics = mgr._get_padding_logics(mgr.config, None)
     mgr.device = device
     mgr.dtype = dtype
     return mgr
@@ -1697,11 +1699,11 @@ class TestInitInvariantValidation:
 
 
 # ---------------------------------------------------------------------------
-# FlashInfer cu_seqlens replay padding (no GPU required)
+# cu_seqlens replay padding (no GPU required)
 # ---------------------------------------------------------------------------
 
 
-class TestFlashInferCuSeqlensPadding:
+class TestCuSeqlensPadding:
     """A replay pads its cu_seqlens into the buffer captured at a larger batch
     size. The padded buffer must equal the cu_seqlens computed for the same
     inputs at the capture batch size. FlashInfer packs the q/k/o and v offsets
@@ -1735,20 +1737,52 @@ class TestFlashInferCuSeqlensPadding:
             torch.device("cpu"),
         )
 
+    # Graph families whose config can be built from a stub on CPU.
+    FAMILIES = (
+        "qwen2_vl",
+        "qwen2_5_vl",
+        "qwen3_vl",
+        "glm4v",
+        "cohere_compass",
+        "ernie45_vl",
+        "kimi_vl",
+        "kimi_k25",
+        "lfm2_vl",
+    )
+
     @staticmethod
-    def _padding_fn(model: str, flashinfer: bool):
-        from vllm.model_executor.models.glm4_1v import (
-            Glm4vForConditionalGeneration,
+    def _family_config(model: str) -> EncoderCudaGraphConfig:
+        import importlib
+
+        module, cls_name = {
+            "qwen2_vl": ("qwen2_vl", "Qwen2VLForConditionalGeneration"),
+            "qwen2_5_vl": ("qwen2_5_vl", "Qwen2_5_VLForConditionalGeneration"),
+            "qwen3_vl": ("qwen3_vl", "Qwen3VLForConditionalGeneration"),
+            "glm4v": ("glm4_1v", "Glm4vForConditionalGeneration"),
+            "cohere_compass": (
+                "cohere_compass",
+                "CohereCompassForConditionalGeneration",
+            ),
+            "ernie45_vl": ("ernie45_vl", "Ernie4_5_VLMoeForConditionalGeneration"),
+            "kimi_vl": ("kimi_vl", "KimiVLForConditionalGeneration"),
+            "kimi_k25": ("kimi_k25", "KimiK25ForConditionalGeneration"),
+            "lfm2_vl": ("lfm2_vl", "Lfm2VLForConditionalGeneration"),
+        }[model]
+        cls = getattr(
+            importlib.import_module(f"vllm.model_executor.models.{module}"), cls_name
         )
-        from vllm.model_executor.models.kimi_k25 import (
-            KimiK25ForConditionalGeneration,
+        hidden = SimpleNamespace(hidden_size=8)
+        stub = SimpleNamespace(
+            is_multimodal_pruning_enabled=False,
+            get_max_frames_per_video=lambda: 16,
+            visual=SimpleNamespace(out_hidden_size=8),
+            config=SimpleNamespace(hidden_size=8, text_config=hidden),
+            hidden_size=8,
         )
-        from vllm.model_executor.models.qwen2_vl import (
-            Qwen2VLForConditionalGeneration,
-        )
-        from vllm.model_executor.models.qwen3_vl import (
-            Qwen3VLForConditionalGeneration,
-        )
+        return cls.get_encoder_cudagraph_config(cast(Any, stub))
+
+    @classmethod
+    def _padding_fn(cls, model: str, flashinfer: bool, key: str = "cu_seqlens"):
         from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
         backend = (
@@ -1756,28 +1790,9 @@ class TestFlashInferCuSeqlensPadding:
             if flashinfer
             else AttentionBackendEnum.FLASH_ATTN
         )
-        if model == "kimi_k25":
-            cls = KimiK25ForConditionalGeneration
-            attn = SimpleNamespace(attn_backend=backend)
-            encoder = SimpleNamespace(blocks=[SimpleNamespace(attn=attn)])
-            stub = SimpleNamespace(
-                vision_tower=SimpleNamespace(encoder=encoder),
-                config=SimpleNamespace(text_config=SimpleNamespace(hidden_size=8)),
-            )
-        else:
-            cls = {
-                "qwen2_vl": Qwen2VLForConditionalGeneration,
-                "qwen3_vl": Qwen3VLForConditionalGeneration,
-                "glm4v": Glm4vForConditionalGeneration,
-            }[model]
-            stub = SimpleNamespace(
-                is_multimodal_pruning_enabled=False,
-                get_max_frames_per_video=lambda: 16,
-                visual=SimpleNamespace(attn_backend=backend, out_hidden_size=8),
-            )
-        config = cls.get_encoder_cudagraph_config(cast(Any, stub))
-        # Same lookup as EncoderCudaGraphManager replay.
-        return EncoderCudaGraphManager._get_padding_logic(config, "cu_seqlens")
+        config = cls._family_config(model)
+        # Same lookup as EncoderCudaGraphManager.
+        return EncoderCudaGraphManager._get_padding_logics(config, backend)[key]
 
     # (seq_lens, replay batch size, capture batch size). The FlashInfer batch
     # buckets are 8, 16, 32 and 64.
@@ -1789,17 +1804,8 @@ class TestFlashInferCuSeqlensPadding:
         ([49], 1, 9),  # Kimi-K2.5: unpadded replay into max_batch_size + 1
     ]
 
-    @pytest.mark.parametrize(
-        ("model", "flashinfer"),
-        [
-            *(
-                (m, fi)
-                for m in ("qwen3_vl", "glm4v", "kimi_k25")
-                for fi in (True, False)
-            ),
-            ("qwen2_vl", False),  # no FlashInfer ViT path
-        ],
-    )
+    @pytest.mark.parametrize("flashinfer", [True, False])
+    @pytest.mark.parametrize("model", FAMILIES)
     @pytest.mark.parametrize(("seq_lens", "replay_batch", "capture_batch"), CASES)
     def test_replay_padding_matches_capture_size_metadata(
         self,
@@ -1817,6 +1823,60 @@ class TestFlashInferCuSeqlensPadding:
         buf = torch.full_like(capture, -1)
         self._padding_fn(model, flashinfer)(buf, replay)
         assert torch.equal(buf, want)
+
+    @pytest.mark.parametrize("flashinfer", [True, False])
+    @pytest.mark.parametrize("model", FAMILIES)
+    def test_padded_cu_seqlens_never_cover_padding_rows(
+        self, model: str, flashinfer: bool
+    ):
+        """Every cumulative buffer of every family stays non-decreasing and
+        ends at the real token count after replay padding, whatever the capture
+        buffer held before (zero-fill made Qwen2-VL and GLM-4.1V attend padding
+        rows)."""
+        config = self._family_config(model)
+        cu_keys = [k for k in config.buffer_keys if k.startswith("cu_")]
+        assert cu_keys
+        seq_lens = [49, 196]
+        capture = self._cu_seqlens(flashinfer, [49] * 16, 16)
+        replay = self._cu_seqlens(flashinfer, seq_lens, len(seq_lens))
+        for key in cu_keys:
+            buf = torch.zeros_like(capture)
+            self._padding_fn(model, flashinfer, key)(buf, replay)
+            halves = buf.chunk(2) if flashinfer else (buf,)
+            real = replay.chunk(2) if flashinfer else (replay,)
+            for padded, src in zip(halves, real):
+                assert torch.all(padded[1:] >= padded[:-1]), (key, padded)
+                assert padded[-1] == src[-1], (key, padded)
+
+    def test_models_cannot_override_cu_seqlens_padding(self):
+        config = EncoderCudaGraphConfig(
+            modalities=["image"],
+            buffer_keys=["pixel_values", "cu_seqlens"],
+            out_hidden_size=8,
+            padding_logics={"cu_seqlens": EncoderCudaGraphManager._copy_padded_buffer},
+        )
+        with pytest.raises(ValueError, match="cu_seqlens"):
+            EncoderCudaGraphManager._get_padding_logics(config, None)
+
+    @pytest.mark.usefixtures("default_vllm_config")
+    def test_backend_comes_from_encoder_attention_layers(self):
+        from vllm.model_executor.layers.attention import MMEncoderAttention
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+        from vllm.v1.worker.encoder_cudagraph import _get_encoder_attn_backend
+
+        def tower(*backends: AttentionBackendEnum) -> torch.nn.Module:
+            layers = []
+            for backend in backends:
+                attn = MMEncoderAttention(num_heads=1, head_size=8)
+                attn.attn_backend = backend
+                layers.append(attn)
+            return torch.nn.Sequential(*layers)
+
+        fa, fi = AttentionBackendEnum.FLASH_ATTN, AttentionBackendEnum.FLASHINFER
+        assert _get_encoder_attn_backend(tower()) is None
+        assert _get_encoder_attn_backend(tower(fi, fi)) is fi
+        with pytest.raises(NotImplementedError):
+            _get_encoder_attn_backend(tower(fa, fi))
 
     def test_oot_attention_owns_padding(self, monkeypatch):
         from vllm.model_executor.custom_op import op_registry_oot

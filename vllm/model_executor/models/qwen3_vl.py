@@ -2138,9 +2138,6 @@ class Qwen3VLForConditionalGeneration(
 
         # Compute max_frames_per_video for budget sizing.
         max_frames = self.get_max_frames_per_video() if "video" in modalities else 1
-        padding_logics = MMEncoderAttention.get_cu_seqlens_padding_logics(
-            self.visual.attn_backend, "cu_seqlens"
-        )
 
         return EncoderCudaGraphConfig(
             modalities=modalities,
@@ -2153,7 +2150,6 @@ class Qwen3VLForConditionalGeneration(
                 "max_seqlen",
                 "sequence_lengths",
             ],
-            padding_logics=padding_logics,
             out_hidden_size=self.visual.out_hidden_size,
             max_frames_per_video=max_frames,
         )

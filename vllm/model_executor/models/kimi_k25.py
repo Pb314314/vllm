@@ -17,7 +17,6 @@ from vllm.config import VllmConfig
 from vllm.config.multimodal import MultiModalDummyOptions
 from vllm.inputs import MultiModalDataDict
 from vllm.logger import init_logger
-from vllm.model_executor.layers.attention import MMEncoderAttention
 from vllm.model_executor.layers.fusion.mm_input_norm import build_mm_input_norm
 from vllm.model_executor.layers.quantization import QuantizationConfig
 from vllm.model_executor.layers.quantization.compressed_tensors import (
@@ -488,11 +487,6 @@ class KimiK25ForConditionalGeneration(
     def get_encoder_cudagraph_config(self) -> "EncoderCudaGraphConfig":
         from vllm.v1.worker.encoder_cudagraph_defs import EncoderCudaGraphConfig
 
-        attn_backend = self.vision_tower.encoder.blocks[0].attn.attn_backend
-        padding_logics = MMEncoderAttention.get_cu_seqlens_padding_logics(
-            attn_backend, "cu_seqlens"
-        )
-
         return EncoderCudaGraphConfig(
             modalities=["vision_chunk"],
             buffer_keys=[
@@ -504,7 +498,6 @@ class KimiK25ForConditionalGeneration(
                 "merge_gather_idx",
             ],
             out_hidden_size=self.config.text_config.hidden_size,
-            padding_logics=padding_logics,
         )
 
     def get_encoder_cudagraph_budget_range(

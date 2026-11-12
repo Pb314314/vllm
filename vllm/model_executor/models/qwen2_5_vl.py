@@ -1747,9 +1747,6 @@ class Qwen2_5_VLForConditionalGeneration(
         modalities = [] if self.is_multimodal_pruning_enabled else ["image", "video"]
 
         max_frames = self.get_max_frames_per_video() if "video" in modalities else 1
-        padding_logics = MMEncoderAttention.get_cu_seqlens_padding_logics(
-            self.visual.attn_backend, "cu_seqlens", "cu_window_seqlens"
-        )
         return EncoderCudaGraphConfig(
             modalities=modalities,
             buffer_keys=[
@@ -1765,7 +1762,6 @@ class Qwen2_5_VLForConditionalGeneration(
                 "sequence_lengths_full",
                 "sequence_lengths_window",
             ],
-            padding_logics=padding_logics,
             out_hidden_size=self.visual.out_hidden_size,
             max_frames_per_video=max_frames,
         )

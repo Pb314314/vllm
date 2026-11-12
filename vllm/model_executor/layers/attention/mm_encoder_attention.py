@@ -218,6 +218,15 @@ def bucket_flashinfer_max_seqlen(
     )
 
 
+def _pad_cu_seqlens_buffer(
+    dst: torch.Tensor,
+    src: torch.Tensor,
+) -> None:
+    n = src.shape[0]
+    dst[:n].copy_(src)
+    dst[n:] = src[-1]
+
+
 def _pad_flashinfer_cu_seqlens_buffer(
     dst: torch.Tensor,
     src: torch.Tensor,
@@ -342,7 +351,7 @@ class MMEncoderAttention(CustomOp):
     @classmethod
     def get_cu_seqlens_padding_logics(
         cls,
-        attn_backend: AttentionBackendEnum,
+        attn_backend: AttentionBackendEnum | None,
         *keys: str,
     ) -> dict[str, "EncoderCudaGraphPaddingLogic"]:
         if (oot_class := maybe_get_oot_by_class(cls)) is not cls:
@@ -350,9 +359,11 @@ class MMEncoderAttention(CustomOp):
                 attn_backend, *keys
             )
 
-        if attn_backend != AttentionBackendEnum.FLASHINFER:
-            return {}
-        return dict.fromkeys(keys, _pad_flashinfer_cu_seqlens_buffer)
+        # Padded sequences must be empty: repeat the last offset so padded
+        # rows are never attended.
+        if attn_backend == AttentionBackendEnum.FLASHINFER:
+            return dict.fromkeys(keys, _pad_flashinfer_cu_seqlens_buffer)
+        return dict.fromkeys(keys, _pad_cu_seqlens_buffer)
 
     def __init__(
         self,

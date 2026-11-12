@@ -83,11 +83,12 @@ class EncoderCudaGraphConfig:
         default_factory=dict
     )
     """Optional per-buffer replay padding/copy logic.
-    If absent for a key, the manager slice-copies the replay buffer into the
-    capture buffer and pads the tail with the last value for cumulative keys
-    (`cu_seqlens`, `cu_window_seqlens`) or with zeros otherwise. A padding
-    logic must write the whole capture buffer: budgets share buffers, so rows
-    it leaves untouched may hold another budget's data."""
+    If absent for a key, the manager zeros the capture buffer and slice-copies
+    the replay buffer into it. `cu_seqlens` and `cu_window_seqlens` are always
+    padded by `MMEncoderAttention` so padded rows are never attended, and must
+    not be set here. A padding logic must write the whole capture buffer:
+    budgets share buffers, so rows it leaves untouched may hold another
+    budget's data."""
 
     max_frames_per_video: int = 1
     """Maximum number of frames per video.
