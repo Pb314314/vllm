@@ -1829,10 +1829,10 @@ class TestCuSeqlensPadding:
     def test_padded_cu_seqlens_never_cover_padding_rows(
         self, model: str, flashinfer: bool
     ):
-        """Every cumulative buffer of every family stays non-decreasing and
-        ends at the real token count after replay padding, whatever the capture
-        buffer held before (zero-fill made Qwen2-VL and GLM-4.1V attend padding
-        rows)."""
+        """After replay padding, padded sequences are empty for every family,
+        whatever the capture buffer held before (zero-fill made Qwen2-VL and
+        GLM-4.1V attend padding rows). Offsets are non-decreasing and end at the
+        last real offset; FlashInfer's layout holds this per section."""
         config = self._family_config(model)
         cu_keys = [k for k in config.buffer_keys if k.startswith("cu_")]
         assert cu_keys
@@ -1877,6 +1877,44 @@ class TestCuSeqlensPadding:
         assert _get_encoder_attn_backend(tower(fi, fi)) is fi
         with pytest.raises(NotImplementedError):
             _get_encoder_attn_backend(tower(fa, fi))
+
+    @pytest.mark.usefixtures("default_vllm_config")
+    @pytest.mark.parametrize("flashinfer", [True, False])
+    def test_manager_pads_with_the_model_attention_backend(self, flashinfer):
+        from vllm.model_executor.layers.attention import MMEncoderAttention
+        from vllm.model_executor.layers.attention.mm_encoder_attention import (
+            _pad_cu_seqlens_buffer,
+            _pad_flashinfer_cu_seqlens_buffer,
+        )
+        from vllm.v1.attention.backends.registry import AttentionBackendEnum
+
+        class Model(_MockModel):
+            def __init__(self):
+                super().__init__()
+                self.attn = MMEncoderAttention(num_heads=1, head_size=8)
+                self.attn.attn_backend = (
+                    AttentionBackendEnum.FLASHINFER
+                    if flashinfer
+                    else AttentionBackendEnum.FLASH_ATTN
+                )
+
+            def get_encoder_cudagraph_config(self) -> EncoderCudaGraphConfig:
+                return EncoderCudaGraphConfig(
+                    modalities=["image"],
+                    buffer_keys=["pixel_values", "cu_seqlens"],
+                    out_hidden_size=32,
+                )
+
+        mgr = EncoderCudaGraphManager(
+            vllm_config=_MockVllmConfig(),
+            device=torch.device("cpu"),
+            dtype=torch.float32,
+            model=Model(),
+        )
+        expected = (
+            _pad_flashinfer_cu_seqlens_buffer if flashinfer else _pad_cu_seqlens_buffer
+        )
+        assert mgr.padding_logics["cu_seqlens"] is expected
 
     def test_oot_attention_owns_padding(self, monkeypatch):
         from vllm.model_executor.custom_op import op_registry_oot

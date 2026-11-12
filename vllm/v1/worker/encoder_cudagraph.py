@@ -586,7 +586,9 @@ class EncoderCudaGraphManager:
         if overridden := sorted(set(cu_keys) & config.padding_logics.keys()):
             raise ValueError(
                 f"Encoder CUDA graph buffers {overridden} are padded by "
-                "MMEncoderAttention and must not be in padding_logics."
+                "MMEncoderAttention and must not be in padding_logics; remove "
+                "them. A backend-specific layout belongs in "
+                "MMEncoderAttention.get_cu_seqlens_padding_logics()."
             )
         return {
             **config.padding_logics,
