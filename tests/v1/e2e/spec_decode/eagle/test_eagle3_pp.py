@@ -3,10 +3,10 @@
 import pytest
 import torch
 
+from tests.models.utils import check_logprobs_close
 from tests.utils import multi_gpu_test
 from tests.v1.e2e.spec_decode.utils import (
     Messages,
-    assert_request_outputs_match,
     compute_acceptance_len,
     get_test_prompts,
 )
@@ -37,6 +37,7 @@ def _run(
     chat_prompts: list[Messages] | None = None,
     model_impl: str = "auto",
     adaptive_verification: bool | None = False,
+    logprobs: int | None = None,
 ) -> tuple[float, list[RequestOutput]]:
     """Greedy outputs and acceptance length; `adaptive_verification=None` runs
     without speculative decoding."""
@@ -61,7 +62,7 @@ def _run(
     )
     try:
         sampling_params = SamplingParams(
-            temperature=0.0, max_tokens=max_tokens, ignore_eos=True
+            temperature=0.0, max_tokens=max_tokens, ignore_eos=True, logprobs=logprobs
         )
         if chat_prompts is None:
             outputs = llm.generate(PROMPTS, sampling_params)
@@ -123,31 +124,26 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     # adaptive verification trims drafts on two GPUs.
     model, draft = "Qwen/Qwen3-8B", "RedHatAI/Qwen3-8B-speculator.eagle3"
     _, ref_outputs = _run(
-        2, model, draft, 2048, 128, prompts, adaptive_verification=None
+        2, model, draft, 2048, 128, prompts, adaptive_verification=None, logprobs=5
     )
-    full, fixed_outputs = _run(2, model, draft, 2048, 128, prompts)
+    full, _ = _run(2, model, draft, 2048, 128, prompts)
     trimmed, outputs = _run(
-        2, model, draft, 2048, 128, prompts, adaptive_verification=True
+        2, model, draft, 2048, 128, prompts, adaptive_verification=True, logprobs=5
     )
     # Trimming drops drafts that fixed drafts would have had accepted.
     assert trimmed < full, (
         f"Adaptive verification kept every draft ({trimmed:.3f} vs {full:.3f} "
         "accepted per step), so trimming is not exercised."
     )
-    # Greedy outputs drift from the non-speculative ones even with fixed drafts,
-    # so adaptive verification must match them about as often as fixed drafts do.
-    fixed_matches = sum(
-        ref.outputs[0].text == fixed.outputs[0].text
-        for ref, fixed in zip(ref_outputs, fixed_outputs)
-    )
-    assert fixed_matches >= len(prompts) // 4, (
-        f"Only {fixed_matches}/{len(prompts)} fixed-draft outputs match the "
-        "non-speculative ones, too few to compare against."
-    )
-    assert_request_outputs_match(
-        ref_outputs,
-        outputs,
-        required_matches=int(0.8 * fixed_matches),
-        context=f"PP=2 EAGLE3 with adaptive verification ({fixed_matches} matches "
-        "with fixed drafts)",
+    check_logprobs_close(
+        outputs_0_lst=[
+            (list(o.outputs[0].token_ids), o.outputs[0].text, o.outputs[0].logprobs)
+            for o in ref_outputs
+        ],
+        outputs_1_lst=[
+            (list(o.outputs[0].token_ids), o.outputs[0].text, o.outputs[0].logprobs)
+            for o in outputs
+        ],
+        name_0="pp2_no_spec",
+        name_1="pp2_adaptive_verification",
     )
