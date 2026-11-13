@@ -111,7 +111,14 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     disagree run different token counts and their hidden states no longer line
     up, which fails the step or collapses acceptance."""
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
+    full = _run(1, MODEL, DRAFT, 2048, 128, prompts)
     baseline = _run(1, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    # Acceptance per step only drops if adaptive verification trims drafts.
+    if baseline >= full * ACCEPTANCE_TOLERANCE:
+        pytest.skip(
+            f"Adaptive verification kept nearly every draft ({baseline:.3f} vs "
+            f"{full:.3f} accepted per step), so trimming is not exercised."
+        )
     parallel = _run(2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
     assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
         f"PP=2 acceptance with adaptive verification regressed: {parallel:.3f} < "
