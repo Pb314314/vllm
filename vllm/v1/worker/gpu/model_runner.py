@@ -1293,8 +1293,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             draft_confidences = outputs.pop("draft_confidences")
             if not self.is_last_pp_rank:
                 self.postprocess_sampled(**outputs)
-            if draft_confidences is not None:
-                assert self.adaptive_verification is not None
+            # Kernel warmup unsets the manager on every rank alike.
+            if draft_confidences is not None and self.adaptive_verification is not None:
                 self.adaptive_verification.record_confidences(*draft_confidences)
 
     def add_requests(self, scheduler_output: SchedulerOutput) -> None:
@@ -2443,7 +2443,9 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             # Drafts aren't used when none were proposed this step (e.g. skip_drafts).
             if self.pp_handler is not None and num_spec_tokens > 0:
                 draft_confidences = None
-                if self.adaptive_verification is not None:
+                # Not keyed on self.adaptive_verification: kernel warmup unsets
+                # it, and the other ranks still expect the confidences.
+                if self.pp_handler.relay_draft_confidences:
                     assert self.speculator is not None
                     draft_confidences = self.speculator.draft_token_confidence_probs[
                         : input_batch.num_reqs
