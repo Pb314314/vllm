@@ -1,12 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Which rows the PP sampled-token broadcast must carry."""
+"""PP helpers of the V2 model runner: which rows the sampled-token broadcast
+must carry, and which received tensors do not match their buffers."""
 
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
+import pytest
+import torch
 
+from tests.utils import multi_gpu_test
+from vllm.distributed.parallel_state import get_pp_group
+from vllm.utils.network_utils import get_open_port
 from vllm.v1.worker.gpu import pp_utils
+from vllm.v1.worker.gpu.spec_decode.adaptive_verification import (
+    AdaptiveVerificationManager,
+)
 
 
 def _batch(
@@ -168,50 +178,96 @@ def test_finishing_prefill_row_does_not_drop_a_sibling_row():
     assert mask.tolist() == [False, True]
 
 
-@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_last_rank_records_draft_confidences_with_the_other_ranks(monkeypatch):
-    """Adaptive verification trims each step from the draft confidences, so the
-    last rank must apply its own at the step the other ranks receive them,
-    without the rows of requests freed in between."""
-    monkeypatch.setattr(torch.distributed, "broadcast", lambda *args, **kwargs: None)
-    pp_size = 2
-    handler = pp_utils.PPHandler.__new__(pp_utils.PPHandler)
-    handler.is_last_rank = True
-    handler.last_rank = pp_size - 1
-    handler.ring_depth = pp_size
-    handler.queue = pp_utils.deque()
-    handler.relay_draft_confidences = False
-    handler.broadcast_slot = None
-    handler.max_sample_len = 3
-    handler.device = torch.device("cuda")
-    handler.main_stream = torch.cuda.current_stream()
-    handler.broadcast_stream = torch.cuda.Stream()
-    handler.broadcast_group = None
-    handler.req_idx_gen_np = np.zeros(4, dtype=np.int32)
+def _relay_steps(device: torch.device) -> tuple[list, list[int]]:
+    """Run decode steps through a real PPHandler and adaptive verification
+    manager. Returns each step's batch layout and, on the last stage, its
+    draft budgets."""
+    pp_group = get_pp_group()
+    num_steps, num_drafts = 12, 2
+    handler = pp_utils.PPHandler(
+        max_num_reqs=8, num_speculative_steps=num_drafts, device=device
+    )
     handler.configure_draft_confidence_relay()
+    req_ids = ["a", "b", "c", "d"]
+    req_states = SimpleNamespace(
+        num_speculative_steps=num_drafts,
+        device=device,
+        max_num_reqs=8,
+        req_id_to_index={req_id: i for i, req_id in enumerate(req_ids)},
+        num_computed_tokens_np=np.full(8, 10, dtype=np.int32),
+        prefill_len=SimpleNamespace(np=np.ones(8, dtype=np.int32)),
+    )
+    manager = AdaptiveVerificationManager(
+        req_states,  # type: ignore[arg-type]
+        torch.zeros(9, dtype=torch.int32, device=device),
+        num_bonus_tokens=1,
+        max_total_logits=1 << 20,
+    )
+    # A fixed step overhead plus a per-token cost: only drafts that are likely
+    # enough to survive pay for themselves, so the budget binds.
+    manager.cost_tables = (np.zeros(9), 8.0 + np.arange(64, dtype=np.float64))
+    generator = torch.Generator(device=device).manual_seed(0)
+    idx_mapping_np = np.arange(4, dtype=np.int32)
+    idx_mapping = torch.from_numpy(idx_mapping_np).to(device)
+    layouts, budgets = [], []
+    for step in range(num_steps):
+        outputs = handler.get_prev_sampled_outputs()
+        if outputs is not None and outputs["draft_confidences"] is not None:
+            manager.record_confidences(*outputs["draft_confidences"])
+        if step == 5:
+            # Request "c" finishes and a new request reuses its slot while its
+            # last confidences are still in flight.
+            handler.on_req_idx_freed(2)
+            manager.add_request(2)
+        num_tokens = manager.get_num_tokens(
+            dict.fromkeys(req_ids, 1 + num_drafts),
+            dict.fromkeys(req_ids, [0] * num_drafts),
+        )
+        cu_num_logits, query_start_loc, budget, _ = manager.reallocate_drafts(
+            req_ids, idx_mapping
+        )
+        layouts.append(
+            (num_tokens, cu_num_logits.tolist(), query_start_loc[:5].tolist())
+        )
+        budgets.append(budget)
 
-    def step(idx_mapping: list[int], confidence: float) -> None:
-        batch = _batch([5] * len(idx_mapping), [1] * len(idx_mapping), [3, 3])
-        batch.num_draft_tokens = 2 * len(idx_mapping)
-        batch.idx_mapping_np = np.array(idx_mapping, dtype=np.int32)
-        batch.idx_mapping = torch.tensor(idx_mapping, device="cuda")
-        num = torch.zeros(len(idx_mapping), dtype=torch.int32, device="cuda")
-        sampled = torch.zeros(len(idx_mapping), 3, dtype=torch.int64, device="cuda")
-        handler.broadcast(sampled, num, num, batch)
-        confidences = torch.full((len(idx_mapping), 2), confidence, device="cuda")
-        handler.broadcast_drafts(sampled[:, :2], confidences)
+        batch = _batch([10] * 4, [1] * 4, [1 + num_drafts] * 4)
+        batch.idx_mapping, batch.idx_mapping_np = idx_mapping, idx_mapping_np
+        batch.num_draft_tokens = 4 * num_drafts
+        if pp_group.is_last_rank:
+            sampled = torch.zeros(4, 1 + num_drafts, dtype=torch.int64, device=device)
+            counts = torch.zeros(4, dtype=torch.int32, device=device)
+            handler.broadcast(sampled, counts, counts, batch)
+            confidences = torch.rand(4, num_drafts, generator=generator, device=device)
+            handler.broadcast_drafts(sampled[:, :num_drafts].clone(), confidences)
+        else:
+            handler.receive(batch, recv_drafts=True)
+    torch.accelerator.synchronize()
+    return layouts, budgets
 
-    assert handler.get_prev_sampled_outputs() is None
-    step([0, 1], 0.5)
-    assert handler.get_prev_sampled_outputs() is None
-    step([2, 3], 0.25)
-    outputs = handler.get_prev_sampled_outputs()
-    assert outputs is not None and outputs.keys() == {"draft_confidences"}
-    confidences, idx_mapping = outputs["draft_confidences"]
-    assert idx_mapping.tolist() == [0, 1]
-    assert confidences.tolist() == [[0.5, 0.5], [0.5, 0.5]]
 
-    handler.on_req_idx_freed(2)
-    confidences, idx_mapping = handler.get_prev_sampled_outputs()["draft_confidences"]
-    assert idx_mapping.tolist() == [3]
-    assert confidences.tolist() == [[0.25, 0.25]]
+def _relay_worker(rank: int, world_size: int, port: str) -> None:
+    from tests.utils import init_test_distributed_environment
+
+    device = torch.device(f"cuda:{rank}")
+    torch.accelerator.set_device_index(device)
+    init_test_distributed_environment(1, world_size, rank, port)
+    layouts, budgets = _relay_steps(device)
+    gathered: list = [None] * world_size
+    torch.distributed.all_gather_object(
+        gathered, (layouts, budgets), group=get_pp_group().cpu_group
+    )
+    stage_layouts = [layouts for layouts, _ in gathered]
+    assert all(layouts == stage_layouts[-1] for layouts in stage_layouts)
+    # The budget must bind on some steps, or the layouts agree trivially.
+    last_budgets = gathered[-1][1]
+    assert any(0 < budget < 8 for budget in last_budgets), last_budgets
+
+
+@multi_gpu_test(num_gpus=2)
+def test_pp_stages_trim_drafts_alike():
+    """Adaptive verification trims each step's drafts from the drafts'
+    confidences, which only the last stage computes. Every stage must pick the
+    same draft budget and request boundaries at every step, including when a
+    request slot is reused while its confidences are in flight."""
+    torch.multiprocessing.spawn(_relay_worker, args=(2, str(get_open_port())), nprocs=2)

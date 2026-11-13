@@ -236,12 +236,13 @@ def _merge_stage_cost_curves(
     """Merge the stages' profiled costs into curves every stage builds the same
     cost tables from.
 
-    Drafts are priced by the last stage, which runs the drafter. A token count's
-    verify cost is the slowest stage's, which approximates the pipeline's step
-    cost but ignores that the last stage also drafts. Stages can capture
-    different graphs (the draft model's attention layers are on the last stage
-    only), so only token counts profiled on every stage are kept and the stages
-    share the largest capture limit."""
+    Drafts are priced by the last stage, which runs the drafter, and a token
+    count's verify cost is the slowest stage's. A step then costs the drafts
+    plus the slowest stage's forward, which overprices the pipeline's step,
+    bounded by the slowest stage with the last one also drafting. Stages can
+    capture different graphs (the draft model's attention layers are on the
+    last stage only), so only token counts profiled on every stage are kept,
+    and all stages price padding by the largest capture limit."""
     stages: list = [None] * pp_group.world_size
     torch.distributed.all_gather_object(
         stages, (draft_curve, verify_curve, cudagraph_limit), group=pp_group.cpu_group
