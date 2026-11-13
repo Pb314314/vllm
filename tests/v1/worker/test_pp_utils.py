@@ -166,3 +166,52 @@ def test_finishing_prefill_row_does_not_drop_a_sibling_row():
 
     assert mask is not None
     assert mask.tolist() == [False, True]
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_last_rank_records_draft_confidences_with_the_other_ranks(monkeypatch):
+    """Adaptive verification trims each step from the draft confidences, so the
+    last rank must apply its own at the step the other ranks receive them,
+    without the rows of requests freed in between."""
+    monkeypatch.setattr(torch.distributed, "broadcast", lambda *args, **kwargs: None)
+    pp_size = 2
+    handler = pp_utils.PPHandler.__new__(pp_utils.PPHandler)
+    handler.is_last_rank = True
+    handler.last_rank = pp_size - 1
+    handler.ring_depth = pp_size
+    handler.queue = pp_utils.deque()
+    handler.relay_draft_confidences = False
+    handler.broadcast_slot = None
+    handler.max_sample_len = 3
+    handler.device = torch.device("cuda")
+    handler.main_stream = torch.cuda.current_stream()
+    handler.broadcast_stream = torch.cuda.Stream()
+    handler.broadcast_group = None
+    handler.req_idx_gen_np = np.zeros(4, dtype=np.int32)
+    handler.configure_draft_confidence_relay()
+
+    def step(idx_mapping: list[int], confidence: float) -> None:
+        batch = _batch([5] * len(idx_mapping), [1] * len(idx_mapping), [3, 3])
+        batch.num_draft_tokens = 2 * len(idx_mapping)
+        batch.idx_mapping_np = np.array(idx_mapping, dtype=np.int32)
+        batch.idx_mapping = torch.tensor(idx_mapping, device="cuda")
+        num = torch.zeros(len(idx_mapping), dtype=torch.int32, device="cuda")
+        sampled = torch.zeros(len(idx_mapping), 3, dtype=torch.int64, device="cuda")
+        handler.broadcast(sampled, num, num, batch)
+        confidences = torch.full((len(idx_mapping), 2), confidence, device="cuda")
+        handler.broadcast_drafts(sampled[:, :2], confidences)
+
+    assert handler.get_prev_sampled_outputs() is None
+    step([0, 1], 0.5)
+    assert handler.get_prev_sampled_outputs() is None
+    step([2, 3], 0.25)
+    outputs = handler.get_prev_sampled_outputs()
+    assert outputs is not None and outputs.keys() == {"draft_confidences"}
+    confidences, idx_mapping = outputs["draft_confidences"]
+    assert idx_mapping.tolist() == [0, 1]
+    assert confidences.tolist() == [[0.5, 0.5], [0.5, 0.5]]
+
+    handler.on_req_idx_freed(2)
+    confidences, idx_mapping = handler.get_prev_sampled_outputs()["draft_confidences"]
+    assert idx_mapping.tolist() == [3]
+    assert confidences.tolist() == [[0.25, 0.25]]

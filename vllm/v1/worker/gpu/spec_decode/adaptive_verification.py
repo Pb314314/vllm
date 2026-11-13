@@ -11,7 +11,11 @@ import torch
 
 import vllm.envs as envs
 from vllm.config.compilation import CUDAGraphMode
-from vllm.distributed.parallel_state import get_tp_group
+from vllm.distributed.parallel_state import (
+    GroupCoordinator,
+    get_pp_group,
+    get_tp_group,
+)
 from vllm.logger import init_logger
 from vllm.triton_utils import tl, triton
 from vllm.utils.gpu_sync_debug import gpu_sync_allowed
@@ -29,7 +33,6 @@ _PROFILE_REPLAYS = 5
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
-    from vllm.v1.worker.gpu.input_batch import InputBatch
     from vllm.v1.worker.gpu.states import RequestState
     from vllm.v1.worker.utils import AttentionGroup
 
@@ -224,6 +227,25 @@ class AdmittedDraftCounts:
         return self._cpu.numpy()
 
 
+def _merge_stage_cost_curves(
+    pp_group: GroupCoordinator,
+    draft_curve: list[tuple[int, float]],
+    verify_curve: list[tuple[int, float]],
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    """Price a step by its slowest pipeline stage, and its drafts by the last
+    stage, which runs the drafter."""
+    stage_curves: list = [None] * pp_group.world_size
+    torch.distributed.all_gather_object(
+        stage_curves, (draft_curve, verify_curve), group=pp_group.cpu_group
+    )
+    verify_costs = [dict(verify) for _, verify in stage_curves]
+    sizes = set.intersection(*(set(costs) for costs in verify_costs))
+    merged_verify = [
+        (size, max(costs[size] for costs in verify_costs)) for size in sorted(sizes)
+    ]
+    return stage_curves[-1][0], merged_verify
+
+
 class AdaptiveVerificationManager:
     def __init__(
         self,
@@ -345,6 +367,11 @@ class AdaptiveVerificationManager:
         verify_curve = median_curve(
             (s.num_target_tokens, s.forward_ms) for s in samples
         )
+        pp_group = get_pp_group()
+        if pp_group.world_size > 1:
+            draft_curve, verify_curve = _merge_stage_cost_curves(
+                pp_group, draft_curve, verify_curve
+            )
         self.set_cost_curves(draft_curve, verify_curve)
 
     def set_cost_curves(
@@ -371,11 +398,11 @@ class AdaptiveVerificationManager:
         logger.debug("DSpark cost tables: %s", self.cost_tables)
 
     def record_confidences(
-        self, confidence_probs: torch.Tensor, input_batch: "InputBatch"
+        self, confidence_probs: torch.Tensor, idx_mapping: torch.Tensor
     ) -> None:
         """Publish this step's raw confidences for the ranking kernel and start
         copying them to the CPU, where a later step's budget reads them."""
-        num_reqs = input_batch.num_reqs
+        num_reqs = idx_mapping.shape[0]
         ready_idx = self._stale_idx ^ 1
         with gpu_sync_allowed():
             self._copy_events[ready_idx].synchronize()
@@ -386,7 +413,7 @@ class AdaptiveVerificationManager:
         # slot they were reading before.
         self._stale_idx, write_idx = ready_idx, self._stale_idx
 
-        self._confidence_probs[input_batch.idx_mapping] = confidence_probs[:num_reqs]
+        self._confidence_probs[idx_mapping] = confidence_probs[:num_reqs]
         write_slot = self._stale_confidences[write_idx]
         write_slot.gpu.copy_(self._confidence_probs)
 

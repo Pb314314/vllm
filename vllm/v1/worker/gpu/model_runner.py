@@ -726,10 +726,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         attn_cg_support = attn_cg_support.narrow(*additional_attn_cg_support)
         # The speculator clears the flag at load time when the checkpoint has
         # no confidence head, so it holds the effective value.
+        enable_adaptive_verification = getattr(
+            self.speculator, "enable_adaptive_verification", False
+        )
+        if self.pp_handler is not None and self.speculative_config is not None:
+            # Only the last rank has a speculator, and every rank must trim the
+            # batch alike.
+            pp_group = get_pp_group()
+            enable_adaptive_verification = pp_group.broadcast_object(
+                enable_adaptive_verification, src=pp_group.world_size - 1
+            )
         self.adaptive_verification = maybe_create_adaptive_verification_manager(
-            enable_adaptive_verification=getattr(
-                self.speculator, "enable_adaptive_verification", False
-            ),
+            enable_adaptive_verification=enable_adaptive_verification,
             attn_groups=self.attn_groups,
             req_states=self.req_states,
             query_start_loc=self.input_buffers.query_start_loc,
@@ -740,6 +748,8 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             additional_attn_cg_support=additional_attn_cg_support,
             copy_admitted_drafts_to_host=self.batch_sharder is not None,
         )
+        if self.adaptive_verification is not None and self.pp_handler is not None:
+            self.pp_handler.configure_draft_confidence_relay()
 
         self.block_tables = BlockTables(
             block_sizes=[g.block_size for g in kv_cache_groups],
@@ -973,6 +983,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
         # Non-last PP ranks don't produce output for sampling.
         if not self.is_last_pp_rank:
+            # Nor do they draft: end the timed step with an empty draft span so
+            # its forward still prices adaptive verification's verify curve.
+            self.step_timing.forward_end()
+            self.step_timing.drafter_start()
+            self.step_timing.drafter_end()
             return None, None
 
         assert self.execute_model_state is not None
@@ -1271,11 +1286,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
 
     def update_pp_decode_requests(self):
         # For non-last PP ranks, update decode requests with sampler output from
-        # the prior step in which they were scheduled (pp_size steps ago).
+        # the prior step in which they were scheduled (pp_size steps ago). All
+        # ranks record that step's draft confidences here.
         if self.pp_handler is not None:
             outputs = self.pp_handler.get_prev_sampled_outputs()
-            if outputs is not None:
+            if outputs is None:
+                return
+            draft_confidences = outputs.pop("draft_confidences")
+            if not self.is_last_pp_rank:
                 self.postprocess_sampled(**outputs)
+            if draft_confidences is not None:
+                assert self.adaptive_verification is not None
+                self.adaptive_verification.record_confidences(*draft_confidences)
 
     def add_requests(self, scheduler_output: SchedulerOutput) -> None:
         for new_req_data in scheduler_output.scheduled_new_reqs:
@@ -2406,9 +2428,11 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             if num_spec_tokens < self.num_speculative_steps:
                 draft_tokens[:, num_spec_tokens:] = -1
             self.req_states.draft_tokens[input_batch.idx_mapping] = draft_tokens
-            if self.adaptive_verification is not None:
+            # With PP, every rank records them in update_pp_decode_requests.
+            if self.adaptive_verification is not None and self.pp_handler is None:
                 self.adaptive_verification.record_confidences(
-                    self.speculator.draft_token_confidence_probs, input_batch
+                    self.speculator.draft_token_confidence_probs,
+                    input_batch.idx_mapping,
                 )
 
         if self.num_speculative_steps > 0:
@@ -2420,7 +2444,13 @@ class GPUModelRunner(LoRAModelRunnerMixin):
             )
             # Drafts aren't used when none were proposed this step (e.g. skip_drafts).
             if self.pp_handler is not None and num_spec_tokens > 0:
-                self.pp_handler.broadcast_drafts(draft_tokens)
+                draft_confidences = None
+                if self.adaptive_verification is not None:
+                    assert self.speculator is not None
+                    draft_confidences = self.speculator.draft_token_confidence_probs[
+                        : input_batch.num_reqs
+                    ].clone()
+                self.pp_handler.broadcast_drafts(draft_tokens, draft_confidences)
 
         if defer_kv_finalize:
             self.kv_connector.finalize_step()
