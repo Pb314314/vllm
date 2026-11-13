@@ -231,19 +231,21 @@ def _merge_stage_cost_curves(
     pp_group: GroupCoordinator,
     draft_curve: list[tuple[int, float]],
     verify_curve: list[tuple[int, float]],
-) -> tuple[list[tuple[int, float]], list[tuple[int, float]]]:
+    cudagraph_limit: int,
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]], int]:
     """Price a step by its slowest pipeline stage, and its drafts by the last
-    stage, which runs the drafter."""
-    stage_curves: list = [None] * pp_group.world_size
+    stage, which runs the drafter. All stages must build the same cost tables,
+    so they also share the largest capture limit."""
+    stages: list = [None] * pp_group.world_size
     torch.distributed.all_gather_object(
-        stage_curves, (draft_curve, verify_curve), group=pp_group.cpu_group
+        stages, (draft_curve, verify_curve, cudagraph_limit), group=pp_group.cpu_group
     )
-    verify_costs = [dict(verify) for _, verify in stage_curves]
+    verify_costs = [dict(verify) for _, verify, _ in stages]
     sizes = set.intersection(*(set(costs) for costs in verify_costs))
     merged_verify = [
         (size, max(costs[size] for costs in verify_costs)) for size in sorted(sizes)
     ]
-    return stage_curves[-1][0], merged_verify
+    return stages[-1][0], merged_verify, max(limit for _, _, limit in stages)
 
 
 class AdaptiveVerificationManager:
@@ -369,8 +371,8 @@ class AdaptiveVerificationManager:
         )
         pp_group = get_pp_group()
         if pp_group.world_size > 1:
-            draft_curve, verify_curve = _merge_stage_cost_curves(
-                pp_group, draft_curve, verify_curve
+            draft_curve, verify_curve, self._cudagraph_limit = _merge_stage_cost_curves(
+                pp_group, draft_curve, verify_curve, self._cudagraph_limit
             )
         self.set_cost_curves(draft_curve, verify_curve)
 
