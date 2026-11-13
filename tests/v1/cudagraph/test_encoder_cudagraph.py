@@ -1804,10 +1804,21 @@ class TestCuSeqlensPadding:
         ([49], 1, 9),  # Kimi-K2.5: unpadded replay into max_batch_size + 1
     ]
 
-    @pytest.mark.parametrize("flashinfer", [True, False])
+    @pytest.mark.parametrize(
+        ("model", "flashinfer"),
+        [
+            *(
+                (m, fi)
+                for m in ("qwen3_vl", "glm4v", "kimi_k25")
+                for fi in (True, False)
+            ),
+            ("qwen2_vl", False),  # no FlashInfer ViT path
+        ],
+    )
     @pytest.mark.parametrize(("seq_lens", "replay_batch", "capture_batch"), CASES)
     def test_replay_padding_matches_capture_size_metadata(
         self,
+        model: str,
         flashinfer: bool,
         seq_lens: list[int],
         replay_batch: int,
@@ -1819,7 +1830,7 @@ class TestCuSeqlensPadding:
         assert want.shape == capture.shape
 
         buf = torch.full_like(capture, -1)
-        self._padding_fn("qwen3_vl", flashinfer)(buf, replay)
+        self._padding_fn(model, flashinfer)(buf, replay)
         assert torch.equal(buf, want)
 
     @pytest.mark.parametrize("flashinfer", [True, False])
