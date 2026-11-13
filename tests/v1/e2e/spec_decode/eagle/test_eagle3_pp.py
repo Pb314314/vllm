@@ -130,10 +130,18 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     _, ref_outputs = _run(
         2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=None
     )
+    _, fixed_outputs = _run(2, MODEL, DRAFT, 2048, 128, prompts)
     _, outputs = _run(2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    # Greedy outputs drift from the non-speculative ones even with fixed drafts,
+    # so adaptive verification must match them about as often as fixed drafts do.
+    fixed_matches = sum(
+        ref.outputs[0].token_ids == fixed.outputs[0].token_ids
+        for ref, fixed in zip(ref_outputs, fixed_outputs)
+    )
     assert_request_outputs_match(
         ref_outputs,
         outputs,
-        required_matches=int(0.6 * len(ref_outputs)) + 1,
-        context="PP=2 EAGLE3 with adaptive verification",
+        required_matches=int(0.8 * fixed_matches),
+        context=f"PP=2 EAGLE3 with adaptive verification ({fixed_matches} matches "
+        "with fixed drafts)",
     )
