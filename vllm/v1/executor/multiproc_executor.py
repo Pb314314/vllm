@@ -746,15 +746,30 @@ class WorkerProc:
     rpc_broadcast_mq: MessageQueue | None
     worker_response_mq: MessageQueue | None
 
-    def _init_message_queues(
+    def _attach_input_mq(
         self, input_shm_handle: Handle, vllm_config: VllmConfig
     ) -> None:
+        # Attach to the executor's SchedulerOutput broadcast MQ. The writer
+        # creates the POSIX shm ring before forking workers, and attach is by
+        # segment name, so it only works while the segment still exists in
+        # /dev/shm. An external cleaner can unlink the segment during a long
+        # model load (e.g. systemd-logind with RemoveIPC=yes purging the
+        # user's /dev/shm entries when their last login session on the node
+        # ends), which used to surface as a deferred AttributeError on the
+        # first dequeue after load. Attaching before init_device()/load_model()
+        # keeps a live mapping, which survives any later unlink.
         if vllm_config.parallel_config.nnodes_within_dp == 1:
             # Initialize MessageQueue for receiving SchedulerOutput
             self.rpc_broadcast_mq = MessageQueue.create_from_handle(
                 input_shm_handle, self.worker.rank
             )
 
+    def _init_message_queues(
+        self, input_shm_handle: Handle, vllm_config: VllmConfig
+    ) -> None:
+        if vllm_config.parallel_config.nnodes_within_dp == 1:
+            # rpc_broadcast_mq was already attached before model load
+            # (see _attach_input_mq).
             # Initializes a message queue for sending the model output
             self.worker_response_mq = MessageQueue(1, 1)
             self.peer_response_handles = []
@@ -790,6 +805,10 @@ class WorkerProc:
         is_driver_worker: bool,
     ):
         self.rank = rank
+        # Initialized lazily below; default to None so shutdown() is safe
+        # when __init__ raises partway (e.g. the fail-fast input-MQ attach).
+        self.rpc_broadcast_mq: MessageQueue | None = None
+        self.worker_response_mq: MessageQueue | None = None
         wrapper = WorkerWrapperBase(rpc_rank=local_rank, global_rank=rank)
         # TODO: move `init_worker` to executor level as a collective rpc call
         all_kwargs: list[dict] = [
@@ -809,6 +828,10 @@ class WorkerProc:
         self.setup_proc_title_and_log_prefix(
             enable_ep=vllm_config.parallel_config.enable_expert_parallel
         )
+
+        # Attach the SchedulerOutput broadcast MQ before the potentially very
+        # long device-init / model-load window; see _attach_input_mq.
+        self._attach_input_mq(input_shm_handle, vllm_config)
 
         # Load model
         self.worker.init_device()
