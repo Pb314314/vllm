@@ -3,7 +3,6 @@
 """PP helpers of the V2 model runner: which rows the sampled-token broadcast
 must carry, and which received tensors do not match their buffers."""
 
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import numpy as np
@@ -17,6 +16,7 @@ from vllm.v1.worker.gpu import pp_utils
 from vllm.v1.worker.gpu.spec_decode.adaptive_verification import (
     AdaptiveVerificationManager,
 )
+from vllm.v1.worker.gpu.states import RequestState
 
 
 def _batch(
@@ -178,38 +178,70 @@ def test_finishing_prefill_row_does_not_drop_a_sibling_row():
     assert mask.tolist() == [False, True]
 
 
-_NUM_STEPS, _NUM_DRAFTS, _FREED_STEP, _FREED_SLOT = 12, 2, 5, 2
-_REQ_IDS = ["a", "b", "c", "d"]
+_NUM_STEPS, _NUM_DRAFTS, _FREED_STEP = 12, 2, 5
+
+
+def _add_request(req_states: RequestState, req_id: str) -> None:
+    req_states.add_request(
+        req_id,
+        prompt_len=10,
+        all_token_ids=list(range(10)),
+        num_computed_tokens=10,
+        max_tokens=32,
+    )
 
 
 def _manager(device: torch.device) -> AdaptiveVerificationManager:
-    req_states = SimpleNamespace(
-        num_speculative_steps=_NUM_DRAFTS,
-        device=device,
+    req_states = RequestState(
         max_num_reqs=8,
-        req_id_to_index={req_id: i for i, req_id in enumerate(_REQ_IDS)},
-        num_computed_tokens_np=np.full(8, 10, dtype=np.int32),
-        prefill_len=SimpleNamespace(np=np.ones(8, dtype=np.int32)),
+        max_model_len=64,
+        max_num_batched_tokens=64,
+        num_speculative_steps=_NUM_DRAFTS,
+        vocab_size=32,
+        device=device,
     )
     manager = AdaptiveVerificationManager(
-        req_states,  # type: ignore[arg-type]
+        req_states,
         torch.zeros(9, dtype=torch.int32, device=device),
         num_bonus_tokens=1,
         max_total_logits=1 << 20,
     )
+    for req_id in "abcd":
+        _add_request(req_states, req_id)
+        manager.add_request(req_states.req_id_to_index[req_id])
     # A fixed step overhead plus a per-token cost: only drafts that are likely
     # enough to survive pay for themselves, so the budget binds.
     manager.cost_tables = (np.zeros(9), 8.0 + np.arange(64, dtype=np.float64))
     return manager
 
 
-def _layout(manager: AdaptiveVerificationManager, idx_mapping: torch.Tensor):
+def _replace_request(manager: AdaptiveVerificationManager) -> int:
+    """Finish request "c" and start "e", which reuses its slot."""
+    req_states = manager.req_states
+    slot = req_states.remove_request("c")
+    assert slot is not None
+    _add_request(req_states, "e")
+    assert req_states.req_id_to_index["e"] == slot
+    manager.add_request(slot)
+    return slot
+
+
+def _batch_req_ids(step: int) -> list[str]:
+    return ["a", "b", "c" if step < _FREED_STEP else "e", "d"]
+
+
+def _layout(manager: AdaptiveVerificationManager, req_ids: list[str]):
+    idx_mapping = torch.tensor(
+        [manager.req_states.req_id_to_index[req_id] for req_id in req_ids],
+        dtype=torch.int32,
+        device=manager.req_states.device,
+    )
     num_tokens = manager.get_num_tokens(
-        dict.fromkeys(_REQ_IDS, 1 + _NUM_DRAFTS),
-        dict.fromkeys(_REQ_IDS, [0] * _NUM_DRAFTS),
+        dict.fromkeys(req_ids, 1 + _NUM_DRAFTS),
+        dict.fromkeys(req_ids, [0] * _NUM_DRAFTS),
     )
     cu_num_logits, query_start_loc, budget, _ = manager.reallocate_drafts(
-        _REQ_IDS, idx_mapping
+        req_ids, idx_mapping
     )
     return (
         num_tokens,
@@ -230,7 +262,7 @@ def _confidences(device: torch.device) -> list[torch.Tensor]:
 def _relay_steps(device: torch.device) -> list:
     """Run decode steps through a real PPHandler and adaptive verification
     manager, the last stage drafting `_confidences`. Request "c" finishes at
-    `_FREED_STEP` and a new request reuses its slot while its last confidences
+    `_FREED_STEP` and a new request reuses its slot while c's last confidences
     are still in flight. Returns each step's batch layout."""
     pp_group = get_pp_group()
     handler = pp_utils.PPHandler(
@@ -239,20 +271,23 @@ def _relay_steps(device: torch.device) -> list:
     handler.configure_draft_confidence_relay()
     manager = _manager(device)
     confidences = _confidences(device)
-    idx_mapping_np = np.arange(4, dtype=np.int32)
-    idx_mapping = torch.from_numpy(idx_mapping_np).to(device)
     layouts = []
     for step in range(_NUM_STEPS):
         outputs = handler.get_prev_sampled_outputs()
         if outputs is not None and outputs["draft_confidences"] is not None:
             manager.record_confidences(*outputs["draft_confidences"])
         if step == _FREED_STEP:
-            handler.on_req_idx_freed(_FREED_SLOT)
-            manager.add_request(_FREED_SLOT)
-        layouts.append(_layout(manager, idx_mapping))
+            handler.on_req_idx_freed(_replace_request(manager))
+        req_ids = _batch_req_ids(step)
+        layouts.append(_layout(manager, req_ids))
 
         batch = _batch([10] * 4, [1] * 4, [1 + _NUM_DRAFTS] * 4)
-        batch.idx_mapping, batch.idx_mapping_np = idx_mapping, idx_mapping_np
+        batch.req_ids = req_ids
+        batch.idx_mapping_np = np.array(
+            [manager.req_states.req_id_to_index[req_id] for req_id in req_ids],
+            dtype=np.int32,
+        )
+        batch.idx_mapping = torch.from_numpy(batch.idx_mapping_np).to(device)
         batch.num_draft_tokens = 4 * _NUM_DRAFTS
         if pp_group.is_last_rank:
             sampled = torch.zeros(4, 1 + _NUM_DRAFTS, dtype=torch.int64, device=device)
@@ -269,9 +304,11 @@ def _relay_steps(device: torch.device) -> list:
 
 def _expected_layouts(device: torch.device, delay: int, drop_freed: bool) -> list:
     """Layouts of a single-stage manager that records each step's confidences
-    `delay` steps later, dropping the freed request's in-flight rows if
+    `delay` steps later, dropping the finished request's in-flight rows if
     `drop_freed`."""
     manager = _manager(device)
+    # "e" takes over "c"'s slot, so each batch row keeps its slot.
+    slots = [manager.req_states.req_id_to_index[req_id] for req_id in "abcd"]
     confidences = _confidences(device)
     layouts = []
     for step in range(_NUM_STEPS):
@@ -279,16 +316,14 @@ def _expected_layouts(device: torch.device, delay: int, drop_freed: bool) -> lis
         if drafted >= 0:
             rows = list(range(4))
             if drop_freed and drafted < _FREED_STEP < step:
-                rows.remove(_FREED_SLOT)
+                rows.remove(_batch_req_ids(drafted).index("c"))
             manager.record_confidences(
                 confidences[drafted][rows],
-                torch.tensor(rows, dtype=torch.int32, device=device),
+                torch.tensor([slots[row] for row in rows], device=device),
             )
         if step == _FREED_STEP:
-            manager.add_request(_FREED_SLOT)
-        layouts.append(
-            _layout(manager, torch.arange(4, dtype=torch.int32, device=device))
-        )
+            _replace_request(manager)
+        layouts.append(_layout(manager, _batch_req_ids(step)))
     torch.accelerator.synchronize()
     return layouts
 
