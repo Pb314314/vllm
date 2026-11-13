@@ -139,6 +139,24 @@ def compile_plan(batch, device):
         return cute.compile(ExpertsPlanKernel(batch), *args)
 
 
+def _fit_grids_to_device(tp: int, grid: int, sms: int) -> tuple[int, dict]:
+    """Default and per-batch CTA grids, clamped to the device's SM count.
+
+    The tuned counts assume a 152-SM part; on smaller devices (e.g. 148-SM
+    B200/GB200) a grid above the SM count can never be co-resident and
+    startup fails (fixes #66524). The kernels compile for the clamped grid,
+    so a clamp only costs parallelism.
+    """
+    grid = min(grid, sms)
+    # TP8: B3-4 on 148 CTAs; B5-8 publish on 128-136 CTAs, leaving SMs for the
+    # one-wave tail; grouped B9-64 on 152.
+    # TP16 B8: 144 CTAs leave SMs for the shared expert, which runs beside the
+    # routed experts (chosen by an end-to-end A/B at c = 1, k = 7).
+    grids = f"3-4:148,5-6:128,7:132,9-64:{min(152, sms)}" if tp == 8 else "8:144"
+    grids += f",65-{WIDE_ROWS}:{min(WIDE_GRID, sms)}"  # wide: one CTA per SM
+    return grid, batch_table(grids)
+
+
 def scratch(tp, device, wide=False):
     """Model-owned expert buffers: the workspace and the grouped plan (MXFP8 x, written
     by the routing kernel or `compile_plan`). `wide`: the wide engines' own
@@ -164,14 +182,8 @@ class PersistentExperts:
         self.tp, self.grid = (8, 136) if rows == 768 else (16, 152)
         self.device, self.experts = w13.device, experts
         self.weights = (w13, s13, w2, s2)
-        # TP8: B3-4 on 148 CTAs; B5-8 publish on 128-136 CTAs, leaving SMs for the
-        # one-wave tail; grouped B9-64 on 152.
-        # TP16 B8: 144 CTAs leave SMs for the shared expert, which runs beside the
-        # routed experts (chosen by an end-to-end A/B at c = 1, k = 7).
-        grids = "3-4:148,5-6:128,7:132,9-64:152" if self.tp == 8 else "8:144"
         sms = torch.cuda.get_device_properties(self.device).multi_processor_count
-        grids += f",65-{WIDE_ROWS}:{min(WIDE_GRID, sms)}"  # wide: one CTA per SM
-        self.grids = batch_table(grids)
+        self.grid, self.grids = _fit_grids_to_device(self.tp, self.grid, sms)
         scalars = (beta, linear_beta, 1 / beta, 1 / linear_beta)
         self.scalars = tuple(map(c.Float32, scalars))
         # The experts kernel uses maps 0-1 (L2 promotion on w13); the TP8 B1 cluster
