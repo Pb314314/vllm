@@ -490,7 +490,9 @@ steps:
     - vllm/v1/worker/gpu/model_runner.py
     - vllm/v1/worker/gpu/spec_decode/adaptive_verification.py
     - tests/v1/e2e/spec_decode/eagle/test_eagle3_pp.py
+    - tests/v1/worker/test_pp_utils.py
   commands:
+    - pytest -v -s v1/worker/test_pp_utils.py -k trim_drafts_alike
     - pytest -v -s v1/e2e/spec_decode/eagle/test_eagle3_pp.py -k adaptive_verification
 
 - label: ":nvidia: (H200 MIG 35GB) [Nightly] Spec Decode AL DFlash"
