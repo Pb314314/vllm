@@ -137,7 +137,7 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     # Greedy outputs drift from the non-speculative ones even with fixed drafts,
     # so adaptive verification must match them about as often as fixed drafts do.
     fixed_matches = sum(
-        ref.outputs[0].token_ids == fixed.outputs[0].token_ids
+        ref.outputs[0].text == fixed.outputs[0].text
         for ref, fixed in zip(ref_outputs, fixed_outputs)
     )
     assert fixed_matches >= len(prompts) // 4, (

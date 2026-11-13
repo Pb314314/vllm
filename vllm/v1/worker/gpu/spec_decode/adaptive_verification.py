@@ -237,9 +237,10 @@ def _merge_stage_cost_curves(
     cost tables from.
 
     Drafts are priced by the last stage, which runs the drafter, and a token
-    count's verify cost is the slowest stage's. A step then costs the drafts
-    plus the slowest stage's forward. That counts GPU compute only, and leaves
-    out PP communication and per-step host work. Stages can capture different
+    count's verify cost is the slowest stage's. A step is then priced at the
+    drafts plus the slowest stage's forward. This is a heuristic: it ignores
+    that the drafter can overlap other stages' forwards, and it leaves out PP
+    communication and per-step host work. Stages can capture different
     graphs (the draft model's attention layers are on the last stage only), so
     only token counts profiled on every stage are kept, and all stages price
     padding by the largest capture limit, even where a stage's own capture
