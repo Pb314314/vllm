@@ -121,19 +121,14 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     up, which fails the step or corrupts the outputs."""
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
     # Unlike the Llama-3.2-1B pair, this pair is costly enough per token that
-    # adaptive verification trims drafts on two GPUs.
+    # adaptive verification trims drafts on two GPUs. Engine metrics do not
+    # count trimmed drafts; test_pp_utils.py checks the trimming itself.
     model, draft = "Qwen/Qwen3-8B", "RedHatAI/Qwen3-8B-speculator.eagle3"
     _, ref_outputs = _run(
         2, model, draft, 2048, 128, prompts, adaptive_verification=None, logprobs=5
     )
-    full, _ = _run(2, model, draft, 2048, 128, prompts)
-    trimmed, outputs = _run(
+    _, outputs = _run(
         2, model, draft, 2048, 128, prompts, adaptive_verification=True, logprobs=5
-    )
-    # Trimming drops drafts that fixed drafts would have had accepted.
-    assert trimmed < full, (
-        f"Adaptive verification kept every draft ({trimmed:.3f} vs {full:.3f} "
-        "accepted per step), so trimming is not exercised."
     )
     check_logprobs_close(
         outputs_0_lst=[
