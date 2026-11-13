@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""PP helpers of the V2 model runner: which rows the sampled-token broadcast
-must carry, and which received tensors do not match their buffers."""
+"""Which rows the PP sampled-token broadcast must carry, and that the draft
+confidences relayed with it trim every stage alike."""
 
 from unittest.mock import Mock
 
 import numpy as np
-import pytest
 import torch
 
 from tests.utils import multi_gpu_test
