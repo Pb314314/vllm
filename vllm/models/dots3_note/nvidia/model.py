@@ -582,6 +582,7 @@ class Dots3NoteModel(DeepseekV32Model):
         self.device = current_platform.device_type
         self.vocab_size = config.vocab_size
         self.use_sequence_parallel = False
+        self.shardq_sequence_parallel = False
         self.is_v32 = True
         self._weight_block_size = getattr(quant_config, "weight_block_size", None)
         self.topk_indices_buffer = torch.empty(
