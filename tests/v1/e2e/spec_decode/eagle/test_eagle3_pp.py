@@ -6,10 +6,11 @@ import torch
 from tests.utils import multi_gpu_test
 from tests.v1.e2e.spec_decode.utils import (
     Messages,
+    assert_request_outputs_match,
     compute_acceptance_len,
     get_test_prompts,
 )
-from vllm import LLM, SamplingParams
+from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import cleanup_dist_env_and_memory
 
 MODEL = "meta-llama/Llama-3.2-1B-Instruct"
@@ -35,8 +36,18 @@ def _run(
     max_tokens: int = 64,
     chat_prompts: list[Messages] | None = None,
     model_impl: str = "auto",
-    adaptive_verification: bool = False,
-) -> float:
+    adaptive_verification: bool | None = False,
+) -> tuple[float, list[RequestOutput]]:
+    """Greedy outputs and acceptance length; `adaptive_verification=None` runs
+    without speculative decoding."""
+    speculative_config = None
+    if adaptive_verification is not None:
+        speculative_config = {
+            "method": "eagle3",
+            "model": draft,
+            "num_speculative_tokens": 3,
+            "enable_adaptive_verification": adaptive_verification,
+        }
     llm = LLM(
         model=model,
         model_impl=model_impl,
@@ -46,24 +57,21 @@ def _run(
         gpu_memory_utilization=0.45,
         disable_log_stats=False,
         compilation_config={"cudagraph_mode": "FULL_AND_PIECEWISE"},
-        speculative_config={
-            "method": "eagle3",
-            "model": draft,
-            "num_speculative_tokens": 3,
-            "enable_adaptive_verification": adaptive_verification,
-        },
+        speculative_config=speculative_config,
     )
     try:
         sampling_params = SamplingParams(
             temperature=0.0, max_tokens=max_tokens, ignore_eos=True
         )
         if chat_prompts is None:
-            llm.generate(PROMPTS, sampling_params)
+            outputs = llm.generate(PROMPTS, sampling_params)
         else:
-            llm.chat(chat_prompts, sampling_params)
+            outputs = llm.chat(chat_prompts, sampling_params)
+        if speculative_config is None:
+            return 1.0, outputs
         acceptance = compute_acceptance_len(llm.get_metrics())
         assert acceptance > 1
-        return acceptance
+        return acceptance, outputs
     finally:
         del llm
         torch.accelerator.empty_cache()
@@ -73,9 +81,9 @@ def _run(
 @multi_gpu_test(num_gpus=4)
 @pytest.mark.parametrize("model_impl", ["vllm", "transformers"])
 def test_eagle3_pipeline_parallel_acceptance(model_impl: str):
-    baseline = _run(1, model_impl=model_impl)
+    baseline, _ = _run(1, model_impl=model_impl)
     for pp_size in (2, 4):
-        parallel = _run(pp_size, model_impl=model_impl)
+        parallel, _ = _run(pp_size, model_impl=model_impl)
         assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
             f"PP={pp_size} acceptance regressed: {parallel:.3f} < "
             f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
@@ -97,8 +105,8 @@ def test_eagle3_pipeline_parallel_targets(model, draft):
     # Greedy outputs at PP=1 and PP=2 can diverge after a few tokens, so the
     # acceptance lengths are compared over many prompts.
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
-    baseline = _run(1, model, draft, 2048, 128, prompts)
-    parallel = _run(2, model, draft, 2048, 128, prompts)
+    baseline, _ = _run(1, model, draft, 2048, 128, prompts)
+    parallel, _ = _run(2, model, draft, 2048, 128, prompts)
     assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
         f"PP=2 acceptance regressed: {parallel:.3f} < "
         f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
@@ -109,18 +117,23 @@ def test_eagle3_pipeline_parallel_targets(model, draft):
 def test_eagle3_pipeline_parallel_adaptive_verification():
     """Every PP stage must trim each step's drafts identically: stages that
     disagree run different token counts and their hidden states no longer line
-    up, which fails the step or collapses acceptance."""
+    up, which fails the step or corrupts the outputs."""
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
-    full = _run(1, MODEL, DRAFT, 2048, 128, prompts)
-    baseline = _run(1, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    full, _ = _run(1, MODEL, DRAFT, 2048, 128, prompts)
+    trimmed, _ = _run(1, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
     # Acceptance per step only drops if adaptive verification trims drafts.
-    if baseline >= full * ACCEPTANCE_TOLERANCE:
+    if trimmed >= full * ACCEPTANCE_TOLERANCE:
         pytest.skip(
-            f"Adaptive verification kept nearly every draft ({baseline:.3f} vs "
+            f"Adaptive verification kept nearly every draft ({trimmed:.3f} vs "
             f"{full:.3f} accepted per step), so trimming is not exercised."
         )
-    parallel = _run(2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
-    assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
-        f"PP=2 acceptance with adaptive verification regressed: {parallel:.3f} < "
-        f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
+    _, ref_outputs = _run(
+        2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=None
+    )
+    _, outputs = _run(2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    assert_request_outputs_match(
+        ref_outputs,
+        outputs,
+        required_matches=int(0.6 * len(ref_outputs)) + 1,
+        context="PP=2 EAGLE3 with adaptive verification",
     )
