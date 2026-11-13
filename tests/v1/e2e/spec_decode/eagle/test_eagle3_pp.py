@@ -35,6 +35,7 @@ def _run(
     max_tokens: int = 64,
     chat_prompts: list[Messages] | None = None,
     model_impl: str = "auto",
+    adaptive_verification: bool = False,
 ) -> float:
     llm = LLM(
         model=model,
@@ -49,6 +50,7 @@ def _run(
             "method": "eagle3",
             "model": draft,
             "num_speculative_tokens": 3,
+            "enable_adaptive_verification": adaptive_verification,
         },
     )
     try:
@@ -99,5 +101,19 @@ def test_eagle3_pipeline_parallel_targets(model, draft):
     parallel = _run(2, model, draft, 2048, 128, prompts)
     assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
         f"PP=2 acceptance regressed: {parallel:.3f} < "
+        f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
+    )
+
+
+@multi_gpu_test(num_gpus=2)
+def test_eagle3_pipeline_parallel_adaptive_verification():
+    """Every PP stage must trim each step's drafts identically: stages that
+    disagree run different token counts and their hidden states no longer line
+    up, which fails the step or collapses acceptance."""
+    prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
+    baseline = _run(1, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    parallel = _run(2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
+        f"PP=2 acceptance with adaptive verification regressed: {parallel:.3f} < "
         f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
     )

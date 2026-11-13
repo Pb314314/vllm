@@ -205,13 +205,15 @@ class PPHandler:
         # finished. The post_update kernel skips the -1 entries.
         freed = self.req_idx_gen_np[slot.idx_mapping_np] != slot.gen_at_receive_np
         exclude_mask = freed | ~slot.need_sampled_mask
+        if exclude_mask.all():
+            # No states require update anymore.
+            return None
+        self.main_stream.wait_event(slot.event)
+
         idx_mapping = slot.idx_mapping
         draft_confidences = slot.draft_confidences
         confidence_idx_mapping = slot.idx_mapping
         if exclude_mask.any():
-            if exclude_mask.all():
-                # No states require update anymore.
-                return None
             # Filter excluded request indices.
             idx_mapping_np = np.where(exclude_mask, -1, slot.idx_mapping_np)
             idx_mapping = async_tensor_h2d(idx_mapping_np, device=self.device)
@@ -221,8 +223,6 @@ class PPHandler:
                 )
                 draft_confidences = draft_confidences[kept]
                 confidence_idx_mapping = slot.idx_mapping[kept]
-
-        self.main_stream.wait_event(slot.event)
         if draft_confidences is not None:
             draft_confidences = (draft_confidences, confidence_idx_mapping)
         if slot.sampled_tokens is None:
