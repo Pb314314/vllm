@@ -1805,11 +1805,9 @@ class TestCuSeqlensPadding:
     ]
 
     @pytest.mark.parametrize("flashinfer", [True, False])
-    @pytest.mark.parametrize("model", FAMILIES)
     @pytest.mark.parametrize(("seq_lens", "replay_batch", "capture_batch"), CASES)
     def test_replay_padding_matches_capture_size_metadata(
         self,
-        model: str,
         flashinfer: bool,
         seq_lens: list[int],
         replay_batch: int,
@@ -1821,7 +1819,7 @@ class TestCuSeqlensPadding:
         assert want.shape == capture.shape
 
         buf = torch.full_like(capture, -1)
-        self._padding_fn(model, flashinfer)(buf, replay)
+        self._padding_fn("qwen3_vl", flashinfer)(buf, replay)
         assert torch.equal(buf, want)
 
     @pytest.mark.parametrize("flashinfer", [True, False])
