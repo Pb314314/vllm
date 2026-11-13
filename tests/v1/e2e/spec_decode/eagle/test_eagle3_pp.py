@@ -119,24 +119,30 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     disagree run different token counts and their hidden states no longer line
     up, which fails the step or corrupts the outputs."""
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
-    full, _ = _run(1, MODEL, DRAFT, 2048, 128, prompts)
-    trimmed, _ = _run(1, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
-    # Acceptance per step only drops if adaptive verification trims drafts.
-    if trimmed >= full * ACCEPTANCE_TOLERANCE:
-        pytest.skip(
-            f"Adaptive verification kept nearly every draft ({trimmed:.3f} vs "
-            f"{full:.3f} accepted per step), so trimming is not exercised."
-        )
+    # Unlike the Llama-3.2-1B pair, this pair is costly enough per token that
+    # adaptive verification trims drafts on two GPUs.
+    model, draft = "Qwen/Qwen3-8B", "RedHatAI/Qwen3-8B-speculator.eagle3"
     _, ref_outputs = _run(
-        2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=None
+        2, model, draft, 2048, 128, prompts, adaptive_verification=None
     )
-    _, fixed_outputs = _run(2, MODEL, DRAFT, 2048, 128, prompts)
-    _, outputs = _run(2, MODEL, DRAFT, 2048, 128, prompts, adaptive_verification=True)
+    full, fixed_outputs = _run(2, model, draft, 2048, 128, prompts)
+    trimmed, outputs = _run(
+        2, model, draft, 2048, 128, prompts, adaptive_verification=True
+    )
+    # Trimming drops drafts that fixed drafts would have had accepted.
+    assert trimmed < full, (
+        f"Adaptive verification kept every draft ({trimmed:.3f} vs {full:.3f} "
+        "accepted per step), so trimming is not exercised."
+    )
     # Greedy outputs drift from the non-speculative ones even with fixed drafts,
     # so adaptive verification must match them about as often as fixed drafts do.
     fixed_matches = sum(
         ref.outputs[0].token_ids == fixed.outputs[0].token_ids
         for ref, fixed in zip(ref_outputs, fixed_outputs)
+    )
+    assert fixed_matches >= len(prompts) // 4, (
+        f"Only {fixed_matches}/{len(prompts)} fixed-draft outputs match the "
+        "non-speculative ones, too few to compare against."
     )
     assert_request_outputs_match(
         ref_outputs,
