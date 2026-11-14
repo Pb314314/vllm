@@ -72,8 +72,8 @@ class EncoderCudaGraphConfig:
 
     buffer_keys: list[str]
     """Keys for the tensor buffers recorded into the CUDA graph.
-    Before replay the manager zeros then slice-copies new data
-    into these buffers."""
+    Before replay the manager copies new data into these buffers,
+    padding them as described in `padding_logics`."""
 
     out_hidden_size: int
     """Output hidden dim of the vision encoder.
@@ -84,8 +84,10 @@ class EncoderCudaGraphConfig:
     )
     """Optional per-buffer replay padding/copy logic.
     If absent for a key, the manager zeros the capture buffer and slice-copies
-    the replay buffer into it. A padding logic must write the whole capture
-    buffer: budgets share buffers, so rows it leaves untouched may hold another
+    the replay buffer into it. `cu_seqlens` and `cu_window_seqlens` are always
+    padded by `MMEncoderAttention` so padded rows are never attended, and must
+    not be set here. A padding logic must write the whole capture buffer:
+    budgets share buffers, so rows it leaves untouched may hold another
     budget's data."""
 
     max_frames_per_video: int = 1

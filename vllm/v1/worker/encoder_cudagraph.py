@@ -6,7 +6,7 @@ import itertools
 import math
 from collections.abc import Hashable
 from dataclasses import dataclass
-from typing import Any, TypeAlias
+from typing import Any, TypeAlias, cast
 
 import torch
 
@@ -17,6 +17,7 @@ from vllm.distributed import (
     tensor_model_parallel_all_gather,
 )
 from vllm.logger import init_logger
+from vllm.model_executor.layers.attention import MMEncoderAttention
 from vllm.model_executor.models.interfaces import (
     SupportsEncoderCudaGraph,
 )
@@ -25,9 +26,11 @@ from vllm.model_executor.models.vision import get_load_balance_assignment
 from vllm.utils.gpu_sync_debug import gpu_sync_allowed
 from vllm.utils.math_utils import round_up_to
 from vllm.utils.torch_utils import current_stream
+from vllm.v1.attention.backends.registry import AttentionBackendEnum
 from vllm.v1.worker.encoder_cudagraph_defs import (
     ENCODER_CUDAGRAPH_AXIS_KEYS_KWARG,
     EncoderCudaGraphConfig,
+    EncoderCudaGraphPaddingLogic,
     EncoderItemSpec,
 )
 
@@ -42,6 +45,23 @@ _LINEAR_GRID_END = 2560
 
 # Warn when capture axes multiply the captured graph count past this point.
 _CAPTURE_GRAPH_COUNT_WARNING_THRESHOLD = 64
+
+# Varlen attention offsets; MMEncoderAttention owns how they are padded.
+_CUMULATIVE_BUFFER_KEYS = frozenset({"cu_seqlens", "cu_window_seqlens"})
+
+
+def _get_encoder_attn_backend(model: torch.nn.Module) -> AttentionBackendEnum | None:
+    """Return the backend of the model's encoder attention layers, if any."""
+    backends = {
+        m.attn_backend for m in model.modules() if isinstance(m, MMEncoderAttention)
+    }
+    if len(backends) > 1 and AttentionBackendEnum.FLASHINFER in backends:
+        # FlashInfer lays out cu_seqlens differently from the other backends.
+        raise NotImplementedError(
+            f"Encoder CUDA graphs need one cu_seqlens layout, but the encoder "
+            f"attention layers use {sorted(b.name for b in backends)}."
+        )
+    return next(iter(backends), None)
 
 
 @dataclass
@@ -60,8 +80,8 @@ class BudgetGraphMetadata:
     graph: torch.cuda.CUDAGraph
     # Buffers recorded into the CUDA graph (e.g. embeddings, sequence metadata).
     # Before replay the manager updates these in-place. By default buffers are
-    # zeroed before slice-copying the actual values; model-specific padding
-    # behavior is provided by EncoderCudaGraphConfig.padding_logics.
+    # zeroed before slice-copying the actual values; cu_seqlens buffers are
+    # padded by MMEncoderAttention, others by EncoderCudaGraphConfig.padding_logics.
     input_buffers: dict[str, torch.Tensor]
     # Output written by graph, read after replay
     output_buffer: torch.Tensor
@@ -86,6 +106,9 @@ class EncoderCudaGraphManager:
         self.dtype = dtype
         self.model = model
         self.config: EncoderCudaGraphConfig = model.get_encoder_cudagraph_config()
+        self.padding_logics = self._get_padding_logics(
+            self.config, _get_encoder_attn_backend(cast(torch.nn.Module, model))
+        )
 
         comp_config = vllm_config.compilation_config
         user_budgets = comp_config.encoder_cudagraph_token_budgets
@@ -554,6 +577,24 @@ class EncoderCudaGraphManager:
                 return True
         return False
 
+    @staticmethod
+    def _get_padding_logics(
+        config: EncoderCudaGraphConfig,
+        attn_backend: AttentionBackendEnum | None,
+    ) -> dict[str, EncoderCudaGraphPaddingLogic]:
+        cu_keys = [k for k in config.buffer_keys if k in _CUMULATIVE_BUFFER_KEYS]
+        if overridden := sorted(set(cu_keys) & config.padding_logics.keys()):
+            raise ValueError(
+                f"Encoder CUDA graph buffers {overridden} are padded by "
+                "MMEncoderAttention and must not be in padding_logics; remove "
+                "them. A backend-specific layout belongs in "
+                "MMEncoderAttention.get_cu_seqlens_padding_logics()."
+            )
+        return {
+            **config.padding_logics,
+            **MMEncoderAttention.get_cu_seqlens_padding_logics(attn_backend, *cu_keys),
+        }
+
     def _run_budget_graph(
         self,
         mm_kwargs: dict[str, Any],
@@ -612,10 +653,7 @@ class EncoderCudaGraphManager:
             if src.ndim == 0:
                 buf.copy_(src)
             else:
-                padding_logic = self.config.padding_logics.get(
-                    key, self._copy_padded_buffer
-                )
-                padding_logic(buf, src)
+                self.padding_logics.get(key, self._copy_padded_buffer)(buf, src)
 
         graph_meta.graph.replay()
 
