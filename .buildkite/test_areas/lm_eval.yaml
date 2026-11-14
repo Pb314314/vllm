@@ -557,6 +557,9 @@ steps:
   - vllm/model_executor/models/qwen3_next.py
   - vllm/model_executor/models/qwen3_next_mtp.py
   - vllm/third_party/flash_linear_attention/ops/
+  - vllm/v1/worker/extensible_kv_cache.py
+  - vllm/v1/worker/gpu/model_runner.py
+  - vllm/v1/worker/gpu/spec_decode/adaptive_verification.py
   commands:
   - pytest -s -v evals/gsm8k/test_gsm8k_correctness.py --config-list-file=configs/models-qwen35-blackwell.txt
   mirror:

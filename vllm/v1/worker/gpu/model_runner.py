@@ -1222,11 +1222,18 @@ class GPUModelRunner(LoRAModelRunnerMixin):
         read KV context from the committed blocks."""
         assert self.adaptive_verification is not None
         assert self.cudagraph_manager is not None
+        kv_cache = self.extensible_kv_cache
+        if kv_cache is not None:
+            # These shapes run again once extend_kv_cache fills memory, and
+            # can need more than warmup did (GDN prefill's state workspace).
+            torch.accelerator.reset_peak_memory_stats(self.device)
         with self.step_timing.collect() as timings:
             for batch in self.adaptive_verification.batches_to_profile(
                 self.cudagraph_manager.captured_token_counts()
             ):
                 self._dummy_run(**batch, skip_eplb=True)
+        if kv_cache is not None:
+            kv_cache.record_transient_peak()
         self.adaptive_verification.set_initial_cost_curves(timings)
 
     def _remove_request(self, req_id: str) -> bool:
