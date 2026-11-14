@@ -45,11 +45,15 @@ def make_manager(
 
 @pytest.fixture(autouse=True)
 def single_rank_tp_group(monkeypatch):
-    """In-process tests have no TP group: its broadcasts return their input."""
+    """In-process tests have no TP or PP group: TP broadcasts return their
+    input, and there is a single pipeline stage."""
     group = SimpleNamespace(
         broadcast_object=lambda obj, src=0: obj, broadcast=lambda t, src=0: t
     )
     monkeypatch.setattr(adaptive_module, "get_tp_group", lambda: group)
+    monkeypatch.setattr(
+        adaptive_module, "get_pp_group", lambda: SimpleNamespace(world_size=1)
+    )
 
 
 def tp_consensus_worker(rank: int, world_size: int, store: str) -> None:
@@ -118,6 +122,43 @@ def tp_consensus_worker(rank: int, world_size: int, store: str) -> None:
     dist.destroy_process_group()
     for layouts in (budget_layouts, boundary_layouts):
         assert all(layout == layouts[0] for layout in layouts), layouts
+
+
+def pp_cost_curve_worker(rank: int, world_size: int, store: str) -> None:
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{store}",
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(seconds=60),
+    )
+    pp_group = parallel_state.GroupCoordinator(
+        group_ranks=[list(range(world_size))],
+        local_rank=0,
+        torch_distributed_backend="gloo",
+        use_device_communicator=False,
+        group_name="pp",
+    )
+    is_last = rank == world_size - 1
+    # Only the last stage drafts; the middle stage is the slowest at 8 tokens,
+    # and the last stage alone profiled 32 tokens.
+    draft_curve = [(1, 0.5), (4, 0.75)] if is_last else []
+    verify_curve = [(8, 1.0 + (rank == 1)), (16, 3.0 - rank)]
+    if is_last:
+        verify_curve.append((32, 4.0))
+    merged = adaptive_module._merge_stage_cost_curves(
+        pp_group, draft_curve, verify_curve, cudagraph_limit=16 + 16 * is_last
+    )
+    pp_group.destroy()
+    dist.destroy_process_group()
+    assert merged == ([(1, 0.5), (4, 0.75)], [(8, 2.0), (16, 3.0)], 32)
+
+
+def test_pp_stages_price_steps_by_the_slowest_stage(tmp_path):
+    """Every PP stage must build the same cost tables: drafts priced by the
+    drafting last stage, verification by the slowest stage at each size, and
+    one capture limit for all."""
+    mp.spawn(pp_cost_curve_worker, args=(3, str(tmp_path / "store")), nprocs=3)
 
 
 @pytest.mark.parametrize("world_size", [2, 4])

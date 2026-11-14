@@ -1,12 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Which rows the PP sampled-token broadcast must carry."""
+"""Which rows the PP sampled-token broadcast must carry, and that the draft
+confidences relayed with it trim every stage alike."""
 
 from unittest.mock import Mock
 
 import numpy as np
+import torch
 
+from tests.utils import multi_gpu_test
+from vllm.distributed.parallel_state import get_pp_group
+from vllm.utils.network_utils import get_open_port
 from vllm.v1.worker.gpu import pp_utils
+from vllm.v1.worker.gpu.spec_decode.adaptive_verification import (
+    AdaptiveVerificationManager,
+)
+from vllm.v1.worker.gpu.states import RequestState
 
 
 def _batch(
@@ -166,3 +175,178 @@ def test_finishing_prefill_row_does_not_drop_a_sibling_row():
 
     assert mask is not None
     assert mask.tolist() == [False, True]
+
+
+_NUM_STEPS, _NUM_DRAFTS, _FREED_STEP = 12, 2, 5
+
+
+def _add_request(req_states: RequestState, req_id: str) -> None:
+    req_states.add_request(
+        req_id,
+        prompt_len=10,
+        all_token_ids=list(range(10)),
+        num_computed_tokens=10,
+        max_tokens=32,
+    )
+
+
+def _manager(device: torch.device) -> AdaptiveVerificationManager:
+    req_states = RequestState(
+        max_num_reqs=8,
+        max_model_len=64,
+        max_num_batched_tokens=64,
+        num_speculative_steps=_NUM_DRAFTS,
+        vocab_size=32,
+        device=device,
+    )
+    manager = AdaptiveVerificationManager(
+        req_states,
+        torch.zeros(9, dtype=torch.int32, device=device),
+        num_bonus_tokens=1,
+        max_total_logits=1 << 20,
+    )
+    for req_id in "abcd":
+        _add_request(req_states, req_id)
+        manager.add_request(req_states.req_id_to_index[req_id])
+    # A fixed step overhead plus a per-token cost: only drafts that are likely
+    # enough to survive pay for themselves, so the budget binds.
+    manager.cost_tables = (np.zeros(9), 8.0 + np.arange(64, dtype=np.float64))
+    return manager
+
+
+def _replace_request(manager: AdaptiveVerificationManager) -> int:
+    """Finish request "c" and start "e", which reuses its slot."""
+    req_states = manager.req_states
+    slot = req_states.remove_request("c")
+    assert slot is not None
+    _add_request(req_states, "e")
+    assert req_states.req_id_to_index["e"] == slot
+    manager.add_request(slot)
+    return slot
+
+
+def _batch_req_ids(step: int) -> list[str]:
+    return ["a", "b", "c" if step < _FREED_STEP else "e", "d"]
+
+
+def _layout(manager: AdaptiveVerificationManager, req_ids: list[str]):
+    idx_mapping = torch.tensor(
+        [manager.req_states.req_id_to_index[req_id] for req_id in req_ids],
+        dtype=torch.int32,
+        device=manager.req_states.device,
+    )
+    num_tokens = manager.get_num_tokens(
+        dict.fromkeys(req_ids, 1 + _NUM_DRAFTS),
+        dict.fromkeys(req_ids, [0] * _NUM_DRAFTS),
+    )
+    cu_num_logits, query_start_loc, budget, _ = manager.reallocate_drafts(
+        req_ids, idx_mapping
+    )
+    return (
+        num_tokens,
+        cu_num_logits.tolist(),
+        query_start_loc[:5].tolist(),
+        budget,
+    )
+
+
+def _confidences(device: torch.device) -> list[torch.Tensor]:
+    generator = torch.Generator(device=device).manual_seed(0)
+    return [
+        torch.rand(4, _NUM_DRAFTS, generator=generator, device=device)
+        for _ in range(_NUM_STEPS)
+    ]
+
+
+def _relay_steps(device: torch.device) -> list:
+    """Run decode steps through a real PPHandler and adaptive verification
+    manager, the last stage drafting `_confidences`. Request "c" finishes at
+    `_FREED_STEP` and a new request reuses its slot while c's last confidences
+    are still in flight. Returns each step's batch layout."""
+    pp_group = get_pp_group()
+    handler = pp_utils.PPHandler(
+        max_num_reqs=8, num_speculative_steps=_NUM_DRAFTS, device=device
+    )
+    handler.configure_draft_confidence_relay()
+    manager = _manager(device)
+    confidences = _confidences(device)
+    layouts = []
+    for step in range(_NUM_STEPS):
+        outputs = handler.get_prev_sampled_outputs()
+        if outputs is not None and outputs["draft_confidences"] is not None:
+            manager.record_confidences(*outputs["draft_confidences"])
+        if step == _FREED_STEP:
+            handler.on_req_idx_freed(_replace_request(manager))
+        req_ids = _batch_req_ids(step)
+        layouts.append(_layout(manager, req_ids))
+
+        batch = _batch([10] * 4, [1] * 4, [1 + _NUM_DRAFTS] * 4)
+        batch.req_ids = req_ids
+        batch.idx_mapping_np = np.array(
+            [manager.req_states.req_id_to_index[req_id] for req_id in req_ids],
+            dtype=np.int32,
+        )
+        batch.idx_mapping = torch.from_numpy(batch.idx_mapping_np).to(device)
+        batch.num_draft_tokens = 4 * _NUM_DRAFTS
+        if pp_group.is_last_rank:
+            sampled = torch.zeros(4, 1 + _NUM_DRAFTS, dtype=torch.int64, device=device)
+            counts = torch.zeros(4, dtype=torch.int32, device=device)
+            handler.broadcast(sampled, counts, counts, batch)
+            handler.broadcast_drafts(
+                sampled[:, :_NUM_DRAFTS].clone(), confidences[step]
+            )
+        else:
+            handler.receive(batch, recv_drafts=True)
+    torch.accelerator.synchronize()
+    return layouts
+
+
+def _expected_layouts(device: torch.device, delay: int, drop_freed: bool) -> list:
+    """Layouts of a single-stage manager that records each step's confidences
+    `delay` steps later, dropping the finished request's in-flight rows if
+    `drop_freed`."""
+    manager = _manager(device)
+    # "e" takes over "c"'s slot, so each batch row keeps its slot.
+    slots = [manager.req_states.req_id_to_index[req_id] for req_id in "abcd"]
+    confidences = _confidences(device)
+    layouts = []
+    for step in range(_NUM_STEPS):
+        drafted = step - delay
+        if drafted >= 0:
+            rows = list(range(4))
+            if drop_freed and drafted < _FREED_STEP < step:
+                rows.remove(_batch_req_ids(drafted).index("c"))
+            manager.record_confidences(
+                confidences[drafted][rows],
+                torch.tensor([slots[row] for row in rows], device=device),
+            )
+        if step == _FREED_STEP:
+            _replace_request(manager)
+        layouts.append(_layout(manager, _batch_req_ids(step)))
+    torch.accelerator.synchronize()
+    return layouts
+
+
+def _relay_worker(rank: int, world_size: int, port: str) -> None:
+    from tests.utils import init_test_distributed_environment
+
+    device = torch.device(f"cuda:{rank}")
+    torch.accelerator.set_device_index(device)
+    init_test_distributed_environment(1, world_size, rank, port)
+    layouts = _relay_steps(device)
+    # PP outputs are consumed one step per stage later.
+    expected = _expected_layouts(device, world_size, drop_freed=True)
+    assert layouts == expected
+    # The budget must bind, and the freed request's stale confidences must
+    # change some step, or matching the expected layouts proves little.
+    assert any(0 < layout[-1] < 4 * _NUM_DRAFTS for layout in expected)
+    assert expected != _expected_layouts(device, world_size, drop_freed=False)
+
+
+@multi_gpu_test(num_gpus=2)
+def test_pp_stages_trim_drafts_alike():
+    """Adaptive verification trims each step's drafts from the drafts'
+    confidences, which only the last stage computes. Every stage must pick the
+    same draft budget and request boundaries at every step, including when a
+    request slot is reused while its confidences are in flight."""
+    torch.multiprocessing.spawn(_relay_worker, args=(2, str(get_open_port())), nprocs=2)

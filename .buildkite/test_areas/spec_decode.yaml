@@ -479,6 +479,22 @@ steps:
       - tests/v1/e2e/spec_decode/test_mtp_parallel_load.py
       - vllm/platforms/rocm.py
 
+- label: ":nvidia: (B200) [Nightly] Spec Decode PP Adaptive Verification"
+  key: spec-decode-pp-adaptive-verification-2xb200
+  timeout_in_minutes: 30
+  device: b200-k8s
+  optional: true
+  num_devices: 2
+  source_file_dependencies:
+    - vllm/v1/worker/gpu/pp_utils.py
+    - vllm/v1/worker/gpu/model_runner.py
+    - vllm/v1/worker/gpu/spec_decode/adaptive_verification.py
+    - tests/v1/e2e/spec_decode/eagle/test_eagle3_pp.py
+    - tests/v1/worker/test_pp_utils.py
+  commands:
+    - pytest -v -s v1/worker/test_pp_utils.py -k trim_drafts_alike
+    - pytest -v -s v1/e2e/spec_decode/eagle/test_eagle3_pp.py -k adaptive_verification
+
 - label: ":nvidia: (H200 MIG 35GB) [Nightly] Spec Decode AL DFlash"
   key: spec-decode-dflash-nightly
   automatic_shard: true

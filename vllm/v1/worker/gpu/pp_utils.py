@@ -4,6 +4,7 @@
 
 from collections import deque
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import torch
@@ -22,9 +23,10 @@ class PendingRecv:
 
     event: torch.cuda.Event
 
-    sampled_tokens: torch.Tensor  # [num_reqs, sample_len]
-    num_sampled: torch.Tensor  # [num_reqs]
-    num_rejected: torch.Tensor  # [num_reqs]
+    # None in the last rank's own draft-confidence entries.
+    sampled_tokens: torch.Tensor | None  # [num_reqs, sample_len]
+    num_sampled: torch.Tensor | None  # [num_reqs]
+    num_rejected: torch.Tensor | None  # [num_reqs]
     idx_mapping: torch.Tensor  # [num_reqs]
     idx_mapping_np: np.ndarray  # [num_reqs]
     # Records which rows need a deferred postprocess (bool).
@@ -33,6 +35,8 @@ class PendingRecv:
     # detect requests aborted since then.
     gen_at_receive_np: np.ndarray  # [num_reqs]
     draft_tokens: torch.Tensor | None = None  # [num_reqs, num_speculative_steps]
+    # [num_reqs, num_speculative_steps]
+    draft_confidences: torch.Tensor | None = None
 
 
 def compute_need_sampled_mask(input_batch: InputBatch) -> np.ndarray | None:
@@ -81,9 +85,18 @@ class PPHandler:
         ring_depth = get_pp_group().world_size
         if current_platform.is_xpu() and not envs.VLLM_XPU_PP_MICROBATCH:
             ring_depth = 1
+        self.ring_depth = ring_depth
         self.queue: deque[PendingRecv | None] = (
             deque() if self.is_last_rank else deque([None] * ring_depth)
         )
+        # Adaptive verification trims the batch from the drafts' confidences, so
+        # every rank must apply them at the same step: the last rank queues its
+        # own like the others' received ones.
+        self.relay_draft_confidences = False
+        # The last rank's batch metadata for this step's queue entry.
+        self.broadcast_slot: (
+            tuple[torch.Tensor, np.ndarray, np.ndarray, np.ndarray] | None
+        ) = None
 
         # Per req-index generation counter, incremented every time a request
         # index is freed in RequestStats. Used for invalidating freed req data
@@ -107,6 +120,11 @@ class PPHandler:
     def _sample_len(self, input_batch: InputBatch) -> int:
         # Width of the sampled-token broadcast. Must be the same on all ranks.
         return self.max_sample_len if input_batch.num_draft_tokens > 0 else 1
+
+    def configure_draft_confidence_relay(self) -> None:
+        self.relay_draft_confidences = True
+        if self.is_last_rank:
+            self.queue = deque([None] * self.ring_depth)
 
     def configure_aux_hidden_state_relay(self, model: torch.nn.Module) -> None:
         from vllm.model_executor.models.interfaces import get_eagle_decoder
@@ -168,9 +186,12 @@ class PPHandler:
             )
         return hidden_states, aux_hidden_states
 
-    def get_prev_sampled_outputs(self) -> dict[str, torch.Tensor | None] | None:
+    def get_prev_sampled_outputs(self) -> dict[str, Any] | None:
         """Consume the entry from pp_size steps ago and wait for its recv event,
         then filter out entries whose request was freed since `receive`.
+
+        `draft_confidences` holds the kept rows' confidences and their request
+        indices. The last rank's entries carry nothing else.
         """
         if not self.queue:
             return None
@@ -184,34 +205,69 @@ class PPHandler:
         # finished. The post_update kernel skips the -1 entries.
         freed = self.req_idx_gen_np[slot.idx_mapping_np] != slot.gen_at_receive_np
         exclude_mask = freed | ~slot.need_sampled_mask
+        if exclude_mask.all():
+            # No states require update anymore.
+            return None
+        self.main_stream.wait_event(slot.event)
+
         idx_mapping = slot.idx_mapping
+        draft_confidences = slot.draft_confidences
+        confidence_idx_mapping = slot.idx_mapping
         if exclude_mask.any():
-            if exclude_mask.all():
-                # No states require update anymore.
-                return None
             # Filter excluded request indices.
             idx_mapping_np = np.where(exclude_mask, -1, slot.idx_mapping_np)
             idx_mapping = async_tensor_h2d(idx_mapping_np, device=self.device)
-
-        self.main_stream.wait_event(slot.event)
+            if draft_confidences is not None:
+                kept = async_tensor_h2d(
+                    np.flatnonzero(~exclude_mask), device=self.device
+                )
+                draft_confidences = draft_confidences[kept]
+                confidence_idx_mapping = slot.idx_mapping[kept]
+        if draft_confidences is not None:
+            draft_confidences = (draft_confidences, confidence_idx_mapping)
+        if slot.sampled_tokens is None:
+            return dict(draft_confidences=draft_confidences)
         return dict(
             sampled_tokens=slot.sampled_tokens,
             num_sampled=slot.num_sampled,
             num_rejected=slot.num_rejected,
             idx_mapping=idx_mapping,
             draft_tokens=slot.draft_tokens,
+            draft_confidences=draft_confidences,
         )
 
-    def broadcast_drafts(self, draft_tokens: torch.Tensor) -> None:
-        """Broadcast draft proposals so non-last ranks can embed real token ids."""
+    def broadcast_drafts(
+        self,
+        draft_tokens: torch.Tensor,
+        draft_confidences: torch.Tensor | None = None,
+    ) -> None:
+        """Broadcast draft proposals so non-last ranks can embed real token ids.
+        `draft_confidences` must be given iff the confidence relay is on."""
         assert self.is_last_rank
-        if self.sampled_tokens_broadcast:
-            with torch.cuda.stream(self.broadcast_stream):
-                self.broadcast_stream.wait_stream(self.main_stream)
+        assert (draft_confidences is not None) == self.relay_draft_confidences
+        if not self.sampled_tokens_broadcast:
+            return
+        with torch.cuda.stream(self.broadcast_stream):
+            self.broadcast_stream.wait_stream(self.main_stream)
+            torch.distributed.broadcast(
+                draft_tokens, src=self.last_rank, group=self.broadcast_group
+            )
+            draft_tokens.record_stream(self.broadcast_stream)
+            if draft_confidences is not None:
                 torch.distributed.broadcast(
-                    draft_tokens, src=self.last_rank, group=self.broadcast_group
+                    draft_confidences, src=self.last_rank, group=self.broadcast_group
                 )
-                draft_tokens.record_stream(self.broadcast_stream)
+                draft_confidences.record_stream(self.broadcast_stream)
+        if draft_confidences is not None:
+            assert self.broadcast_slot is not None
+            self.queue[-1] = PendingRecv(
+                self.main_stream.record_event(),
+                None,
+                None,
+                None,
+                *self.broadcast_slot,
+                draft_confidences=draft_confidences,
+            )
 
     def receive(self, input_batch: InputBatch, recv_drafts: bool) -> bool:
         """Returns True iff sampled tokens need to be gathered from *all*
@@ -249,6 +305,17 @@ class PPHandler:
                 torch.distributed.broadcast(
                     draft_tokens, src=self.last_rank, group=self.broadcast_group
                 )
+            draft_confidences = None
+            if recv_drafts and self.relay_draft_confidences:
+                draft_confidences = torch.empty(
+                    num_reqs,
+                    self.num_speculative_steps,
+                    dtype=torch.float32,
+                    device=self.device,
+                )
+                torch.distributed.broadcast(
+                    draft_confidences, src=self.last_rank, group=self.broadcast_group
+                )
             event = self.broadcast_stream.record_event()
             num_sampled, num_rejected = combined.unbind(dim=0)
             # Must record_stream since these were allocated on broadcast stream but
@@ -257,6 +324,8 @@ class PPHandler:
             combined.record_stream(self.main_stream)
             if draft_tokens is not None:
                 draft_tokens.record_stream(self.main_stream)
+            if draft_confidences is not None:
+                draft_confidences.record_stream(self.main_stream)
         self.queue[-1] = PendingRecv(
             event,
             sampled_tokens,
@@ -267,6 +336,7 @@ class PPHandler:
             need_sampled_mask,
             gen_at_receive_np,
             draft_tokens,
+            draft_confidences,
         )
         return bool(need_sampled_mask.all())
 
@@ -278,10 +348,18 @@ class PPHandler:
         input_batch: InputBatch,
     ) -> None:
         assert self.is_last_rank
-        if compute_need_sampled_mask(input_batch) is None:
+        need_sampled_mask = compute_need_sampled_mask(input_batch)
+        if need_sampled_mask is None:
             # No request needs sampled outputs for a subsequent decode step.
             self.sampled_tokens_broadcast = False
             return
+        if self.relay_draft_confidences:
+            self.broadcast_slot = (
+                input_batch.idx_mapping,
+                input_batch.idx_mapping_np,
+                need_sampled_mask,
+                self.req_idx_gen_np[input_batch.idx_mapping_np],
+            )
 
         assert sampled_token_ids.dtype == torch.int64
         self.sampled_tokens_broadcast = True
