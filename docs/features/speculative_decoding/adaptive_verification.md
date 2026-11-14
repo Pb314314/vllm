@@ -55,6 +55,7 @@ Set `enable_adaptive_verification: false` to verify the full block for every req
 
 - The attention backend must tolerate device-decided query lengths, since the CPU lengths only bound them from above. Backends that plan off the CPU lengths are excluded by the attention selector, and rejected at startup for models that hard-wire their backend.
 - Full cudagraphs are required: step costs are profiled from captured graphs, so `--enforce-eager` is rejected at startup.
+- With the extensible KV cache, the KV cache leaves free the memory that profiling the step costs needs beyond warmup's peak (2 GiB of GDN prefill workspace for Qwen3.5-35B-A3B on one GPU), so it can be slightly smaller than without adaptive verification.
 - Not supported with LoRA (the per-token LoRA mapping is built from CPU-side boundaries) or pipeline parallelism (cost curves and confidences exist only on the last rank).
 - Without a confidence head, `use_local_argmax_reduction` is rejected. The estimator needs the full draft logits, which local argmax reduction never materializes.
 
