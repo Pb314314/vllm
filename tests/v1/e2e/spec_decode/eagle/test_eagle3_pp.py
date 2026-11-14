@@ -8,10 +8,12 @@ from tests.utils import multi_gpu_test
 from tests.v1.e2e.spec_decode.utils import (
     Messages,
     compute_acceptance_len,
+    get_spec_decode_metric_value,
     get_test_prompts,
 )
 from vllm import LLM, RequestOutput, SamplingParams
 from vllm.distributed import cleanup_dist_env_and_memory
+from vllm.v1.metrics.reader import Metric
 
 MODEL = "meta-llama/Llama-3.2-1B-Instruct"
 DRAFT = "nm-testing/Llama3_2_1B_speculator.eagle3"
@@ -38,8 +40,8 @@ def _run(
     model_impl: str = "auto",
     adaptive_verification: bool | None = False,
     logprobs: int | None = None,
-) -> tuple[float, list[RequestOutput]]:
-    """Greedy outputs and acceptance length; `adaptive_verification=None` runs
+) -> tuple[list[Metric], list[RequestOutput]]:
+    """Engine metrics and greedy outputs; `adaptive_verification=None` runs
     without speculative decoding."""
     speculative_config = None
     if adaptive_verification is not None:
@@ -68,11 +70,10 @@ def _run(
             outputs = llm.generate(PROMPTS, sampling_params)
         else:
             outputs = llm.chat(chat_prompts, sampling_params)
-        if speculative_config is None:
-            return 1.0, outputs
-        acceptance = compute_acceptance_len(llm.get_metrics())
-        assert acceptance > 1
-        return acceptance, outputs
+        metrics = llm.get_metrics()
+        if speculative_config is not None:
+            assert compute_acceptance_len(metrics) > 1
+        return metrics, outputs
     finally:
         del llm
         torch.accelerator.empty_cache()
@@ -82,9 +83,9 @@ def _run(
 @multi_gpu_test(num_gpus=4)
 @pytest.mark.parametrize("model_impl", ["vllm", "transformers"])
 def test_eagle3_pipeline_parallel_acceptance(model_impl: str):
-    baseline, _ = _run(1, model_impl=model_impl)
+    baseline = compute_acceptance_len(_run(1, model_impl=model_impl)[0])
     for pp_size in (2, 4):
-        parallel, _ = _run(pp_size, model_impl=model_impl)
+        parallel = compute_acceptance_len(_run(pp_size, model_impl=model_impl)[0])
         assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
             f"PP={pp_size} acceptance regressed: {parallel:.3f} < "
             f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
@@ -106,8 +107,8 @@ def test_eagle3_pipeline_parallel_targets(model, draft):
     # Greedy outputs at PP=1 and PP=2 can diverge after a few tokens, so the
     # acceptance lengths are compared over many prompts.
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
-    baseline, _ = _run(1, model, draft, 2048, 128, prompts)
-    parallel, _ = _run(2, model, draft, 2048, 128, prompts)
+    baseline = compute_acceptance_len(_run(1, model, draft, 2048, 128, prompts)[0])
+    parallel = compute_acceptance_len(_run(2, model, draft, 2048, 128, prompts)[0])
     assert parallel >= baseline * ACCEPTANCE_TOLERANCE, (
         f"PP=2 acceptance regressed: {parallel:.3f} < "
         f"{baseline:.3f} * {ACCEPTANCE_TOLERANCE}"
@@ -121,15 +122,19 @@ def test_eagle3_pipeline_parallel_adaptive_verification():
     up, which fails the step or corrupts the outputs."""
     prompts = get_test_prompts(mm_enabled=False, num_prompts=64)
     # Unlike the Llama-3.2-1B pair, this pair is costly enough per token that
-    # adaptive verification trims drafts on two GPUs. Engine metrics do not
-    # count trimmed drafts; test_pp_utils.py checks the trimming itself.
+    # adaptive verification trims drafts on two GPUs.
     model, draft = "Qwen/Qwen3-8B", "RedHatAI/Qwen3-8B-speculator.eagle3"
     _, ref_outputs = _run(
         2, model, draft, 2048, 128, prompts, adaptive_verification=None, logprobs=5
     )
-    _, outputs = _run(
+    metrics, outputs = _run(
         2, model, draft, 2048, 128, prompts, adaptive_verification=True, logprobs=5
     )
+    drafted = get_spec_decode_metric_value(metrics, "vllm:spec_decode_num_draft_tokens")
+    verified = get_spec_decode_metric_value(
+        metrics, "vllm:spec_decode_num_verified_tokens"
+    )
+    assert 0 < verified < drafted, f"verified {verified} of {drafted} drafts"
     check_logprobs_close(
         outputs_0_lst=[
             (list(o.outputs[0].token_ids), o.outputs[0].text, o.outputs[0].logprobs)
