@@ -383,6 +383,23 @@ MODEL_CONFIGS: dict[str, VitCudagraphTestConfig] = {
             ),
         },
     ),
+    "glm_ocr": VitCudagraphTestConfig(
+        model="zai-org/GLM-OCR",
+        modalities=["image"],
+        image_prompt=(
+            "[gMASK]<sop><|user|>\n"
+            "<|begin_of_image|><|image|><|end_of_image|>"
+            "Text Recognition:<|assistant|>\n"
+        ),
+        marks=[pytest.mark.core_model],
+        vllm_runner_kwargs={
+            "load_format": "dummy",
+            "hf_overrides": partial(
+                dummy_hf_overrides,
+                model_arch="GlmOcrForConditionalGeneration",
+            ),
+        },
+    ),
     "deepseek_ocr": VitCudagraphTestConfig(
         model="deepseek-ai/DeepSeek-OCR",
         modalities=["image"],
