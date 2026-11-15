@@ -85,3 +85,17 @@ def test_sdpa_output_layout_without_cu_seqlens():
     output = vit_attn_wrappers.vit_torch_sdpa_wrapper(q, q, q)
 
     assert output.is_contiguous()
+
+
+@pytest.mark.skipif(not current_platform.is_cuda_alike(), reason="Requires GPU")
+def test_sdpa_with_cu_seqlens_rejects_cuda_graph_capture():
+    # Splitting by cu_seqlens reads them on the host, which capture forbids.
+    q = _noncontiguous_bshd(torch.device("cuda"))
+    cu_seqlens = torch.tensor([0, 2, 5], dtype=torch.int32, device="cuda")
+    vit_attn_wrappers.vit_torch_sdpa_wrapper(q, q, q, cu_seqlens=cu_seqlens)
+
+    with (
+        pytest.raises(RuntimeError, match="cannot be captured"),
+        torch.cuda.graph(torch.cuda.CUDAGraph()),
+    ):
+        vit_attn_wrappers.vit_torch_sdpa_wrapper(q, q, q, cu_seqlens=cu_seqlens)
