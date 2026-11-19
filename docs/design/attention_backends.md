@@ -64,8 +64,8 @@ the selected latent KV and applies the V projection afterward. Both use the
 indexer's sparse selection. Their floating-point projection order differs;
 changing the route is not a numerically exact substitution.
 
-The metadata builder selects the prefill route once. Decode tokens use MQA;
-a mixed batch can therefore use MQA for decode and masked MHA for prefill.
+The builder selects the prefill route once per metadata build. Decode tokens
+use MQA; a mixed batch can use MQA for decode and masked MHA for prefill.
 The common MQA executor accepts already-prepared queries, performs any ShardQ
 exchanges, calls the backend, and restores the token/head layout. Model entry
 points retain their query preparation, DCP merge and V projection.
@@ -89,13 +89,16 @@ route checks, and whether this step uses ShardQ. Reasons are:
 
 These describe attention's kernel-oriented row split; short extends can be
 classified as decode rows. Sequence lengths include cached context; query
-lengths count this step's tokens. `FlashMLA sparse kernels` additionally
-reports the prepared BF16 or FP8 mixed/separate strategy and the ShardQ
-strategy. A prepared strategy only runs when the step has MQA tokens.
-Messages describe metadata builds, including
-warmup; they are not per-layer kernel timings or request TTFT measurements.
+lengths count this step's tokens. `FlashMLA sparse config` reports the configured
+BF16 or FP8 mixed/separate strategy once per builder initialization. FP8 ShardQ
+uses its own mixed scheduler. A strategy only runs when the step has MQA tokens.
+Step messages describe metadata builds, including warmup; they are not per-layer
+kernel timings or request TTFT measurements.
 
-When MQA is already required, the builder skips masked MHA's context metadata.
+The builder checks capabilities and prefill-length thresholds before preparing
+masked MHA's context metadata, then checks whether its masks fit the workspace.
+An MQA decision from the earlier checks skips that context preparation.
+Reasons stay in the builder's log; execution metadata carries only the route.
 FlashMLA's FP8 gather metadata and HiSparse's host-staging plan remain separate
 and are still built when needed.
 

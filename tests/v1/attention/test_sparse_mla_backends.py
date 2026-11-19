@@ -431,27 +431,23 @@ def test_layer_takes_mha_for_mha_routes(route, uses_mha):
 @pytest.mark.parametrize(
     ("seq_len", "overrides", "expected"),
     [
-        (512, {}, _MASKED),
-        (512, {"workspace_numel": None}, _MQA),
-        (512, {"force_mqa": True}, _MQA),
-        (512, {"hisparse": True}, _MQA),
-        (512, {"dcp": 2}, _MQA),
-        (8192, {}, _MASKED),
-        (8192, {"force_mqa": True}, _MQA),
-        (8192, {"hisparse": True}, _MQA),
-        (8192, {"shardq": True}, _MQA),
-        (8192, {"dcp": 2}, _MQA),
-        (8192, {"context": True}, _MQA),
-        (8192, {"workspace_numel": None}, _MQA),
-        (8192, {"workspace_numel": 1}, _MQA),
-        (8193, {}, _MQA),
+        (512, {}, None),
+        (512, {"available": False}, "masked_mha_unavailable"),
+        (512, {"force_mqa": True}, "forced_mqa"),
+        (512, {"hisparse": True}, "hisparse"),
+        (512, {"dcp": 2}, "dcp"),
+        (8192, {}, None),
+        (8192, {"force_mqa": True}, "forced_mqa"),
+        (8192, {"hisparse": True}, "hisparse"),
+        (8192, {"shardq": True}, "shardq"),
+        (8192, {"dcp": 2}, "dcp"),
+        (8192, {"context": True}, "thresholds"),
+        (8192, {"available": False}, "masked_mha_unavailable"),
+        (8193, {}, "thresholds"),
     ],
 )
-def test_prefill_route(seq_len, overrides, expected):
+def test_prefill_mqa_reason(seq_len, overrides, expected):
     """Masked cases use GLM-5's FlashMLA TP1 thresholds: pure prefills up to 8K."""
-    workspace_numel = overrides.get(
-        "workspace_numel", math.prod(_topk_mask_shape(1, seq_len, seq_len))
-    )
     builder = object.__new__(SparseMLACommonMetadataBuilder)
     builder.vllm_config = SimpleNamespace(
         attention_config=SimpleNamespace(
@@ -461,12 +457,7 @@ def test_prefill_route(seq_len, overrides, expected):
         parallel_config=SimpleNamespace(tensor_parallel_size=1),
     )
     builder.dcp_world_size = overrides.get("dcp", 1)
-    builder.topk_mask_workspace = (
-        None
-        if workspace_numel is None
-        else torch.empty(workspace_numel, dtype=torch.int32)
-    )
-    builder._masked_mha_available = builder.topk_mask_workspace is not None
+    builder._masked_mha_available = overrides.get("available", True)
     builder._backend_name = "FLASHMLA_SPARSE"
     builder.mla_dims = MLADims(
         q_lora_rank=None,
@@ -475,37 +466,39 @@ def test_prefill_route(seq_len, overrides, expected):
         qk_rope_head_dim=64,
         v_head_dim=256,
     )
-    chunked_context = (
-        SimpleNamespace(chunks=[SimpleNamespace(max_seq_len=seq_len - 64)])
-        if overrides.get("context")
-        else None
-    )
-
-    route, _ = builder._prefill_route(
+    query_len = 64 if overrides.get("context") else seq_len
+    reason = builder._prefill_mqa_reason(
         prefill_max_seq_len=seq_len,
-        prefill_max_query_len=64 if chunked_context else seq_len,
-        prefill_query_lens_cpu=torch.tensor([64 if chunked_context else seq_len]),
-        chunked_context=chunked_context,
-        mqa_reason=builder._prefill_mqa_reason(
-            use_shardq=overrides.get("shardq", False)
-        ),
+        prefill_max_query_len=query_len,
+        prefill_seq_lens_cpu=torch.tensor([seq_len]),
+        prefill_query_lens_cpu=torch.tensor([query_len]),
+        use_shardq=overrides.get("shardq", False),
     )
+    assert reason == expected
 
-    assert route is expected
 
-
-@pytest.mark.parametrize(
-    "cache_dtype, expected", [("auto", _MASKED), ("fp8_ds_mla", _MQA)]
-)
+@pytest.mark.parametrize("cache_dtype", ["auto", "fp8_ds_mla"])
 @pytest.mark.parametrize("force_mqa", [False, True], ids=["automatic", "forced"])
-@pytest.mark.parametrize("with_context", [False, True], ids=["pure", "cached"])
+@pytest.mark.parametrize(
+    "seq_lens, query_lens, expected, with_context",
+    [
+        pytest.param([4096], [4096], _MASKED, False, id="pure"),
+        pytest.param([2048], [1536], _MASKED, True, id="cached"),
+        pytest.param([2048], [1535], _MQA, True, id="below_query_threshold"),
+        pytest.param([4097], [1536], _MQA, True, id="above_seq_threshold"),
+        pytest.param([4096, 2048], [4096, 1536], _MASKED, True, id="mixed_prefill"),
+        pytest.param([8192, 2048], [1, 1536], _MASKED, True, id="mixed_decode"),
+    ],
+)
 def test_masked_route_needs_layer_masked_mha(
     default_vllm_config,
     dist_init,
     workspace_init,
     cache_dtype,
-    expected,
     force_mqa,
+    seq_lens,
+    query_lens,
+    expected,
     with_context,
 ):
     """Only masked-MHA candidates need its context plan, even with global BF16."""
@@ -513,8 +506,8 @@ def test_masked_route_needs_layer_masked_mha(
         pytest.skip("masked MHA needs SM100 and FA4")
     vllm_config = create_vllm_config(
         model_name="deepseek-ai/DeepSeek-V3.2",
-        max_model_len=4096,
-        num_gpu_blocks=128,
+        max_model_len=8192,
+        num_gpu_blocks=256,
         block_size=64,
         dtype="bfloat16",
     )
@@ -544,9 +537,7 @@ def test_masked_route_needs_layer_masked_mha(
         metadata = builder.build(
             common_prefix_len=0,
             common_attn_metadata=create_common_attn_metadata(
-                BatchSpec(seq_lens=[2048], query_lens=[1536])
-                if with_context
-                else BatchSpec(seq_lens=[4096], query_lens=[4096]),
+                BatchSpec(seq_lens=seq_lens, query_lens=query_lens),
                 64,
                 torch.device(DEVICE_TYPE),
                 arange_block_indices=True,
@@ -554,17 +545,11 @@ def test_masked_route_needs_layer_masked_mha(
         )
     assert builder.topk_mask_workspace is not None
     assert metadata.prefill is not None
-    assert metadata.prefill.route is (_MQA if force_mqa else expected)
     if force_mqa or cache_dtype != "auto":
-        assert metadata.prefill.chunked_context is None
-    else:
-        assert (metadata.prefill.chunked_context is not None) == with_context
-    assert metadata.prefill.route_reason == (
-        "forced_mqa"
-        if force_mqa
-        else "masked_mha"
-        if cache_dtype == "auto"
-        else "masked_mha_unavailable"
+        expected = _MQA
+    assert metadata.prefill.route is expected
+    assert (metadata.prefill.chunked_context is not None) == (
+        expected is _MASKED and with_context
     )
 
 
@@ -2170,9 +2155,15 @@ def test_sparse_backend_prefill_correctness(
         common_prefix_len=0, common_attn_metadata=common_attn_metadata
     )
     assert metadata.prefill is not None
-    # These batches may be below the masked-MHA thresholds; run the masked
-    # path regardless.
+    # Exercise MHA directly, even outside dispatch thresholds. MQA routing
+    # skips this context plan, so prepare it explicitly for the kernel test.
     metadata.prefill.route = SparseMLAPrefillRoute.MASKED_MHA
+    metadata.prefill.chunked_context = builder._build_chunked_context_fields(
+        common_attn_metadata,
+        metadata.num_decodes,
+        metadata.num_prefills,
+        metadata.prefill.query_lens_cpu,
+    )
 
     mock_indexer = SimpleNamespace(topk_indices_buffer=sparse_indices)
 

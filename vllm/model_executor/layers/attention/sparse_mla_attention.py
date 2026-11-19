@@ -259,7 +259,6 @@ def _is_masked_mha_available(
 class SparseMLAPrefillMetadata(MLACommonPrefillMetadata):
     host_staging_plan: HiSparsePrefillStagingPlan | None = None
     route: SparseMLAPrefillRoute = field(kw_only=True)
-    route_reason: str = field(default="", kw_only=True)
 
 
 @dataclass(kw_only=True)
@@ -503,36 +502,42 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
         )
         prefill_max_seq_len = 0
         prefill: SparseMLAPrefillMetadata | None = None
+        mqa_reason: str | None = "decode_only"
         if num_prefills > 0:
             seq_lens_cpu = common_attn_metadata.seq_lens_cpu_upper_bound
             assert seq_lens_cpu is not None
-            prefill_max_seq_len = int(
-                seq_lens_cpu[num_decodes : num_decodes + num_prefills].max().item()
-            )
+            assert prefill_query_lens_cpu is not None
+            prefill_seq_lens_cpu = seq_lens_cpu[
+                num_decodes : num_decodes + num_prefills
+            ]
+            prefill_max_seq_len = int(prefill_seq_lens_cpu.max().item())
             block_table = common_attn_metadata.block_table_tensor[num_decodes:, ...]
-            mqa_reason = self._prefill_mqa_reason(use_shardq=shardq_split is not None)
+            mqa_reason = self._prefill_mqa_reason(
+                prefill_max_seq_len,
+                prefill_max_query_len,
+                prefill_seq_lens_cpu,
+                prefill_query_lens_cpu,
+                use_shardq=shardq_split is not None,
+            )
             chunked_context = None
             if mqa_reason is None:
-                # Only masked MHA consumes this context plan. FP8 MQA and
-                # HiSparse construct their own gather/staging metadata.
                 chunked_context = self._build_chunked_context_fields(
                     common_attn_metadata,
                     num_decodes,
                     num_prefills,
                     prefill_query_lens_cpu,
                 )
-            route, route_reason = self._prefill_route(
-                prefill_max_seq_len,
-                prefill_max_query_len,
-                prefill_query_lens_cpu,
-                chunked_context,
-                mqa_reason=mqa_reason,
+                if not self._topk_masks_fit(
+                    num_prefills, prefill_max_query_len, chunked_context
+                ):
+                    mqa_reason = "mask_workspace"
+            route = (
+                SparseMLAPrefillRoute.MASKED_MHA
+                if mqa_reason is None
+                else SparseMLAPrefillRoute.SPARSE_MQA
             )
             staging_plan = None
             if self.vllm_config.attention_config.hisparse_config is not None:
-                prefill_seq_lens_cpu = seq_lens_cpu[
-                    num_decodes : num_decodes + num_prefills
-                ]
                 staging_block_capacity = int(
                     (
                         (prefill_seq_lens_cpu + self.kv_cache_spec.block_size - 1)
@@ -556,7 +561,6 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
                 topk_mask_workspace=self.topk_mask_workspace,
                 host_staging_plan=staging_plan,
                 route=route,
-                route_reason=route_reason,
             )
 
         metadata = self.metadata_cls(  # type: ignore[call-arg]
@@ -587,7 +591,7 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             self.layer_names[0],
             self._backend_name,
             prefill.route.value if prefill is not None else "none",
-            prefill.route_reason if prefill is not None else "decode_only",
+            mqa_reason or "masked_mha",
             num_decode_tokens,
             metadata.num_actual_tokens - num_decode_tokens,
             prefill_max_query_len,
@@ -596,7 +600,15 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
         )
         return metadata
 
-    def _prefill_mqa_reason(self, *, use_shardq: bool) -> str | None:
+    def _prefill_mqa_reason(
+        self,
+        prefill_max_seq_len: int,
+        prefill_max_query_len: int,
+        prefill_seq_lens_cpu: torch.Tensor,
+        prefill_query_lens_cpu: torch.Tensor,
+        *,
+        use_shardq: bool,
+    ) -> str | None:
         """Rule out masked MHA before constructing its context metadata."""
         attention_config = self.vllm_config.attention_config
         if attention_config.sparse_mla_force_mqa:
@@ -609,19 +621,6 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             return "masked_mha_unavailable"
         if self.dcp_world_size > 1:
             return "dcp"
-        return None
-
-    def _prefill_route(
-        self,
-        prefill_max_seq_len: int,
-        prefill_max_query_len: int,
-        prefill_query_lens_cpu: torch.Tensor,
-        chunked_context: "MLACommonPrefillMetadata.ChunkedContextMetadata | None",
-        *,
-        mqa_reason: str | None,
-    ) -> tuple[SparseMLAPrefillRoute, str]:
-        if mqa_reason is not None:
-            return SparseMLAPrefillRoute.SPARSE_MQA, mqa_reason
         if not _use_masked_mha(
             backend_name=self._backend_name,
             tensor_parallel_size=(
@@ -631,14 +630,10 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             v_head_dim=self.mla_dims.v_head_dim,
             query_len=prefill_max_query_len,
             seq_len=prefill_max_seq_len,
-            has_context=chunked_context is not None,
+            has_context=bool((prefill_seq_lens_cpu > prefill_query_lens_cpu).any()),
         ):
-            return SparseMLAPrefillRoute.SPARSE_MQA, "thresholds"
-        if not self._topk_masks_fit(
-            len(prefill_query_lens_cpu), prefill_max_query_len, chunked_context
-        ):
-            return SparseMLAPrefillRoute.SPARSE_MQA, "mask_workspace"
-        return SparseMLAPrefillRoute.MASKED_MHA, "masked_mha"
+            return "thresholds"
+        return None
 
     def _topk_masks_fit(
         self,
