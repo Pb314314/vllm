@@ -104,7 +104,8 @@ For a performance investigation, use the existing
 `VLLM_CUSTOM_SCOPES_FOR_PROFILING=1` with PyTorch profiling, or
 `VLLM_NVTX_SCOPES_FOR_PROFILING=1` with Nsight Systems, to label
 `mla.masked_mha`, `mla.mqa`, `mla.mqa.decode`, `mla.shard_q`, and
-`mla.unshard_out`. The MQA spans include backend KV/index preparation;
+`mla.unshard_out`. Keep CPU activity enabled in PyTorch profiling to retain
+these annotations. The MQA spans include backend KV/index preparation;
 inspect their child GPU kernels to distinguish preparation from attention.
 These Python scopes execute during eager calls or graph capture, not on each
 full CUDA graph replay. Use graph-aware GPU profiling for replay timings.
