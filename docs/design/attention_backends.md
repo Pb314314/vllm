@@ -56,6 +56,68 @@ llm = LLM(
 
 ## Backend Selection Behavior
 
+### Sparse MLA prefill routing and debugging
+
+Sparse MLA has two prefill execution routes. `masked_mha` expands the latent
+KV and applies the indexer's top-k as an attention mask. `sparse_mqa` attends
+the selected latent KV and applies the V projection afterward. Both use the
+indexer's sparse selection. Their floating-point projection order differs;
+changing the route is not a numerically exact substitution.
+
+The builder selects the prefill route once per metadata build. Decode tokens
+use MQA; a mixed batch can use MQA for decode and masked MHA for prefill.
+The common MQA executor accepts already-prepared queries, performs any ShardQ
+exchanges, calls the backend, and restores the token/head layout. Model entry
+points retain their query preparation, DCP merge and V projection.
+
+Enable `VLLM_LOGGING_LEVEL=DEBUG` to inspect the actual metadata decisions.
+`Sparse MLA step` records the layer group, backend, prefill route, reason,
+decode/prefill token counts, the prefill query/sequence maxima used by the
+route checks, and whether this step uses ShardQ. Reasons are:
+
+| Reason | Meaning |
+| --- | --- |
+| `forced_mqa` | `attention_config.sparse_mla_force_mqa` is enabled. |
+| `hisparse` | The current HiSparse path requires MQA. |
+| `shardq` | This step's token-sharded queries require MQA. |
+| `masked_mha_unavailable` | Masked MHA is unavailable for the hardware, model dimensions, cache dtype or reserved mask workspace. |
+| `dcp` | Decode context parallelism requires MQA. |
+| `thresholds` | The prefill shape is outside the backend's masked-MHA thresholds. |
+| `mask_workspace` | The top-k masks would exceed the available workspace. |
+| `masked_mha` | The prefill passed the masked-MHA checks. |
+| `decode_only` | There are no prefill rows in this attention batch. |
+
+These describe attention's kernel-oriented row split; short extends can be
+classified as decode rows. Sequence lengths include cached context; query
+lengths count this step's tokens. `FlashMLA sparse config` reports the configured
+BF16 or FP8 mixed/separate strategy once per builder initialization. FP8 ShardQ
+uses its own mixed scheduler. A strategy only runs when the step has MQA tokens.
+Step messages describe metadata builds, including warmup; they are not per-layer
+kernel timings or request TTFT measurements.
+
+The builder checks capabilities and prefill-length thresholds before preparing
+masked MHA's context metadata, then checks whether its masks fit the workspace.
+An MQA decision from the earlier checks skips that context preparation.
+Reasons stay in the builder's log; execution metadata carries only the route.
+FlashMLA's FP8 gather metadata and HiSparse's host-staging plan remain separate
+and are still built when needed.
+
+For a performance investigation, use the existing
+[profiling controls](../contributing/profiling.md). Enable
+`VLLM_CUSTOM_SCOPES_FOR_PROFILING=1` with PyTorch profiling, or
+`VLLM_NVTX_SCOPES_FOR_PROFILING=1` with Nsight Systems, to label
+`mla.masked_mha`, `mla.mqa`, `mla.mqa.decode`, `mla.shard_q`, and
+`mla.unshard_out`. Keep CPU activity enabled in PyTorch profiling to retain
+these annotations. The MQA spans include backend KV/index preparation;
+inspect their child GPU kernels to distinguish preparation from attention.
+Query preparation, the indexer, DCP merging and MQA's V projection remain
+outside these spans. Include those stages when comparing total route cost.
+These Python scopes execute during eager calls or graph capture, not on each
+full CUDA graph replay. Use graph-aware GPU profiling for replay timings.
+Scopes and per-step debug logging are disabled by default and introduce no
+GPU synchronization. Compare routing, batch shapes and kernel times before
+attributing an overall latency change to a particular route.
+
 ### Triton/FlashAttention Composite
 
 On Hopper, `TRITON_FLASH_ATTN` is preferred for compatible multimodal-prefix

@@ -32,7 +32,7 @@ class SparseMLAPrefillRoute(Enum):
     - MASKED_MHA: MHA with the top-k as a per-query key mask.
     - SPARSE_MQA: the prefill tokens run in forward_mqa, like the decodes.
 
-    Set once per step by SparseMLACommonMetadataBuilder._prefill_route;
+    Set once per step by SparseMLACommonMetadataBuilder.build;
     readers use it as is instead of re-deriving it.
     """
 

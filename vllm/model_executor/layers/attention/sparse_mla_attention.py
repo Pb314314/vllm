@@ -271,7 +271,6 @@ class SparseMLACommonMetadata(MLACommonMetadata[MLACommonDecodeMetadata]):
     num_decodes: int = 0
     num_prefills: int = 0
     num_decode_tokens: int = 0
-    decode_max_query_len: int = 0
     prefill_max_seq_len: int = 0
     prefill: SparseMLAPrefillMetadata | None = None
     cp_kv_cache_interleave_size: int = 1
@@ -496,18 +495,6 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             prefill_max_query_len,
             prefill_query_lens_cpu,
         ) = self._build_prefill_fields(common_attn_metadata, num_decodes, num_prefills)
-        decode_max_query_len = 0
-        if num_decodes:
-            if common_attn_metadata.max_logits_per_req is not None:
-                decode_max_query_len = common_attn_metadata.max_logits_per_req
-            elif num_prefills == 0:
-                decode_max_query_len = common_attn_metadata.max_query_len
-            else:
-                decode_query_lens_cpu = torch.diff(
-                    common_attn_metadata.query_start_loc_cpu[: num_decodes + 1]
-                )
-                decode_max_query_len = int(decode_query_lens_cpu.max().item())
-
         shardq_split = (
             build_shardq_split(common_attn_metadata, self.vllm_config)
             if self.use_shardq
@@ -515,24 +502,42 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
         )
         prefill_max_seq_len = 0
         prefill: SparseMLAPrefillMetadata | None = None
+        mqa_reason: str | None = "decode_only"
         if num_prefills > 0:
             seq_lens_cpu = common_attn_metadata.seq_lens_cpu_upper_bound
             assert seq_lens_cpu is not None
-            prefill_max_seq_len = int(
-                seq_lens_cpu[num_decodes : num_decodes + num_prefills].max().item()
-            )
+            assert prefill_query_lens_cpu is not None
+            prefill_seq_lens_cpu = seq_lens_cpu[
+                num_decodes : num_decodes + num_prefills
+            ]
+            prefill_max_seq_len = int(prefill_seq_lens_cpu.max().item())
             block_table = common_attn_metadata.block_table_tensor[num_decodes:, ...]
-            chunked_context = self._build_chunked_context_fields(
-                common_attn_metadata,
-                num_decodes,
-                num_prefills,
+            mqa_reason = self._prefill_mqa_reason(
+                prefill_max_seq_len,
+                prefill_max_query_len,
+                prefill_seq_lens_cpu,
                 prefill_query_lens_cpu,
+                use_shardq=shardq_split is not None,
+            )
+            chunked_context = None
+            if mqa_reason is None:
+                chunked_context = self._build_chunked_context_fields(
+                    common_attn_metadata,
+                    num_decodes,
+                    num_prefills,
+                    prefill_query_lens_cpu,
+                )
+                if not self._topk_masks_fit(
+                    num_prefills, prefill_max_query_len, chunked_context
+                ):
+                    mqa_reason = "mask_workspace"
+            route = (
+                SparseMLAPrefillRoute.MASKED_MHA
+                if mqa_reason is None
+                else SparseMLAPrefillRoute.SPARSE_MQA
             )
             staging_plan = None
             if self.vllm_config.attention_config.hisparse_config is not None:
-                prefill_seq_lens_cpu = seq_lens_cpu[
-                    num_decodes : num_decodes + num_prefills
-                ]
                 staging_block_capacity = int(
                     (
                         (prefill_seq_lens_cpu + self.kv_cache_spec.block_size - 1)
@@ -545,8 +550,6 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
                     self.kv_cache_spec.block_size,
                     staging_block_capacity,
                 )
-                if chunked_context is not None:
-                    block_table = staging_plan.block_table
             prefill = SparseMLAPrefillMetadata(
                 block_table=block_table,
                 query_start_loc=prefill_query_start_loc,
@@ -557,13 +560,7 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
                 output_dtype=self.model_config.dtype,
                 topk_mask_workspace=self.topk_mask_workspace,
                 host_staging_plan=staging_plan,
-                route=self._prefill_route(
-                    prefill_max_seq_len,
-                    prefill_max_query_len,
-                    prefill_query_lens_cpu,
-                    chunked_context,
-                    use_shardq=shardq_split is not None,
-                ),
+                route=route,
             )
 
         metadata = self.metadata_cls(  # type: ignore[call-arg]
@@ -581,52 +578,62 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             num_decodes=num_decodes,
             num_prefills=num_prefills,
             num_decode_tokens=num_decode_tokens,
-            decode_max_query_len=decode_max_query_len,
             prefill_max_seq_len=prefill_max_seq_len,
             prefill=prefill,
             cp_kv_cache_interleave_size=self.cp_kv_cache_interleave_size,
         )
         if shardq_split is not None:
             metadata.shardq = build_shardq_metadata(shardq_split, metadata, self.device)
+        logger.debug(
+            "Sparse MLA step: layer=%s backend=%s prefill_route=%s reason=%s "
+            "decode_tokens=%d prefill_tokens=%d prefill_max_query_len=%d "
+            "prefill_max_seq_len=%d shardq=%s",
+            self.layer_names[0],
+            self._backend_name,
+            prefill.route.value if prefill is not None else "none",
+            mqa_reason or "masked_mha",
+            num_decode_tokens,
+            metadata.num_actual_tokens - num_decode_tokens,
+            prefill_max_query_len,
+            prefill_max_seq_len,
+            shardq_split is not None,
+        )
         return metadata
 
-    def _prefill_route(
+    def _prefill_mqa_reason(
         self,
         prefill_max_seq_len: int,
         prefill_max_query_len: int,
+        prefill_seq_lens_cpu: torch.Tensor,
         prefill_query_lens_cpu: torch.Tensor,
-        chunked_context: "MLACommonPrefillMetadata.ChunkedContextMetadata | None",
+        *,
         use_shardq: bool,
-    ) -> SparseMLAPrefillRoute:
+    ) -> str | None:
+        """Rule out masked MHA before constructing its context metadata."""
         attention_config = self.vllm_config.attention_config
-        # ShardQ's top-k are compact per rank, so its prefills run in forward_mqa.
-        if (
-            attention_config.sparse_mla_force_mqa
-            or attention_config.hisparse_config is not None
-            or use_shardq
+        if attention_config.sparse_mla_force_mqa:
+            return "forced_mqa"
+        if attention_config.hisparse_config is not None:
+            return "hisparse"
+        if use_shardq:
+            return "shardq"
+        if not self._masked_mha_available:
+            return "masked_mha_unavailable"
+        if self.dcp_world_size > 1:
+            return "dcp"
+        if not _use_masked_mha(
+            backend_name=self._backend_name,
+            tensor_parallel_size=(
+                self.vllm_config.parallel_config.tensor_parallel_size
+            ),
+            qk_head_dim=self.mla_dims.qk_nope_head_dim + self.mla_dims.qk_rope_head_dim,
+            v_head_dim=self.mla_dims.v_head_dim,
+            query_len=prefill_max_query_len,
+            seq_len=prefill_max_seq_len,
+            has_context=bool((prefill_seq_lens_cpu > prefill_query_lens_cpu).any()),
         ):
-            return SparseMLAPrefillRoute.SPARSE_MQA
-        if (
-            self._masked_mha_available
-            and self.dcp_world_size <= 1
-            and _use_masked_mha(
-                backend_name=self._backend_name,
-                tensor_parallel_size=(
-                    self.vllm_config.parallel_config.tensor_parallel_size
-                ),
-                qk_head_dim=self.mla_dims.qk_nope_head_dim
-                + self.mla_dims.qk_rope_head_dim,
-                v_head_dim=self.mla_dims.v_head_dim,
-                query_len=prefill_max_query_len,
-                seq_len=prefill_max_seq_len,
-                has_context=chunked_context is not None,
-            )
-            and self._topk_masks_fit(
-                len(prefill_query_lens_cpu), prefill_max_query_len, chunked_context
-            )
-        ):
-            return SparseMLAPrefillRoute.MASKED_MHA
-        return SparseMLAPrefillRoute.SPARSE_MQA
+            return "thresholds"
+        return None
 
     def _topk_masks_fit(
         self,
@@ -852,7 +859,7 @@ class SharedTopkIndicesBuffer:
 
 
 class SparseMLACommonImpl(MLACommonBaseImpl[T], SharedTopkIndicesBuffer, Generic[T]):
-    """Sparse MLA base with dense and masked-MHA prefill paths."""
+    """Sparse MLA base with sparse-MQA and masked-MHA execution paths."""
 
     is_sparse = True
     # Reuse the index group's top-k conversion only for uniform decode batches

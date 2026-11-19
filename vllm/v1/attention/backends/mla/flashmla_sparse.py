@@ -496,6 +496,17 @@ class FlashMLASparseMetadataBuilder(
                     f"{gathered_padded_heads})"
                 )
 
+        logger.debug(
+            "FlashMLA sparse config: layer=%s configured_kv_dtype=%s mqa_strategy=%s",
+            layer_names[0],
+            cache_config.cache_dtype,
+            "bf16"
+            if not self.use_fp8_kv_cache
+            else "fp8_mixed"
+            if self.fp8_use_mixed_batch
+            else "fp8_separate",
+        )
+
     def _build_fp8_mixed_decode_prefill(
         self,
     ) -> FlashMLASparseMetadata.FP8KernelMetadata:

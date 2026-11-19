@@ -323,6 +323,7 @@ from vllm.v1.kv_cache_interface import (
     get_kv_quant_mode,
     is_quantized_kv_cache,
 )
+from vllm.v1.utils import record_function_or_nullcontext
 
 if TYPE_CHECKING:
     from vllm.v1.attention.backends.mla.index_group import (
@@ -1141,16 +1142,19 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                 mha_output = output
                 mha_output_scale = None
 
-            self.impl.forward_mha(  # type: ignore[attr-defined]
-                q[num_mqa_tokens:],
-                k_c_normed[num_mqa_tokens:],
-                k_pe[num_mqa_tokens:],
-                kv_cache,
-                attn_metadata,
-                self._k_scale,
-                output=mha_output[num_mqa_tokens:num_actual_toks],
-                output_scale=mha_output_scale,
-            )
+            with record_function_or_nullcontext(
+                "mla.masked_mha" if self.impl.is_sparse else "mla.mha"
+            ):
+                self.impl.forward_mha(  # type: ignore[attr-defined]
+                    q[num_mqa_tokens:],
+                    k_c_normed[num_mqa_tokens:],
+                    k_pe[num_mqa_tokens:],
+                    kv_cache,
+                    attn_metadata,
+                    self._k_scale,
+                    output=mha_output[num_mqa_tokens:num_actual_toks],
+                    output_scale=mha_output_scale,
+                )
 
         if num_mqa_tokens > 0:
             mqa_output_slice = output[:num_mqa_tokens]
@@ -1166,24 +1170,7 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                     qrep_decode=False,
                     fused_q_heads=self._fused_decode_query_heads(attn_metadata),
                 )
-            shardq = getattr(attn_metadata, "shardq", None)
-            mqa_metadata = attn_metadata
-            if shardq is not None:
-                decode_q, mqa_q = shard_q(mqa_q, shardq)
-                decode_out = None
-                if decode_q.shape[0]:
-                    # Decode tokens attend head-sharded.
-                    decode_out, _ = self.impl.forward_mqa(  # type: ignore[attr-defined]
-                        decode_q, kv_cache, attn_metadata, self
-                    )
-                mqa_metadata = shardq.attn_metadata
-
-            # call decode attn
-            if not self.impl.is_sparse:
-                assert attn_metadata.decode is not None
-            attn_out, lse = self.impl.forward_mqa(mqa_q, kv_cache, mqa_metadata, self)  # type: ignore[attr-defined]
-            if shardq is not None:
-                attn_out = unshard_out(attn_out, shardq, decode_out)
+            attn_out, lse = self._forward_mqa(mqa_q, kv_cache, attn_metadata)
 
             # correct dcp attn_out with lse.
             if self.impl.dcp_world_size > 1:
@@ -1448,6 +1435,40 @@ class MLAAttention(nn.Module, AttentionLayerBase):
                     assert self.dcp_manager.query_gather is not None
                     mqa_q = self.dcp_manager.query_gather(mqa_q)
         return mqa_q
+
+    def _forward_mqa(
+        self,
+        q: torch.Tensor | tuple[torch.Tensor, torch.Tensor],
+        kv_cache: torch.Tensor,
+        attn_metadata: "MLACommonMetadata",
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """Run prepared queries and restore their token/head layout.
+
+        The caller owns query projection, DCP merging and V projection.
+        ShardQ leaves decode rows head-sharded and exchanges prefill rows.
+        """
+        if not self.impl.is_sparse:
+            assert attn_metadata.decode is not None
+        shardq = getattr(attn_metadata, "shardq", None)
+        mqa_metadata = attn_metadata
+        decode_out = None
+        if shardq is not None:
+            with record_function_or_nullcontext("mla.shard_q"):
+                decode_q, q = shard_q(q, shardq)
+            if decode_q.shape[0]:
+                with record_function_or_nullcontext("mla.mqa.decode"):
+                    decode_out, _ = self.impl.forward_mqa(  # type: ignore[attr-defined]
+                        decode_q, kv_cache, attn_metadata, self
+                    )
+            mqa_metadata = shardq.attn_metadata
+        with record_function_or_nullcontext("mla.mqa"):
+            attn_out, lse = self.impl.forward_mqa(  # type: ignore[attr-defined]
+                q, kv_cache, mqa_metadata, self
+            )
+        if shardq is not None:
+            with record_function_or_nullcontext("mla.unshard_out"):
+                attn_out = unshard_out(attn_out, shardq, decode_out)
+        return attn_out, lse
 
     def _use_sparse_mha(self, attn_metadata: "MLACommonMetadata") -> bool:
         prefill = attn_metadata.prefill
