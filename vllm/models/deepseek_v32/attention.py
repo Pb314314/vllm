@@ -43,7 +43,6 @@ from vllm.v1.attention.ops.pcp import (
     finalize_mla_pcp_decode,
     maybe_gather_mla_latent_cache_inputs,
 )
-from vllm.v1.attention.ops.shardq import shard_q, unshard_out
 from vllm.v1.kv_cache_interface import is_quantized_kv_cache
 
 if TYPE_CHECKING:
@@ -593,8 +592,6 @@ class DeepseekV32Attention(MLAAttention):
         else:
             mqa_q_arg = (ql_nope[:num_actual], mqa_q[:num_actual])
 
-        shardq = getattr(attn_metadata, "shardq", None)
-        mqa_metadata = attn_metadata
         if self.use_pcp and self.impl.dcp_world_size > self.impl.pcp_world_size:
             if isinstance(mqa_q_arg, tuple):
                 mqa_q_arg = torch.cat(mqa_q_arg, dim=-1)
@@ -605,20 +602,7 @@ class DeepseekV32Attention(MLAAttention):
                 mqa_q_arg = torch.cat(mqa_q_arg, dim=-1)
             assert self.dcp_manager.query_gather is not None
             mqa_q_arg = self.dcp_manager.query_gather(mqa_q_arg)
-        if shardq is not None:
-            decode_q, mqa_q_arg = shard_q(mqa_q_arg, shardq)
-            decode_out = None
-            if decode_q.shape[0]:
-                # Decode tokens attend head-sharded.
-                decode_out, _ = self.impl.forward_mqa(  # type: ignore[attr-defined]
-                    decode_q, kv_cache, attn_metadata, self
-                )
-            mqa_metadata = shardq.attn_metadata
-        attn_out, lse = self.impl.forward_mqa(  # type: ignore[attr-defined]
-            mqa_q_arg, kv_cache, mqa_metadata, self
-        )
-        if shardq is not None:
-            attn_out = unshard_out(attn_out, shardq, decode_out)
+        attn_out, lse = self._forward_mqa(mqa_q_arg, kv_cache, attn_metadata)
 
         if self.impl.dcp_world_size > 1:
             assert lse is not None and self.dcp_manager is not None

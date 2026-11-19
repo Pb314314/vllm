@@ -481,12 +481,14 @@ def test_prefill_route(seq_len, overrides, expected):
         else None
     )
 
-    route = builder._prefill_route(
+    route, _ = builder._prefill_route(
         prefill_max_seq_len=seq_len,
         prefill_max_query_len=64 if chunked_context else seq_len,
         prefill_query_lens_cpu=torch.tensor([64 if chunked_context else seq_len]),
         chunked_context=chunked_context,
-        use_shardq=overrides.get("shardq", False),
+        mqa_reason=builder._prefill_mqa_reason(
+            use_shardq=overrides.get("shardq", False)
+        ),
     )
 
     assert route is expected
@@ -495,10 +497,18 @@ def test_prefill_route(seq_len, overrides, expected):
 @pytest.mark.parametrize(
     "cache_dtype, expected", [("auto", _MASKED), ("fp8_ds_mla", _MQA)]
 )
+@pytest.mark.parametrize("force_mqa", [False, True], ids=["automatic", "forced"])
+@pytest.mark.parametrize("with_context", [False, True], ids=["pure", "cached"])
 def test_masked_route_needs_layer_masked_mha(
-    default_vllm_config, dist_init, workspace_init, cache_dtype, expected
+    default_vllm_config,
+    dist_init,
+    workspace_init,
+    cache_dtype,
+    expected,
+    force_mqa,
+    with_context,
 ):
-    """A quantized layer cache rules out masked MHA despite the global workspace."""
+    """Only masked-MHA candidates need its context plan, even with global BF16."""
     if not _is_masked_mha_available(128, 512, 128, 64, 128, "auto"):
         pytest.skip("masked MHA needs SM100 and FA4")
     vllm_config = create_vllm_config(
@@ -508,6 +518,7 @@ def test_masked_route_needs_layer_masked_mha(
         block_size=64,
         dtype="bfloat16",
     )
+    vllm_config.attention_config.sparse_mla_force_mqa = force_mqa
     with set_current_vllm_config(vllm_config), torch.device(DEVICE_TYPE):
         layer = mla_attention.MLAAttention(
             num_heads=128,
@@ -533,7 +544,9 @@ def test_masked_route_needs_layer_masked_mha(
         metadata = builder.build(
             common_prefix_len=0,
             common_attn_metadata=create_common_attn_metadata(
-                BatchSpec(seq_lens=[4096], query_lens=[4096]),
+                BatchSpec(seq_lens=[2048], query_lens=[1536])
+                if with_context
+                else BatchSpec(seq_lens=[4096], query_lens=[4096]),
                 64,
                 torch.device(DEVICE_TYPE),
                 arange_block_indices=True,
@@ -541,7 +554,18 @@ def test_masked_route_needs_layer_masked_mha(
         )
     assert builder.topk_mask_workspace is not None
     assert metadata.prefill is not None
-    assert metadata.prefill.route is expected
+    assert metadata.prefill.route is (_MQA if force_mqa else expected)
+    if force_mqa or cache_dtype != "auto":
+        assert metadata.prefill.chunked_context is None
+    else:
+        assert (metadata.prefill.chunked_context is not None) == with_context
+    assert metadata.prefill.route_reason == (
+        "forced_mqa"
+        if force_mqa
+        else "masked_mha"
+        if cache_dtype == "auto"
+        else "masked_mha_unavailable"
+    )
 
 
 def test_unified_mla_prepares_batch_without_slot_mapping(monkeypatch):
