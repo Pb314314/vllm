@@ -11,8 +11,9 @@ from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
 from vllm.v1.core.kv_cache_utils import KVCacheBlock
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.core.single_type_kv_cache_manager import FullAttentionManager
 from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, FinishReason
-from vllm.v1.kv_cache_interface import FullAttentionSpec
+from vllm.v1.kv_cache_interface import AttentionSpec
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.token_buffer import extend_from_slice
@@ -118,7 +119,8 @@ class SessionScheduler(Scheduler):
             or parallel.decode_context_parallel_size != 1
             or parallel.prefill_context_parallel_size != 1
             or any(
-                type(group.kv_cache_spec) is not FullAttentionSpec
+                group.manager_cls is not FullAttentionManager
+                or any(type(spec) is not AttentionSpec for spec in group.distinct_specs)
                 for group in self.kv_cache_config.kv_cache_groups
             )
             or (
