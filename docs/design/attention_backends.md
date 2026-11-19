@@ -72,8 +72,8 @@ points retain their query preparation, DCP merge and V projection.
 
 Enable `VLLM_LOGGING_LEVEL=DEBUG` to inspect the actual metadata decisions.
 `Sparse MLA step` records the layer group, backend, prefill route, reason,
-decode/prefill token counts, maximum query/sequence lengths, and whether this
-step uses ShardQ. Reasons are:
+decode/prefill token counts, the prefill query/sequence maxima used by the
+route checks, and whether this step uses ShardQ. Reasons are:
 
 | Reason | Meaning |
 | --- | --- |

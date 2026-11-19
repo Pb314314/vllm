@@ -582,16 +582,16 @@ class SparseMLACommonMetadataBuilder(AttentionMetadataBuilder[T]):
             metadata.shardq = build_shardq_metadata(shardq_split, metadata, self.device)
         logger.debug(
             "Sparse MLA step: layer=%s backend=%s prefill_route=%s reason=%s "
-            "decode_tokens=%d prefill_tokens=%d max_query_len=%d "
-            "max_seq_len=%d shardq=%s",
+            "decode_tokens=%d prefill_tokens=%d prefill_max_query_len=%d "
+            "prefill_max_seq_len=%d shardq=%s",
             self.layer_names[0],
             self._backend_name,
             prefill.route.value if prefill is not None else "none",
             prefill.route_reason if prefill is not None else "decode_only",
             num_decode_tokens,
             metadata.num_actual_tokens - num_decode_tokens,
-            metadata.max_query_len,
-            metadata.max_seq_len,
+            prefill_max_query_len,
+            prefill_max_seq_len,
             shardq_split is not None,
         )
         return metadata
