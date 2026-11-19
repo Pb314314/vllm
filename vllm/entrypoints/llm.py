@@ -839,6 +839,10 @@ class LLM(
     def stop_profile(self) -> None:
         self.llm_engine.stop_profile()
 
+    def close_session(self, session_id: str) -> bool:
+        """Release an idle session's KV and token history (SessionScheduler only)."""
+        return self.llm_engine.engine_core.close_session(session_id)
+
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
     ) -> bool:

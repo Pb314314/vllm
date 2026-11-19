@@ -141,6 +141,12 @@ class InputProcessor:
         """
         watermarking: bool | None = None
         if isinstance(params, SamplingParams):
+            if (
+                params.extra_args
+                and "session_cache" in params.extra_args
+                and params.n != 1
+            ):
+                raise VLLMValidationError("Session turns require n=1")
             supported_generation_tasks = [
                 task for task in supported_tasks if task in GENERATION_TASKS
             ]

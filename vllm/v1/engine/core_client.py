@@ -103,6 +103,9 @@ class EngineCoreClient(ABC):
     * AsyncMPClient: ZMQ + background proc EngineCore w/ asyncio (for AsyncLLM)
     """
 
+    def close_session(self, session_id: str) -> bool:
+        raise NotImplementedError
+
     def get_kv_event_sources(self) -> dict[int, KVEventsConfig]:
         """KV-event publisher config of each ready engine, keyed by DP rank."""
         return {}
@@ -420,6 +423,9 @@ class InprocClient(EngineCoreClient):
         # otherwise. The callback must not reference self, or self would stay
         # reachable and the finalizer would never run.
         self._finalizer = weakref.finalize(self, self.engine_core.shutdown)
+
+    def close_session(self, session_id: str) -> bool:
+        return self.engine_core.close_session(session_id)
 
     def get_output(self) -> EngineCoreOutputs:
         outputs, model_executed = self.engine_core.step_fn()
@@ -1120,6 +1126,9 @@ class SyncMPClient(MPClient):
 
     def reset_mm_cache(self) -> None:
         self.call_utility("reset_mm_cache")
+
+    def close_session(self, session_id: str) -> bool:
+        return self.call_utility("close_session", session_id)
 
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False

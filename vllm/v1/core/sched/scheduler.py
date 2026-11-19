@@ -93,6 +93,8 @@ logger = init_logger(__name__)
 
 
 class Scheduler(SchedulerInterface):
+    kv_cache_manager_cls: type[KVCacheManager] = KVCacheManager
+
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -365,7 +367,7 @@ class Scheduler(SchedulerInterface):
         if hash_block_size is None:
             hash_block_size = block_size
         self.hash_block_size = hash_block_size
-        self.kv_cache_manager = KVCacheManager(
+        self.kv_cache_manager = self.kv_cache_manager_cls(
             kv_cache_config=kv_cache_config,
             max_model_len=self.max_model_len,
             max_in_flight_tokens=vllm_config.max_in_flight_tokens,

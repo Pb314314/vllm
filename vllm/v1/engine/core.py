@@ -1255,6 +1255,9 @@ class EngineCore:
     ) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args, kwargs)
 
+    def close_session(self, session_id: str) -> bool:
+        return self.scheduler.close_session(session_id)
+
     def set_weight_version(self, weight_version: str) -> None:
         self._weight_version = weight_version
 

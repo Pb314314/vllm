@@ -58,6 +58,7 @@ from vllm.v1.core.sched.diffusion_scheduler import (
 from vllm.v1.core.sched.interface import PauseState
 from vllm.v1.core.sched.output import CachedRequestData, SchedulerOutput
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.core.sched.session_scheduler import SessionScheduler
 from vllm.v1.core.single_type_kv_cache_manager import (
     CrossAttentionManager,
     MambaManager,
@@ -9364,3 +9365,178 @@ def test_cpu_encoder_input_updates_preserve_shm_handles():
     )
     assert scheduler.schedule().encoder_input_updates == {request.request_id: {1: None}}
     assert request.mm_features[0].data is handle
+
+
+def _session_turn(req_id: str, session_id: str, version: int, tokens: list[int]):
+    return Request(
+        request_id=req_id,
+        prompt_token_ids=tokens,
+        sampling_params=SamplingParams(
+            max_tokens=1,
+            ignore_eos=True,
+            extra_args={"session_cache": {"id": session_id, "version": version}},
+        ),
+        pooling_params=None,
+    )
+
+
+def test_session_resume_reuses_partial_tail_without_prefix_matching():
+    """A new turn computes only the unsaved sampled token and its new input."""
+    scheduler = create_scheduler(scheduler_cls=SessionScheduler, block_size=16)
+    first = _session_turn("first", "agent", 0, [1] * 19)
+    scheduler.add_request(first)
+    output = scheduler.schedule()
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
+    )
+    free_after_first = scheduler.kv_cache_manager.block_pool.get_num_free_blocks()
+    assert scheduler.get_num_unfinished_requests() == 0
+    assert not first.block_hashes
+
+    second = _session_turn("second", "agent", 1, [3, 4])
+    scheduler.add_request(second)
+    resumed = scheduler.schedule()
+    assert resumed.num_scheduled_tokens == {"second": 3}
+    assert resumed.scheduled_new_reqs[0].num_computed_tokens == 19
+    assert list(second.prompt_token_ids) == [1] * 19 + [2, 3, 4]
+    assert (
+        scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == free_after_first
+    )
+    assert not second.block_hashes
+    scheduler.update_from_output(
+        resumed, ModelRunnerOutput(req_ids=["second"], sampled_token_ids=[[5]])
+    )
+    assert scheduler.close_session("agent")
+    assert not scheduler.close_session("agent")
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
+
+
+def test_session_eviction_replays_history_and_preserves_other_sessions():
+    """Memory pressure evicts a whole idle session; its next turn can recompute."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler, num_blocks=5, block_size=16
+    )
+    for req_id in ("a", "b", "c"):
+        scheduler.add_request(_session_turn(req_id, req_id, 0, [1] * 19))
+        output = scheduler.schedule()
+        assert output.num_scheduled_tokens == {req_id: 19}
+        scheduler.update_from_output(
+            output, ModelRunnerOutput(req_ids=[req_id], sampled_token_ids=[[2]])
+        )
+    assert not scheduler.sessions["a"].blocks
+    assert scheduler.sessions["b"].blocks
+    assert scheduler.sessions["c"].blocks
+    assert scheduler.kv_cache_manager.num_session_evictions == 1
+    scheduler.add_request(_session_turn("a2", "a", 1, [3]))
+    output = scheduler.schedule()
+    assert output.num_scheduled_tokens == {"a2": 21}
+    assert list(scheduler.requests["a2"].prompt_token_ids) == [1] * 19 + [2, 3]
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["a2"], sampled_token_ids=[[4]])
+    )
+    for session_id in ("a", "b", "c"):
+        assert scheduler.close_session(session_id)
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 4
+
+
+def test_session_rejects_concurrent_and_stale_turns_without_mutation():
+    scheduler = create_scheduler(scheduler_cls=SessionScheduler)
+    scheduler.add_request(_session_turn("first", "agent", 0, [1] * 19))
+    scheduler.add_request(_session_turn("concurrent", "agent", 0, [9]))
+    with pytest.raises(ValueError, match="active turn"):
+        scheduler.close_session("agent")
+    output = scheduler.schedule()
+    result = scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
+    )
+    error = next(o for o in result[0].outputs if o.request_id == "concurrent")
+    assert error.finish_reason == FinishReason.ERROR
+    assert "active turn" in error.error.message
+    scheduler.add_request(_session_turn("stale", "agent", 0, [9]))
+    output = scheduler.schedule()
+    assert not output.num_scheduled_tokens
+    result = scheduler.update_from_output(output, ModelRunnerOutput(req_ids=[]))
+    assert result[0].outputs[0].finish_reason == FinishReason.ERROR
+    assert "version" in result[0].outputs[0].error.message
+    scheduler.add_request(_session_turn("valid", "agent", 1, [3]))
+    assert scheduler.schedule().num_scheduled_tokens == {"valid": 2}
+    assert list(scheduler.requests["valid"].prompt_token_ids) == [1] * 19 + [2, 3]
+
+
+def test_session_reset_invalidates_kv_and_abort_ends_logical_session():
+    scheduler = create_scheduler(scheduler_cls=SessionScheduler)
+    scheduler.add_request(_session_turn("first", "agent", 0, [1] * 19))
+    output = scheduler.schedule()
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
+    )
+    assert scheduler.reset_prefix_cache()
+    scheduler.add_request(_session_turn("second", "agent", 1, [3]))
+    assert scheduler.schedule().num_scheduled_tokens == {"second": 21}
+    scheduler.finish_requests("second", RequestStatus.FINISHED_ABORTED)
+    assert not scheduler.close_session("agent")
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
+
+
+def test_session_queued_turn_does_not_pin_idle_kv():
+    """Queued continuations remain eviction candidates until they are admitted."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        max_num_seqs=1,
+        num_blocks=5,
+        block_size=16,
+    )
+    for session_id in ("a", "b"):
+        scheduler.add_request(_session_turn(session_id, session_id, 0, [1] * 19))
+        scheduled = scheduler.schedule()
+        scheduler.update_from_output(
+            scheduled, ModelRunnerOutput(req_ids=[session_id], sampled_token_ids=[[2]])
+        )
+    scheduler.add_request(_session_turn("new", "new", 0, [3] * 19))
+    scheduler.add_request(_session_turn("a2", "a", 1, [4]))
+    scheduled = scheduler.schedule()
+    assert scheduled.num_scheduled_tokens == {"new": 19}
+    assert not scheduler.sessions["a"].blocks
+    scheduler.update_from_output(
+        scheduled, ModelRunnerOutput(req_ids=["new"], sampled_token_ids=[[5]])
+    )
+    assert scheduler.schedule().num_scheduled_tokens == {"a2": 21}
+
+
+def test_session_speculative_rejection_retains_only_committed_kv():
+    scheduler = create_scheduler(
+        model="Qwen/Qwen3-0.6B",
+        scheduler_cls=SessionScheduler,
+        num_speculative_tokens=3,
+        speculative_method="ngram",
+    )
+    first = Request(
+        request_id="first",
+        prompt_token_ids=[1] * 19,
+        sampling_params=SamplingParams(
+            max_tokens=3,
+            ignore_eos=True,
+            extra_args={"session_cache": {"id": "agent", "version": 0}},
+        ),
+        pooling_params=None,
+    )
+    scheduler.add_request(first)
+    scheduler.update_from_output(
+        scheduler.schedule(),
+        ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]]),
+    )
+    scheduler.update_draft_token_ids(DraftTokenIds(["first"], [[3, 8, 9]]))
+    scheduled = scheduler.schedule()
+    assert scheduled.scheduled_spec_decode_tokens == {"first": [3, 8, 9]}
+    scheduler.update_from_output(
+        scheduled, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[3, 4]])
+    )
+    scheduler.add_request(_session_turn("second", "agent", 1, [5]))
+    scheduled = scheduler.schedule()
+    assert scheduled.scheduled_new_reqs[0].num_computed_tokens == 21
+    assert list(scheduler.requests["second"].prompt_token_ids) == [1] * 19 + [
+        2,
+        3,
+        4,
+        5,
+    ]

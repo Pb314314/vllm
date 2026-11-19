@@ -36,6 +36,9 @@ class PauseState(enum.IntEnum):
 
 
 class SchedulerInterface(ABC):
+    def close_session(self, session_id: str) -> bool:
+        raise ValueError("This scheduler does not manage explicit cache sessions")
+
     @abstractmethod
     def __init__(
         self,

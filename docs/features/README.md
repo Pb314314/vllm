@@ -1,5 +1,9 @@
 # Features
 
+## Experimental Session Cache
+
+- [Session-only multi-turn cache](automatic_prefix_caching.md#experimental-session-only-cache)
+
 ## KV Cache Offloading
 
 - [UMBPStoreConnector](umbp_store_connector_usage.md)

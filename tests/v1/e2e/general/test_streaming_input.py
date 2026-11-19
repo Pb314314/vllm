@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator
 import pytest
 import pytest_asyncio
 
+from tests.utils import create_new_process_for_each_test
 from vllm import SamplingParams
 from vllm.engine.protocol import StreamingInput
 from vllm.exceptions import VLLMValidationError
@@ -748,3 +749,111 @@ async def test_streaming_input_delayed_generator_exit(engine: AsyncLLM):
     )
 
     print(f"Delayed exit test passed. Generated: {full_text}")
+
+
+@pytest.mark.parametrize("speculative", [False, True])
+@create_new_process_for_each_test()
+def test_session_only_turns_match_recomputation(vllm_runner, monkeypatch, speculative):
+    """Explicit delta turns preserve outputs, including after whole-session eviction."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        enable_prefix_caching=False,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=512,
+        max_num_seqs=4,
+        max_num_batched_tokens=128,
+        enable_chunked_prefill=True,
+        kv_cache_memory_bytes=128 * 1024 * 1024,
+        gpu_memory_utilization=0.04,
+        disable_log_stats=False,
+        speculative_config=(
+            {
+                "method": "ngram",
+                "num_speculative_tokens": 3,
+                "prompt_lookup_min": 1,
+                "prompt_lookup_max": 3,
+            }
+            if speculative
+            else None
+        ),
+    ) as model:
+        llm = model.llm
+        tokenizer = llm.get_tokenizer()
+        with pytest.raises(VLLMValidationError, match="n=1"):
+            llm.generate(
+                {"prompt_token_ids": [1]},
+                SamplingParams(
+                    n=2,
+                    max_tokens=1,
+                    extra_args={"session_cache": {"id": "invalid", "version": 0}},
+                ),
+                use_tqdm=False,
+            )
+        history = []
+        warm_accepted = 0
+        for version, text in enumerate(
+            ["Hello world! " * 24, "Hello world! " * 4, "Hello world! " * 4]
+            if speculative
+            else [
+                "The capital of France is",
+                ". The capital of Germany is",
+                ". Summarize:",
+            ]
+        ):
+            delta = tokenizer.encode(text, add_special_tokens=False)
+            if version == 1:
+                rejected = llm.generate(
+                    {"prompt_token_ids": [9]},
+                    SamplingParams(
+                        max_tokens=1,
+                        extra_args={"session_cache": {"id": "agent", "version": 0}},
+                    ),
+                    use_tqdm=False,
+                )[0]
+                assert rejected.outputs[0].finish_reason == "error"
+                assert "version" in rejected.outputs[0].stop_reason
+            if version == 2:
+                assert llm.reset_prefix_cache()
+            accepted_before = sum(
+                metric.value
+                for metric in llm.get_metrics()
+                if metric.name == "vllm:spec_decode_num_accepted_tokens"
+            )
+            warm = llm.generate(
+                {"prompt_token_ids": delta},
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=8,
+                    ignore_eos=True,
+                    extra_args={"session_cache": {"id": "agent", "version": version}},
+                ),
+                use_tqdm=False,
+            )[0]
+            warm_accepted += (
+                sum(
+                    metric.value
+                    for metric in llm.get_metrics()
+                    if metric.name == "vllm:spec_decode_num_accepted_tokens"
+                )
+                - accepted_before
+            )
+            history.extend(delta)
+            cold = llm.generate(
+                {"prompt_token_ids": history},
+                SamplingParams(temperature=0, max_tokens=8, ignore_eos=True),
+                use_tqdm=False,
+            )[0]
+            assert warm.outputs[0].token_ids == cold.outputs[0].token_ids
+            if version == 1:
+                assert warm.num_cached_tokens == len(history) - len(delta) - 1
+            else:
+                assert warm.num_cached_tokens == 0
+            history.extend(warm.outputs[0].token_ids)
+        assert llm.close_session("agent")
+        assert not llm.close_session("agent")
+        if speculative:
+            assert warm_accepted > 0
