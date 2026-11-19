@@ -107,6 +107,8 @@ For a performance investigation, use the existing
 `mla.unshard_out`. Keep CPU activity enabled in PyTorch profiling to retain
 these annotations. The MQA spans include backend KV/index preparation;
 inspect their child GPU kernels to distinguish preparation from attention.
+Query preparation, the indexer, DCP merging and MQA's V projection remain
+outside these spans. Include those stages when comparing total route cost.
 These Python scopes execute during eager calls or graph capture, not on each
 full CUDA graph replay. Use graph-aware GPU profiling for replay timings.
 Scopes and per-step debug logging are disabled by default and introduce no
