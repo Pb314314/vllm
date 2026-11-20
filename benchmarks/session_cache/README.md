@@ -59,6 +59,45 @@ at that boundary. Worker persistence is a separate optimization, and must not
 reserve active batch slots for every idle session. Keep async scheduling and
 CUDA graph compatibility in the design before drawing production conclusions.
 
+## Explicit shared-root comparison
+
+[Recorded observations](shared-root-observations.json) on `760248a7ee` compare
+APC, independent sessions, and explicit shared-root forks. Four serial requests
+share 16,384 input tokens, each adding a distinct 64-token suffix and 16 forced
+output tokens. The first request is cold in every mode; later forks select only
+its shared 16K prefix. Each mode has one warmup and two measured trajectories.
+All use a 12 GiB KV pool, Qwen3-0.6B / GB200 x1 / TRITON_ATTN / eager synchronous,
+no SD, offload, or profiler. Sequential order was APC, fork, independent sessions.
+
+| Mode | Token reuse | Request hits | Recomputed input tokens | Resident physical blocks | Output tokens/s |
+| --- | --- | --- | --- | --- | --- |
+| APC | 74.71% | 75% | 16,640 | 1,040 | 26.66–28.67 |
+| Independent sessions | 0% | 0% | 65,792 | 4,116 | 11.55–14.07 |
+| Explicit shared root | 74.71% | 75% | 16,640 | 1,044 | 28.31–28.32 |
+
+The fork path recovers APC's reuse without content matching. Its four extra
+blocks retain the private partial tails. All modes allocate the same GPU KV pool;
+these block counts describe its occupied/reusable contents, not process VRAM
+allocation. Fork times are included: 0.632–0.677 ms per fork across six measured
+forks, totaling 1.940–1.950 ms per four-request trajectory. This includes the
+utility round trip, CPU token copies and block-reference acquisition.
+The observed throughput ranges overlap between APC and fork. Two fixed-order
+trajectories do not establish a speedup over APC. This serial probe measures
+prefill reuse and occupancy, not cascade attention or batched decode bandwidth.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 VLLM_GPU_SYNC_CHECK=error PYTHONPATH="$PWD" \
+  .venv/bin/python benchmarks/session_cache/measure_reuse.py \
+  --mode session --regime resident --scenario shared_prefix --shared-root \
+  --output /tmp/shared-root-session.json
+```
+
+Omit `--shared-root` for independent sessions; use `--mode apc` without that flag
+for APC. The same script records per-turn timings, fork costs, physical blocks
+and reuse. The fork implementation and accounting passed 12 session scheduler
+tests and 6 session-related real-model tests, including batch-invariant divergent
+branches, parent closure, partial-tail replay and existing ngram continuation.
+
 ## HBM-only eviction comparison
 
 [Recorded observations](hbm-prefix-observations.json) on `c4e77d9b0e` compare APC,
