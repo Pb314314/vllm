@@ -37,10 +37,26 @@ class SessionKVCacheManager(KVCacheManager):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.idle: OrderedDict[str, SessionState] = OrderedDict()
+        self.eviction_policy = "whole"
         self.num_session_evictions = 0
+        self.num_session_trims = 0
+        self.num_session_evicted_blocks = 0
 
-    def evict(self, session_id: str) -> None:
-        session = self.idle.pop(session_id)
+    def evict(self, session_id: str, num_blocks: int | None = None) -> None:
+        session = self.idle[session_id]
+        if num_blocks is not None:
+            assert len(session.blocks) == 1
+            blocks = session.blocks[0]
+            keep = max(0, len(blocks) - num_blocks)
+            self.block_pool.free_blocks(reversed(blocks[keep:]))
+            del blocks[keep:]
+            session.num_computed_tokens = min(
+                session.num_computed_tokens,
+                keep * self.coordinator.single_type_managers[0].block_size,
+            )
+            if keep:
+                return
+        self.idle.pop(session_id)
         for blocks in session.blocks:
             self.block_pool.free_blocks(reversed(blocks))
         session.blocks = ()
@@ -53,8 +69,20 @@ class SessionKVCacheManager(KVCacheManager):
             blocks = super().allocate_slots(request, num_new_tokens, *args, **kwargs)
             if blocks is not None or not self.idle:
                 return blocks
-            self.evict(next(iter(self.idle)))
-            self.num_session_evictions += 1
+            session_id = next(iter(self.idle))
+            session = self.idle[session_id]
+            before = sum(len(group) for group in session.blocks)
+            self.evict(
+                session_id,
+                self._allocation_shortfall
+                if self.eviction_policy == "prefix"
+                else None,
+            )
+            self.num_session_evictions += int(not session.blocks)
+            self.num_session_trims += int(bool(session.blocks))
+            self.num_session_evicted_blocks += before - sum(
+                len(group) for group in session.blocks
+            )
 
     def retain(self, session_id: str, session: SessionState, request: Request) -> None:
         assert not request.num_in_flight_tokens
@@ -94,7 +122,7 @@ class SessionScheduler(Scheduler):
     `SamplingParams.extra_args["session_cache"]` contains `id` and the
     expected `version` (0 creates a session). Each successful turn increments
     the version. The prompt contains only the new token IDs. Eviction releases
-    all of an idle session's KV; its token history remains available for replay.
+    idle KV according to the selected policy; token history remains for replay.
     """
 
     kv_cache_manager_cls = SessionKVCacheManager
@@ -138,6 +166,15 @@ class SessionScheduler(Scheduler):
         options = config.additional_config.get("session_cache", {})
         if not isinstance(options, dict):
             raise ValueError("session_cache options must be a dictionary")
+        eviction_policy = options.get("eviction_policy", "whole")
+        if eviction_policy not in ("whole", "prefix"):
+            raise ValueError("session_cache.eviction_policy must be whole or prefix")
+        if (
+            eviction_policy == "prefix"
+            and len(self.kv_cache_config.kv_cache_groups) != 1
+        ):
+            raise ValueError("Prefix-preserving eviction requires one KV cache group")
+        self.kv_cache_manager.eviction_policy = eviction_policy
         self.max_sessions = options.get("max_sessions", 1024)
         if type(self.max_sessions) is not int or self.max_sessions <= 0:
             raise ValueError("session_cache.max_sessions must be a positive integer")

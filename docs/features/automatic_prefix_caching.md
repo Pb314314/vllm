@@ -134,6 +134,14 @@ Under allocation pressure, the oldest idle resident session loses **all** of its
 KV. Its token history and version survive, so its next turn replays the history.
 Queued turns remain evictable until admission. This policy can over-evict and
 cause large latency spikes; it is a baseline for agent-aware eviction experiments.
+To compare a finer eviction unit on models with one full-attention KV group, set
+`additional_config={"session_cache": {"eviction_policy": "prefix"}}`.
+This releases only the missing number of blocks from the oldest idle session's
+tail, retaining a valid prefix and replaying its missing suffix on resume.
+Multiple idle sessions may be trimmed or fully evicted if necessary. The default
+`"whole"` policy remains available for comparison. Neither policy predicts tool
+completion or offloads KV; both operate only on the GPU KV pool. Prefix eviction
+does not support hybrid or multiple KV groups in this prototype.
 There is no automatic sharing between different sessions, including identical
 system prompts. Physical KV allocation remains paged.
 
@@ -147,7 +155,7 @@ Use the existing draining/reset protocol before replacing model weights.
 
 `num_cached_tokens` reports tokens reused by a resumed turn. APC hash-hit metrics
 do not measure this mode. Compare session reuse, recomputed tokens, whole-session
-evictions, CPU overhead, and latency at the same KV budget. The exploratory
+evictions, partial trims, CPU overhead, and latency at the same KV budget. The exploratory
 benchmark is `benchmarks/benchmark_session_cache.py`; a synthetic single-session
 result is not evidence for general agentic serving performance.
 

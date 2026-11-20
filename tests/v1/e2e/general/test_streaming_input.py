@@ -857,3 +857,49 @@ def test_session_only_turns_match_recomputation(vllm_runner, monkeypatch, specul
         assert not llm.close_session("agent")
         if speculative:
             assert warm_accepted > 0
+
+
+@create_new_process_for_each_test()
+def test_session_prefix_eviction_matches_recomputation(vllm_runner, monkeypatch):
+    """An HBM capacity miss drops a suffix without corrupting retained KV."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        additional_config={"session_cache": {"eviction_policy": "prefix"}},
+        enable_prefix_caching=False,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=64,
+        max_num_seqs=1,
+        max_num_batched_tokens=32,
+        block_size=16,
+        num_gpu_blocks_override=5,
+        gpu_memory_utilization=0.04,
+        enable_chunked_prefill=True,
+    ) as model:
+        llm = model.llm
+
+        def generate(tokens, session_id=None, version=0):
+            return llm.generate(
+                {"prompt_token_ids": tokens},
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=1,
+                    ignore_eos=True,
+                    extra_args={"session_cache": {"id": session_id, "version": version}}
+                    if session_id is not None
+                    else None,
+                ),
+                use_tqdm=False,
+            )[0]
+
+        first = generate([101] * 40, "a")
+        generate([102] * 24, "b")
+        resumed = generate([103], "a", 1)
+        assert resumed.num_cached_tokens == 32
+        cold = generate([101] * 40 + first.outputs[0].token_ids + [103])
+        assert resumed.outputs[0].token_ids == cold.outputs[0].token_ids
+        assert llm.close_session("a")
+        assert llm.close_session("b")

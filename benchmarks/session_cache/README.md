@@ -194,13 +194,23 @@ the hash lookup is absent; use the common logical-token denominator above.
 
 The next cache-policy comparison is HBM-only: no host KV tier or Mooncake.
 Compare whole-idle-session eviction with dropping a block-aligned suffix while
-preserving an explicitly recorded valid prefix. Measure at identical absolute KV
+preserving an explicitly recorded valid prefix. The `prefix` policy now supports
+one full-attention KV group and frees the allocation shortfall from idle tails.
+Measure at identical absolute KV
 byte budgets, including retained partial tails. Then compare lifecycle-aware
 policies with the same hints available to APC. Record token reuse, recomputation,
 resume latency, active batch size, and completed work under a resume-latency
 target. A smaller prefill can admit more requests when the token budget binds;
 it does not guarantee a larger decode batch when KV capacity or max sequences
-binds instead. These policy variants are not implemented yet.
+binds instead. Lifecycle-aware policies are not implemented yet.
+
+Use `measure_reuse.py --mode session --regime pressure --eviction-policy prefix`
+with `--output <path>` to select the new policy. `--kv-cache-mib` sets the absolute
+KV budget for either mode. Compare with `--eviction-policy whole` and `--mode apc`
+at the same budget. `session_evictions` counts entire idle states evicted under
+pressure; `session_trims` counts partial-trim operations, and
+`session_evicted_blocks` counts freed physical blocks in both session policies.
+Repeated trims of one session count separately. Close/reset are excluded.
 
 The first sharing extension will be an explicit shared-root snapshot with private
 child sessions, without automatic sub-session matching. Hybrid follow-up must

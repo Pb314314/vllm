@@ -11,10 +11,16 @@ def main():
     parser.add_argument("--mode", choices=["apc", "session"], required=True)
     parser.add_argument("--regime", choices=["resident", "pressure"], required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--eviction-policy", choices=["whole", "prefix"], default="whole"
+    )
+    parser.add_argument("--kv-cache-mib", type=int)
     args = parser.parse_args()
     from vllm import LLM, SamplingParams
 
-    budget = 12288 if args.regime == "resident" else 3072
+    if args.mode == "apc" and args.eviction_policy != "whole":
+        parser.error("--eviction-policy applies only to session mode")
+    budget = args.kv_cache_mib or (12288 if args.regime == "resident" else 3072)
     llm = LLM(
         model="Qwen/Qwen3-0.6B",
         scheduler_cls="session_perf_hooks."
@@ -32,6 +38,7 @@ def main():
         seed=0,
         enable_trace_replay=True,
         attention_config={"backend": "TRITON_ATTN"},
+        additional_config={"session_cache": {"eviction_policy": args.eviction_policy}},
     )
     unit = llm.get_tokenizer().encode(
         "Inspect the repository, run the tests, and summarize the results. ",
@@ -154,6 +161,8 @@ def main():
                             **totals,
                             "block_evictions": metrics["block_evictions"],
                             "session_evictions": metrics["session_evictions"],
+                            "session_trims": metrics["session_trims"],
+                            "session_evicted_blocks": metrics["session_evicted_blocks"],
                         }
                     ),
                     flush=True,

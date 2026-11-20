@@ -9439,6 +9439,36 @@ def test_session_eviction_replays_history_and_preserves_other_sessions():
     assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 4
 
 
+@pytest.mark.parametrize("eviction_policy, retained", [("whole", 0), ("prefix", 32)])
+def test_session_pressure_preserves_valid_prefix(eviction_policy, retained):
+    """Free the missing capacity, then recompute only the evicted suffix."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        num_blocks=5,
+        block_size=16,
+        additional_config={"session_cache": {"eviction_policy": eviction_policy}},
+    )
+    for req_id, length in (("a", 33), ("b", 17)):
+        scheduler.add_request(_session_turn(req_id, req_id, 0, [1] * length))
+        output = scheduler.schedule()
+        scheduler.update_from_output(
+            output, ModelRunnerOutput(req_ids=[req_id], sampled_token_ids=[[2]])
+        )
+    assert scheduler.sessions["a"].num_computed_tokens == retained
+    manager = scheduler.kv_cache_manager
+    assert manager.num_session_evicted_blocks == (3 if retained == 0 else 1)
+    scheduler.add_request(_session_turn("a2", "a", 1, [3]))
+    output = scheduler.schedule()
+    assert output.num_scheduled_tokens == {"a2": 35 - retained}
+    assert output.scheduled_new_reqs[0].num_computed_tokens == retained
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["a2"], sampled_token_ids=[[4]])
+    )
+    assert scheduler.close_session("a")
+    assert scheduler.close_session("b")
+    assert manager.block_pool.get_num_free_blocks() == 4
+
+
 def test_session_rejects_concurrent_and_stale_turns_without_mutation():
     scheduler = create_scheduler(scheduler_cls=SessionScheduler)
     scheduler.add_request(_session_turn("first", "agent", 0, [1] * 19))

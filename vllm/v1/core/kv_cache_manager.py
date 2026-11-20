@@ -207,6 +207,7 @@ class KVCacheManager:
         # admitting waiting/preempted requests, to avoid frequent preemptions.
         assert watermark >= 0.0, "watermark must be non-negative"
         self.watermark_blocks = int(watermark * kv_cache_config.num_blocks)
+        self._allocation_shortfall = 0
         self.kv_cache_event_metadata = tuple(
             (
                 get_kv_cache_kind(group.manager_config, group.distinct_specs).value,
@@ -565,6 +566,9 @@ class KVCacheManager:
             )
             required_blocks = num_blocks_to_allocate + watermark_blocks
             if required_blocks > self.block_pool.get_num_free_blocks():
+                self._allocation_shortfall = (
+                    required_blocks - self.block_pool.get_num_free_blocks()
+                )
                 return None
 
         num_tokens_main_model = total_computed_tokens + num_new_tokens
@@ -605,6 +609,7 @@ class KVCacheManager:
         required_blocks = num_blocks_to_allocate + watermark_blocks
         if required_blocks > available_blocks:
             # Cannot allocate new blocks
+            self._allocation_shortfall = required_blocks - available_blocks
             return None
 
         if (

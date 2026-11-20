@@ -29,6 +29,12 @@ class MetricsMixin:
                 "session_evictions": getattr(
                     scheduler.kv_cache_manager, "num_session_evictions", 0
                 ),
+                "session_trims": getattr(
+                    scheduler.kv_cache_manager, "num_session_trims", 0
+                ),
+                "session_evicted_blocks": getattr(
+                    scheduler.kv_cache_manager, "num_session_evicted_blocks", 0
+                ),
                 "resident_blocks": sum(
                     not b.is_null and (b.ref_cnt > 0 or b.block_hash is not None)
                     for b in pool.blocks
@@ -40,6 +46,8 @@ class MetricsMixin:
                 scheduler.perf_evictions = 0
                 if hasattr(scheduler.kv_cache_manager, "num_session_evictions"):
                     scheduler.kv_cache_manager.num_session_evictions = 0
+                    scheduler.kv_cache_manager.num_session_trims = 0
+                    scheduler.kv_cache_manager.num_session_evicted_blocks = 0
             return result
 
         EngineCore.session_perf_snapshot = snapshot
