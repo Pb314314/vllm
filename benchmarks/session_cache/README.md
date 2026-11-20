@@ -59,6 +59,50 @@ at that boundary. Worker persistence is a separate optimization, and must not
 reserve active batch slots for every idle session. Keep async scheduling and
 CUDA graph compatibility in the design before drawing production conclusions.
 
+## HBM-only eviction comparison
+
+[Recorded observations](hbm-prefix-observations.json) on `c4e77d9b0e` compare APC,
+whole-session eviction, and prefix-preserving session eviction at equal absolute
+KV budgets. The workload alternates two distinct 16K histories; each continuation
+adds 64 input and 16 forced output tokens. Each configuration has one warmup and
+two measured four-turn trajectories. Qwen3-0.6B, GB200 x1, TRITON_ATTN, eager/sync;
+no offload, SD, or profiler. Light counters remain enabled. The measured region is
+`LLM.generate`, not TTFT. Token reuse is identical across the two trajectories:
+
+| KV budget | APC token reuse | Session whole | Session prefix |
+| --- | --- | --- | --- |
+| 2 GiB | 13.48% | 0% | 13.48% |
+| 3 GiB | 70.19% | 0% | 70.19% |
+| 4 GiB | 99.52% | 99.61% | 99.61% |
+
+Request hit rates are 100% for APC/prefix at every budget, illustrating why that
+metric alone hides substantial recomputation. Whole-session hit rates are 0% at
+2/3 GiB and 100% at 4 GiB. At 3 GiB, prefix eviction reduces four-turn recomputation
+from 66,016 to 19,680 tokens, matching APC. Both session variants recompute 260
+tokens at 4 GiB versus APC's 320 because they preserve resident partial tails.
+
+Observed output tokens/s ranges (two trajectories, not confidence intervals):
+
+| KV budget | APC | Session whole | Session prefix |
+| --- | --- | --- | --- |
+| 2 GiB | 15.88–15.90 | 13.14–13.62 | 13.75–14.51 |
+| 3 GiB | 24.78–26.65 | 12.82–13.06 | 21.31–26.63 |
+| 4 GiB | 40.69–41.45 | 40.60–41.37 | 37.50–38.31 |
+
+The prefix policy recovers partial reuse without content matching, but does not
+demonstrate better serving throughput than APC. At 4 GiB neither session policy
+evicts or trims anything; their timing difference cannot be attributed to work
+in the trim path. These sequential small samples have run variation and were
+not randomized: 3 GiB ran APC/whole/prefix; 2/4 GiB ran prefix/APC/whole. More
+repetitions and interleaving are needed for small throughput claims. This workload
+has no cross-session shared root and no tool-return predictions, so it does not
+validate explicit sharing or lifecycle-aware policies.
+
+Reproduce with `measure_reuse.py --regime pressure --kv-cache-mib <MiB>
+--mode <apc|session> --output <path>`; select `--eviction-policy whole` or `prefix`
+for session. The raw records retain per-turn timings and counters; per-step
+scheduler traces are omitted. Full traces are emitted by the reproduction script.
+
 ## CPU cost by phase
 
 `measure_cpu_phases.py` separates resident continuation admission, steady decode,
@@ -118,6 +162,37 @@ optimization is absent from this baseline. A later comparison should include an
 optimized APC baseline and equivalent no-op handling for session mode. Session
 ownership alone does not replace decode-loop optimization or demonstrate a
 serving-throughput gain.
+
+### After decoupling capacity checks from APC
+
+Commit `9b854a18f6` lets exact `FullAttentionManager` instances with no incoming
+prefix blocks use the existing capacity-only calculation without an APC marker.
+Other manager types and prefix adoption retain their previous paths. This fixes
+the session path's additional generic capacity checks; it is narrower than the
+no-op coordinator optimization in #63934, which remains absent.
+
+The same CPU probe was rerun on `c4e77d9b0e` (which also adds the optional prefix
+eviction policy). This no-pressure run uses the default whole eviction policy.
+[Per-round records](cpu-phase-fixed-observations.json) use the same methodology
+as above. Values are medians across three rounds, in milliseconds per batch step:
+
+| Phase | APC, 64 | Session, 64 | APC, 256 | Session, 256 |
+| --- | --- | --- | --- | --- |
+| Schedule median | 0.436 | 0.414 | 1.804 | 1.717 |
+| Update median | 0.179 | 0.160 | 0.753 | 0.682 |
+| Combined median | 0.617 | 0.575 | 2.566 | 2.403 |
+| Combined mean | 0.641 | 0.581 | 2.668 | 2.432 |
+
+Combined per-round median ranges were 0.609–0.620 versus 0.574–0.583 ms at 64,
+and 2.552–2.567 versus 2.375–2.409 ms at 256. This small CPU-only probe observes
+about 6–7% lower combined medians for session; it does not establish a serving
+throughput gain. The older capture is not an interleaved before/after experiment.
+
+Validation: the capacity behavior test passes both before and after the change
+(this is a performance change, not a previously incorrect capacity result).
+Allocator/prefix/scheduler suites: 638 passed. Ordinary/ngram model correctness:
+2 passed. Prefix-eviction follow-up: 9 session scheduler tests and 1 real-model
+pressure/recompute comparison passed. No new SD performance measurement was made.
 
 ## Function and GPU profiling
 
