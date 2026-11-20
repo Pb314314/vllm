@@ -402,3 +402,129 @@ explicit roots under the same HBM budget. Vary context lengths, tool-return
 bursts, shared-root popularity, and placement skew. Record recomputed tokens,
 physical KV, resume P95, and completed work within a latency target. This separates
 benefits from new information and admission policy from benefits of removing APC.
+
+## Regression audit and acceptance gates
+
+The next objective is to find regressions and choose the least complex remedy
+that preserves performance in the supported workload. Keep two comparisons:
+identical engine settings to isolate cache mechanics, and production-capable
+settings to reveal missing async/graph/SD/parallel support. The current eager,
+synchronous results establish neither production parity nor global superiority.
+Report CPU per turn/step, token reuse, actual physical capacity, TTFT/resume P95,
+TPOT and completed work at a latency target. Agree on workload-specific noise
+bounds before treating a timing difference as a regression.
+
+| Risk | Evidence/status | Candidate remedy and cost |
+| --- | --- | --- |
+| Unrelated sessions with identical prefixes | Independent sessions demonstrably lose reuse; explicit roots recover the measured shared-system case | Frontend root registration/discovery plus engine handles. Without an explicit relationship or content discovery, arbitrary APC hits cannot be preserved. |
+| A source loses its cache handle while a descendant still owns the prefix | Reproduced below | Coordinate shared-tail eviction or keep an explicit shared-prefix residency record. Prefer existing ownership metadata; measure pressure-path scan cost before adding an index. |
+| Excessive eviction/recomputation | Whole-session eviction lost all reuse in the 2/3 GiB sweep; prefix eviction recovered APC's token reuse but not a stable throughput advantage | Reclaim actual physical capacity and preserve valid prefixes. Shared ownership means dropping one reference may free nothing; group bookkeeping has a cost. |
+| Finish/close/restart loses future reuse | Close immediately releases this session's references; no anonymous cache or handle recovery exists | Explicit reusable-root lifetime, bounded retention and recovery protocol. These retain metadata/state and require application lifecycle signals. |
+| Large branching fanout | Fork copies CPU history and references; only an idle source is supported | Measure branch creation and host RSS. Shared immutable CPU history or active snapshots add ownership and execution-fence complexity. |
+| Partial boundaries or edited histories | Fork currently shares complete blocks only; main has partial-hit/CoW machinery in supported configurations. Deltas cannot express arbitrary edits in place | Explicit prefix snapshots, bounded replay and possibly tail CoW. Price GPU copy/replay and metadata costs against the saved prefill. |
+| Idle-state memory and smaller effective batches | Two persistent int32 histories per session plus retained tails; shared-root probe holds 1,044 blocks versus APC's 1,040 | Bound logical state and reclaim idle capacity. Measure active-batch size and preemptions; do not interpret raw cache usage identically across modes. |
+| Production feature gaps and placement | Async is disabled; graphs are unverified by the current eager measurements; stateful SD, hybrid, parallel and connectors are rejected | Restore capabilities independently, then compare production configurations. Track state bytes/copies, migration/replay cost, and locality versus load balance. |
+
+APC content matching handles branch-like requests without requiring a logical
+session tree: matching prefixes can reuse available indexed blocks, followed by
+independent suffix allocation. Explicit session fork replaces discovery with a
+declared source/version/boundary; it still needs refcounts, immutable shared
+blocks and mutable-state isolation. Reduced discovery work is not evidence that
+APC sharing was unsafe or that total system complexity has already decreased.
+Lifecycle policy must also be compared with APC receiving the same lifecycle hints.
+
+Restoring cascade attention is outside these gates: upstream removed it in
+[PR #61126](https://github.com/vllm-project/vllm/pull/61126).
+The pre-removal code supported ordinary full attention; its graph
+restriction was CUDA Graph compatibility, including FULL mode. Physical prefix
+sharing must remain effective, but cross-request attention-read optimization is
+a separate feature, not a regression introduced by disabling APC here.
+
+### Proposed common representation for system roots and forks
+
+Use the same explicit shared-prefix representation for a system template and an
+agent branch. Frontend registration selects the exact token prefix and cache
+namespace, optionally doing content discovery once when creating a root. Engine
+continuations use handles; the engine does not rediscover their contents.
+`fork(source, version, boundary)` references committed immutable prefix blocks
+and gives the child a private writable tail. Both cases use the same allocator,
+reference counting and valid-computation boundaries.
+
+Separate logical identity, shared ownership and residency. A registered root
+must not depend on the source request remaining alive, and a missing parent's
+local block list must not hide still-resident shared state. Eviction should update
+the shared residency boundary consistently, reclaim physical capacity and leave
+the logical handle usable for bounded replay. Closing one session drops its
+ownership; it does not invalidate other owners. A live handle is not a promise to
+pin HBM indefinitely.
+
+This is a design target, not implemented functionality. First evaluate coordinated
+tail reclamation using existing references before adding a persistent shared-root
+directory. Keep complete-block sharing and private-tail replay as the small first
+implementation; compare with main's supported partial-hit/CoW path before deciding
+whether another tail-copy mechanism is justified. CPU-history sharing and active
+snapshots also require evidence: current fork copies history and waits for an
+idle source. Count frontend bookkeeping and recovery logic in complexity reviews,
+not only the engine code removed.
+
+### Reproduced: eviction loses a reusable source prefix
+
+On `8564031d94`, a four-usable-block pool and the `prefix` policy can discard a
+parent's references before reclaiming a shared block from its child. The child
+retains one physical block, but a subsequent fork through the parent cannot
+discover it. Identical 17-token inputs schedule 17 versus 1 token depending on
+which handle supplies their first 16 tokens. No GPU or model weights are used;
+this is evidence of extra scheduled prefill, not a latency measurement or an APC
+throughput comparison. The implementation is unchanged by this audit.
+
+```bash
+HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" .venv/bin/python - <<'PY'
+from tests.v1.core.utils import create_scheduler
+from tests.v1.core.test_scheduler import _session_turn
+from vllm.v1.core.sched.session_scheduler import SessionScheduler
+from vllm.v1.outputs import ModelRunnerOutput
+
+s = create_scheduler(
+    scheduler_cls=SessionScheduler, block_size=16, num_blocks=5,
+    additional_config={"session_cache": {"eviction_policy": "prefix"}},
+)
+for sid, length in [("root", 33), ("c", 17), ("d", 1)]:
+    s.add_request(_session_turn(sid, sid, 0, [1] * length))
+    out = s.schedule()
+    s.update_from_output(out, ModelRunnerOutput(req_ids=[sid], sampled_token_ids=[[2]]))
+    if sid == "root":
+        s.fork_session("root", "child", 1, num_tokens=32)
+print("retained", {sid: state.num_computed_tokens for sid, state in s.sessions.items()})
+s.close_session("c")
+s.close_session("d")
+s.fork_session("root", "from-root", 1, num_tokens=16)
+s.fork_session("child", "from-child", 0, num_tokens=16)
+for sid in ["from-root", "from-child"]:
+    s.add_request(_session_turn(sid, sid, 0, [3]))
+out = s.schedule()
+print("scheduled", out.num_scheduled_tokens)
+print("same_input", list(s.requests["from-root"].prompt_token_ids)
+      == list(s.requests["from-child"].prompt_token_ids))
+s.update_from_output(out, ModelRunnerOutput(
+    req_ids=["from-root", "from-child"], sampled_token_ids=[[4], [4]],
+))
+for sid in ["root", "child", "from-root", "from-child"]:
+    s.close_session(sid)
+print("free_blocks_after_close", s.kv_cache_manager.block_pool.get_num_free_blocks())
+PY
+```
+
+Observed counts (labels shortened from the original capture):
+
+```text
+retained {'root': 0, 'child': 16, 'c': 17, 'd': 1}
+scheduled {'from-root': 17, 'from-child': 1}
+same_input True
+free_blocks_after_close 4
+```
+
+Prioritize this shared-ownership/pressure case, then cold shared-root bursts,
+fanout and close/return patterns. After the ownership and reclaiming behavior is
+sound, validate graph/async parity before extending to stateful SD, hybrid state
+and distributed recovery. Avoid using an unmeasured policy change or an oracle
+for future tool returns as evidence that sessions intrinsically outperform APC.
