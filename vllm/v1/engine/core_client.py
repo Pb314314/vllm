@@ -103,6 +103,15 @@ class EngineCoreClient(ABC):
     * AsyncMPClient: ZMQ + background proc EngineCore w/ asyncio (for AsyncLLM)
     """
 
+    def fork_session(
+        self,
+        source_session_id: str,
+        session_id: str,
+        version: int,
+        num_tokens: int | None = None,
+    ) -> None:
+        raise NotImplementedError
+
     def close_session(self, session_id: str) -> bool:
         raise NotImplementedError
 
@@ -423,6 +432,17 @@ class InprocClient(EngineCoreClient):
         # otherwise. The callback must not reference self, or self would stay
         # reachable and the finalizer would never run.
         self._finalizer = weakref.finalize(self, self.engine_core.shutdown)
+
+    def fork_session(
+        self,
+        source_session_id: str,
+        session_id: str,
+        version: int,
+        num_tokens: int | None = None,
+    ) -> None:
+        self.engine_core.fork_session(
+            source_session_id, session_id, version, num_tokens
+        )
 
     def close_session(self, session_id: str) -> bool:
         return self.engine_core.close_session(session_id)
@@ -1126,6 +1146,17 @@ class SyncMPClient(MPClient):
 
     def reset_mm_cache(self) -> None:
         self.call_utility("reset_mm_cache")
+
+    def fork_session(
+        self,
+        source_session_id: str,
+        session_id: str,
+        version: int,
+        num_tokens: int | None = None,
+    ) -> None:
+        self.call_utility(
+            "fork_session", source_session_id, session_id, version, num_tokens
+        )
 
     def close_session(self, session_id: str) -> bool:
         return self.call_utility("close_session", session_id)

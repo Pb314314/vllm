@@ -15,11 +15,17 @@ def main():
         "--eviction-policy", choices=["whole", "prefix"], default="whole"
     )
     parser.add_argument("--kv-cache-mib", type=int)
+    parser.add_argument("--shared-root", action="store_true")
+    parser.add_argument("--scenario", choices=["shared_prefix"])
     args = parser.parse_args()
     from vllm import LLM, SamplingParams
 
     if args.mode == "apc" and args.eviction_policy != "whole":
         parser.error("--eviction-policy applies only to session mode")
+    if args.shared_root and (args.mode != "session" or args.regime != "resident"):
+        parser.error("--shared-root requires resident session mode")
+    if args.scenario and args.regime != "resident":
+        parser.error("--scenario requires resident mode")
     budget = args.kv_cache_mib or (12288 if args.regime == "resident" else 3072)
     llm = LLM(
         model="Qwen/Qwen3-0.6B",
@@ -54,6 +60,8 @@ def main():
         if args.regime == "resident"
         else ["alternating_pressure"]
     )
+    if args.scenario:
+        scenarios = [args.scenario]
     records = []
     for scenario in scenarios:
         for repeat in range(-1, 2):
@@ -61,7 +69,9 @@ def main():
             histories = {}
             versions = {}
 
-            def run(ids, deltas, histories=histories, versions=versions):
+            def run(
+                ids, deltas, fork_from=None, histories=histories, versions=versions
+            ):
                 prompts = []
                 params = []
                 logical = []
@@ -87,6 +97,14 @@ def main():
                     )
                     logical.append(len(history))
                 start = time.perf_counter()
+                if fork_from is not None:
+                    llm.fork_session(
+                        fork_from,
+                        ids[0],
+                        version=versions[fork_from],
+                        num_tokens=len(source),
+                    )
+                fork_seconds = time.perf_counter() - start if fork_from else 0.0
                 result = llm.generate(prompts, params, use_tqdm=False)
                 elapsed = time.perf_counter() - start
                 row = {
@@ -96,6 +114,7 @@ def main():
                     "turns": len(ids),
                     "output_tokens": 16 * len(ids),
                     "hit_turns": 0,
+                    "fork_seconds": fork_seconds,
                 }
                 for sid, output in zip(ids, result):
                     assert output.outputs[0].token_ids == completion
@@ -115,7 +134,12 @@ def main():
             elif scenario == "shared_prefix":
                 snap(True)
                 for i, sid in enumerate(ids):
-                    rows.append(run([sid], [source + [100 + i] * 64]))
+                    delta = [100 + i] * 64
+                    if args.shared_root and i:
+                        histories[sid] = source.copy()
+                        rows.append(run([sid], [delta], fork_from=ids[0]))
+                    else:
+                        rows.append(run([sid], [source + delta]))
             elif scenario == "batch_continue":
                 for i, sid in enumerate(ids):
                     run([sid], [[100 + i] + source[1:]])

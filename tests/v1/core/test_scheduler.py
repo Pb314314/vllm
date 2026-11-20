@@ -9469,12 +9469,81 @@ def test_session_pressure_preserves_valid_prefix(eviction_policy, retained):
     assert manager.block_pool.get_num_free_blocks() == 4
 
 
+def test_session_fork_shares_only_full_blocks_and_survives_parent_close():
+    """Forked prefixes remain valid while each branch writes its own partial tail."""
+    scheduler = create_scheduler(scheduler_cls=SessionScheduler, block_size=16)
+    scheduler.add_request(_session_turn("root", "root", 0, [1] * 19))
+    output = scheduler.schedule()
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["root"], sampled_token_ids=[[2]])
+    )
+    pool = scheduler.kv_cache_manager.block_pool
+    free_before = pool.get_num_free_blocks()
+    for sid in ("a", "b"):
+        scheduler.fork_session("root", sid, 1, num_tokens=19)
+    assert pool.get_num_free_blocks() == free_before
+    shared = scheduler.sessions["root"].blocks[0][0]
+    assert shared.ref_cnt == 3
+    assert scheduler.close_session("root")
+    assert shared.ref_cnt == 2
+
+    for sid, delta in (("a", 3), ("b", 4)):
+        scheduler.add_request(_session_turn(sid, sid, 0, [delta]))
+    output = scheduler.schedule()
+    assert output.num_scheduled_tokens == {"a": 4, "b": 4}
+    for request in output.scheduled_new_reqs:
+        assert request.num_computed_tokens == 16
+        assert request.block_ids[0][0] == shared.block_id
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["a", "b"], sampled_token_ids=[[5], [6]])
+    )
+    assert (
+        scheduler.sessions["a"].blocks[0][1] is not scheduler.sessions["b"].blocks[0][1]
+    )
+    assert list(scheduler.sessions["a"].token_ids) == [1] * 19 + [3, 5]
+    assert list(scheduler.sessions["b"].token_ids) == [1] * 19 + [4, 6]
+    assert scheduler.close_session("a")
+    assert shared.ref_cnt == 1
+    assert scheduler.close_session("b")
+    assert pool.get_num_free_blocks() == 9999
+
+
+@pytest.mark.parametrize("eviction_policy", ["whole", "prefix"])
+def test_session_fork_pressure_counts_physical_capacity(eviction_policy):
+    """Dropping a shared reference cannot be counted as available HBM."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        block_size=16,
+        num_blocks=5,
+        additional_config={"session_cache": {"eviction_policy": eviction_policy}},
+    )
+    for sid, length in (("root", 33), ("c", 17), ("d", 17)):
+        scheduler.add_request(_session_turn(sid, sid, 0, [1] * length))
+        output = scheduler.schedule()
+        assert output.num_scheduled_tokens == {sid: length}
+        scheduler.update_from_output(
+            output, ModelRunnerOutput(req_ids=[sid], sampled_token_ids=[[2]])
+        )
+        if sid == "root":
+            for child in ("a", "b"):
+                scheduler.fork_session("root", child, 1, num_tokens=32)
+    for sid in ("root", "a", "b"):
+        assert scheduler.sessions[sid].num_computed_tokens == 0
+    assert scheduler.sessions["c"].num_computed_tokens == 17
+    assert scheduler.kv_cache_manager.num_session_evicted_blocks == 3
+    for sid in ("root", "a", "b", "c", "d"):
+        assert scheduler.close_session(sid)
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 4
+
+
 def test_session_rejects_concurrent_and_stale_turns_without_mutation():
     scheduler = create_scheduler(scheduler_cls=SessionScheduler)
     scheduler.add_request(_session_turn("first", "agent", 0, [1] * 19))
     scheduler.add_request(_session_turn("concurrent", "agent", 0, [9]))
     with pytest.raises(ValueError, match="active turn"):
         scheduler.close_session("agent")
+    with pytest.raises(ValueError, match="active turn"):
+        scheduler.fork_session("agent", "child", 0)
     output = scheduler.schedule()
     result = scheduler.update_from_output(
         output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
@@ -9482,6 +9551,11 @@ def test_session_rejects_concurrent_and_stale_turns_without_mutation():
     error = next(o for o in result[0].outputs if o.request_id == "concurrent")
     assert error.finish_reason == FinishReason.ERROR
     assert "active turn" in error.error.message
+    with pytest.raises(ValueError, match="version"):
+        scheduler.fork_session("agent", "child", 0)
+    with pytest.raises(ValueError, match="nonempty prefix"):
+        scheduler.fork_session("agent", "child", 1, num_tokens=21)
+    assert "child" not in scheduler.sessions
     scheduler.add_request(_session_turn("stale", "agent", 0, [9]))
     output = scheduler.schedule()
     assert not output.num_scheduled_tokens

@@ -80,7 +80,8 @@ We describe two example workloads, where APC can provide huge performance benefi
 It is opt-in and currently supports the Python `LLM` entry point, a single GPU,
 text-only full-attention models, synchronous scheduling, and optional `ngram`
 speculative decoding. Stateful draft models, hybrid attention, LoRA, connectors,
-parallel execution, and snapshot/fork are not supported yet.
+parallel execution, and arbitrary rollback are not supported yet. Explicit prefix
+fork is supported for one full-attention KV group.
 
 ```python
 from vllm import LLM, SamplingParams
@@ -136,14 +137,50 @@ Queued turns remain evictable until admission. This policy can over-evict and
 cause large latency spikes; it is a baseline for agent-aware eviction experiments.
 To compare a finer eviction unit on models with one full-attention KV group, set
 `additional_config={"session_cache": {"eviction_policy": "prefix"}}`.
-This releases only the missing number of blocks from the oldest idle session's
-tail, retaining a valid prefix and replaying its missing suffix on resume.
+This drops references from the oldest idle session's tail until enough physical
+blocks become free, retaining a valid prefix and replaying its missing suffix on resume.
 Multiple idle sessions may be trimmed or fully evicted if necessary. The default
 `"whole"` policy remains available for comparison. Neither policy predicts tool
 completion or offloads KV; both operate only on the GPU KV pool. Prefix eviction
 does not support hybrid or multiple KV groups in this prototype.
 There is no automatic sharing between different sessions, including identical
 system prompts. Physical KV allocation remains paged.
+
+### Explicit shared prefixes
+
+Use `LLM.fork_session` to create independent branches of an idle session without
+matching token contents. For example, after the first successful turn of a
+session named `root`, share only its system prompt, excluding generated tokens:
+
+```python
+llm.fork_session("root", "child", version=1, num_tokens=len(system_prompt_token_ids))
+output = llm.generate(
+    {"prompt_token_ids": new_user_token_ids},
+    SamplingParams(
+        max_tokens=32,
+        extra_args={"session_cache": {"id": "child", "version": 0}},
+    ),
+)[0]
+```
+
+The destination ID must be unused. `version` checks the source version; the child
+starts at version 0. `num_tokens` selects a nonempty prefix, or defaults to the
+source's entire history, including its generated output. The child inherits the
+source's cache namespace. Only fully computed, resident **complete blocks** are
+shared by reference. Each child recomputes its partial tail and allocates its own
+new blocks. Closing the source does not invalidate a child's shared blocks.
+Forking an evicted source copies its token history; missing KV is recomputed.
+
+Fork copies CPU token buffers and block references, so its cost grows with the
+selected history. It does not copy the shared GPU KV. There is no automatic
+discovery of shared system prompts: the application chooses the root explicitly.
+Shared blocks occupy HBM once, but releasing one owner's reference may free no
+physical memory. Pressure eviction continues until enough blocks become free or
+no idle candidates remain. This policy is not yet optimized for shared roots.
+Sharing physical KV does not guarantee attention-kernel reuse of HBM reads across
+requests; cascade attention is absent from this prototype's upstream baseline.
+
+### Lifecycle and accounting
 
 `max_sessions` (default 1024) bounds logical sessions, including those whose KV
 was evicted. There is no TTL in this prototype. Call `LLM.close_session(id)` to

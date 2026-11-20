@@ -903,3 +903,64 @@ def test_session_prefix_eviction_matches_recomputation(vllm_runner, monkeypatch)
         assert resumed.outputs[0].token_ids == cold.outputs[0].token_ids
         assert llm.close_session("a")
         assert llm.close_session("b")
+
+
+@create_new_process_for_each_test()
+def test_session_fork_outputs_match_independent_prefill(vllm_runner, monkeypatch):
+    """Shared roots and replayed partial tails produce independent branch outputs."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        enable_prefix_caching=False,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=128,
+        max_num_seqs=2,
+        max_num_batched_tokens=64,
+        enable_chunked_prefill=True,
+        block_size=16,
+        kv_cache_memory_bytes=128 * 1024 * 1024,
+        gpu_memory_utilization=0.04,
+    ) as model:
+        llm = model.llm
+        root = [101] * 35
+        llm.generate(
+            {"prompt_token_ids": root},
+            SamplingParams(
+                temperature=0,
+                max_tokens=1,
+                extra_args={"session_cache": {"id": "root", "version": 0}},
+            ),
+            use_tqdm=False,
+        )
+        for sid, length in (("a", 32), ("b", 35)):
+            llm.fork_session("root", sid, version=1, num_tokens=length)
+        assert llm.close_session("root")
+        warm = llm.generate(
+            [{"prompt_token_ids": [102]}, {"prompt_token_ids": [103]}],
+            [
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=4,
+                    ignore_eos=True,
+                    extra_args={"session_cache": {"id": sid, "version": 0}},
+                )
+                for sid in ("a", "b")
+            ],
+            use_tqdm=False,
+        )
+        cold = llm.generate(
+            [
+                {"prompt_token_ids": root[:32] + [102]},
+                {"prompt_token_ids": root + [103]},
+            ],
+            SamplingParams(temperature=0, max_tokens=4, ignore_eos=True),
+            use_tqdm=False,
+        )
+        for branch, reference in zip(warm, cold):
+            assert branch.num_cached_tokens == 32
+            assert branch.outputs[0].token_ids == reference.outputs[0].token_ids
+        assert llm.close_session("a")
+        assert llm.close_session("b")

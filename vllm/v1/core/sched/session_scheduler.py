@@ -16,13 +16,13 @@ from vllm.v1.engine import EngineCoreOutput, EngineCoreOutputs, FinishReason
 from vllm.v1.kv_cache_interface import AttentionSpec
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
-from vllm.v1.token_buffer import extend_from_slice
+from vllm.v1.token_buffer import TokenBuffer, extend_from_slice
 from vllm.v1.utils import ConstantList
 
 
 @dataclass
 class SessionState:
-    """A logical token history and its optional, exclusively owned resident KV."""
+    """A logical token history and resident KV, with optional shared full blocks."""
 
     token_ids: list[int]
     prompt_token_ids: list[int]
@@ -71,7 +71,7 @@ class SessionKVCacheManager(KVCacheManager):
                 return blocks
             session_id = next(iter(self.idle))
             session = self.idle[session_id]
-            before = sum(len(group) for group in session.blocks)
+            free_before = self.block_pool.get_num_free_blocks()
             self.evict(
                 session_id,
                 self._allocation_shortfall
@@ -80,8 +80,8 @@ class SessionKVCacheManager(KVCacheManager):
             )
             self.num_session_evictions += int(not session.blocks)
             self.num_session_trims += int(bool(session.blocks))
-            self.num_session_evicted_blocks += before - sum(
-                len(group) for group in session.blocks
+            self.num_session_evicted_blocks += (
+                self.block_pool.get_num_free_blocks() - free_before
             )
 
     def retain(self, session_id: str, session: SessionState, request: Request) -> None:
@@ -298,6 +298,51 @@ class SessionScheduler(Scheduler):
                 self.kv_cache_manager.evict(session_id)
             del self.sessions[session_id]
         super()._free_request_blocks(request)
+
+    def fork_session(
+        self,
+        source_session_id: str,
+        session_id: str,
+        version: int,
+        num_tokens: int | None = None,
+    ) -> None:
+        if len(self.kv_cache_config.kv_cache_groups) != 1:
+            raise ValueError("Session fork requires one KV cache group")
+        source = self.sessions.get(source_session_id)
+        if source is None:
+            raise ValueError("Unknown source session")
+        if source.request_id is not None:
+            raise ValueError("Cannot fork a session with an active turn")
+        if type(version) is not int or version != source.version:
+            raise ValueError("Source session version mismatch")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("Session fork requires a nonempty destination id")
+        if session_id in self.sessions:
+            raise ValueError("Destination session already exists")
+        if len(self.sessions) >= self.max_sessions:
+            raise ValueError("Session limit reached; close an idle session first")
+        if num_tokens is None:
+            num_tokens = len(source.token_ids)
+        if type(num_tokens) is not int or not 0 < num_tokens <= len(source.token_ids):
+            raise ValueError("Session fork num_tokens must select a nonempty prefix")
+
+        manager = self.kv_cache_manager.coordinator.single_type_managers[0]
+        block_size = manager.block_size
+        num_blocks = min(num_tokens, source.num_computed_tokens) // block_size
+        tokens = TokenBuffer()
+        extend_from_slice(tokens, source.token_ids, 0, num_tokens)
+        session = SessionState(
+            tokens,
+            TokenBuffer(tokens),
+            source.cache_salt,
+            num_computed_tokens=num_blocks * block_size,
+            blocks=(source.blocks[0][:num_blocks],) if num_blocks else (),
+        )
+        # Share only complete, computed blocks; each child replays its private tail.
+        if session.blocks:
+            self.kv_cache_manager.block_pool.touch(session.blocks[0])
+            self.kv_cache_manager.idle[session_id] = session
+        self.sessions[session_id] = session
 
     def close_session(self, session_id: str) -> bool:
         session = self.sessions.get(session_id)

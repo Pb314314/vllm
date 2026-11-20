@@ -1255,6 +1255,15 @@ class EngineCore:
     ) -> list[_R]:
         return self.model_executor.collective_rpc(method, timeout, args, kwargs)
 
+    def fork_session(
+        self,
+        source_session_id: str,
+        session_id: str,
+        version: int,
+        num_tokens: int | None = None,
+    ) -> None:
+        self.scheduler.fork_session(source_session_id, session_id, version, num_tokens)
+
     def close_session(self, session_id: str) -> bool:
         return self.scheduler.close_session(session_id)
 

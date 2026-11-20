@@ -287,8 +287,31 @@ pressure; `session_trims` counts partial-trim operations, and
 `session_evicted_blocks` counts freed physical blocks in both session policies.
 Repeated trims of one session count separately. Close/reset are excluded.
 
-The first sharing extension will be an explicit shared-root snapshot with private
-child sessions, without automatic sub-session matching. Hybrid follow-up must
+The first sharing extension is `LLM.fork_session`: full resident blocks are shared
+by reference, CPU history is copied, and each child replays any partial tail.
+The caller selects a source version and prefix length; there is no automatic
+sub-session matching. Both eviction policies count actual physical capacity
+released, not discarded references. They are not yet optimized for shared roots:
+trimming one owner's reference can lose its reuse without freeing any HBM.
+
+Use `measure_reuse.py --mode session --regime resident --scenario shared_prefix
+--shared-root --output <path>` to compare explicit sharing with APC and independent
+sessions (omit `--shared-root`). All three paths include the first cold request
+and four outputs in their timed totals. The fork path creates later sessions from
+the first session's 16K prefix, excluding its private suffix and generated tokens.
+Each fork utility call, including token-buffer copying and reference acquisition,
+is included in its request timing and reported separately as `fork_seconds`.
+`resident_blocks` counts distinct physical blocks in all modes, including reusable
+unreferenced APC blocks. This probe measures prefill reuse and HBM occupancy,
+not shared attention-read bandwidth.
+
+The rebased upstream baseline includes removal of cascade attention in
+[PR #61126](https://github.com/vllm-project/vllm/pull/61126). Shared physical block
+IDs could support a future common-prefix attention path, but this prototype does
+not implement or measure one. Shared allocation alone does not ensure the GPU
+reads each prefix only once across requests.
+
+Hybrid follow-up must
 inventory attention KV, window state, recurrent/convolution state and worker
 buffers, then establish a recoverable boundary before adding eviction or fork.
 Existing APC checkpoints and supported sub-block reuse belong in that baseline.
@@ -304,7 +327,7 @@ block tables are still uploaded on each turn.
 
 Cross-session sharing and partial survival under pressure are separate from hash
 lookup overhead. Whole-session eviction may lose a useful prefix that block LRU
-would preserve. Consider explicit snapshot/fork for known shared roots, and
+would preserve. Measure explicit fork for known shared roots, and
 compare whole-session offload against retaining a valid prefix under a session
 handle. A shorter resident prefix could still be published as one atomic session
 state update; hybrid/draft state would need matching recovery boundaries.
@@ -314,3 +337,29 @@ Keep logical session ownership separate from active batch slots. Changes to asyn
 scheduling and stateful draft models require completion fences and valid state
 boundaries before enabling them. The eager, synchronous profiles here cannot
 predict performance with CUDA graphs, async scheduling, MTP/EAGLE, or Mooncake.
+
+## Routing and lifecycle follow-up
+
+Session affinity already exists in routers. For example, Production Stack offers
+[session-ID routing](https://github.com/vllm-project/production-stack/blob/main/src/vllm_router/README.md)
+and [load-aware routing](https://docs.vllm.ai/projects/production-stack/en/latest/use_cases/loadaware-routing.html)
+that balances cached-prefix benefit against in-flight requests. Dynamo's
+[KV-aware router](https://docs.nvidia.com/dynamo/latest/knowledge-base/concepts/system-architecture/kv-aware-routing)
+combines cache events with active prefill and decode load; its
+[filtering and queueing](https://docs.nvidia.com/dynamo/knowledge-base/modular-components/router/router-filtering)
+controls admission independently of candidate scoring.
+
+The proposed session contract would let a known continuation locate an owner and
+version directly. It still needs resident length, physical occupancy, reclaimable
+capacity, queued/active work, and the new input length to estimate cost. Session
+count or turn number alone cannot predict work. Missing state on another worker
+requires replay or transfer; a large cluster does not pool all GPU HBM for free.
+Shared roots need explicit IDs or frontend discovery, not per-turn engine hashing.
+The prototype has idle/active ownership and explicit close, but no router
+integration, tool-state hints, workload predictor, or migration protocol.
+
+Compare APC, APC with identical lifecycle hints, and session ownership with
+explicit roots under the same HBM budget. Vary context lengths, tool-return
+bursts, shared-root popularity, and placement skew. Record recomputed tokens,
+physical KV, resume P95, and completed work within a latency target. This separates
+benefits from new information and admission policy from benefits of removing APC.
