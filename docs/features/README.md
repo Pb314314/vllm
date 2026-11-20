@@ -2,7 +2,7 @@
 
 ## Experimental Session Cache
 
-- [Session-only multi-turn cache](automatic_prefix_caching.md#experimental-session-only-cache)
+- [Session cache with APC](automatic_prefix_caching.md#experimental-session-cache-with-apc)
 
 ## KV Cache Offloading
 

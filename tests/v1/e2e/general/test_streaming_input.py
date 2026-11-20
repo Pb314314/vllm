@@ -752,15 +752,18 @@ async def test_streaming_input_delayed_generator_exit(engine: AsyncLLM):
 
 
 @pytest.mark.parametrize("speculative", [False, True])
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
 @create_new_process_for_each_test()
-def test_session_only_turns_match_recomputation(vllm_runner, monkeypatch, speculative):
+def test_session_turns_match_recomputation(
+    vllm_runner, monkeypatch, speculative, enable_prefix_caching
+):
     """Explicit delta turns preserve outputs, including after whole-session eviction."""
     monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
     with vllm_runner(
         "Qwen/Qwen3-0.6B",
         scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
         attention_config={"backend": "TRITON_ATTN"},
-        enable_prefix_caching=False,
+        enable_prefix_caching=enable_prefix_caching,
         async_scheduling=False,
         enforce_eager=True,
         max_model_len=512,
@@ -844,7 +847,12 @@ def test_session_only_turns_match_recomputation(vllm_runner, monkeypatch, specul
             history.extend(delta)
             cold = llm.generate(
                 {"prompt_token_ids": history},
-                SamplingParams(temperature=0, max_tokens=8, ignore_eos=True),
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=8,
+                    ignore_eos=True,
+                    skip_reading_prefix_cache=True,
+                ),
                 use_tqdm=False,
             )[0]
             assert warm.outputs[0].token_ids == cold.outputs[0].token_ids
@@ -859,8 +867,11 @@ def test_session_only_turns_match_recomputation(vllm_runner, monkeypatch, specul
             assert warm_accepted > 0
 
 
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
 @create_new_process_for_each_test()
-def test_session_prefix_eviction_matches_recomputation(vllm_runner, monkeypatch):
+def test_session_prefix_eviction_matches_recomputation(
+    vllm_runner, monkeypatch, enable_prefix_caching
+):
     """An HBM capacity miss drops a suffix without corrupting retained KV."""
     monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
     with vllm_runner(
@@ -868,7 +879,7 @@ def test_session_prefix_eviction_matches_recomputation(vllm_runner, monkeypatch)
         scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
         attention_config={"backend": "TRITON_ATTN"},
         additional_config={"session_cache": {"eviction_policy": "prefix"}},
-        enable_prefix_caching=False,
+        enable_prefix_caching=enable_prefix_caching,
         async_scheduling=False,
         enforce_eager=True,
         max_model_len=64,
@@ -888,6 +899,7 @@ def test_session_prefix_eviction_matches_recomputation(vllm_runner, monkeypatch)
                     temperature=0,
                     max_tokens=1,
                     ignore_eos=True,
+                    skip_reading_prefix_cache=session_id is None,
                     extra_args={"session_cache": {"id": session_id, "version": version}}
                     if session_id is not None
                     else None,
@@ -906,14 +918,98 @@ def test_session_prefix_eviction_matches_recomputation(vllm_runner, monkeypatch)
 
 
 @create_new_process_for_each_test()
-def test_session_fork_outputs_match_independent_prefill(vllm_runner, monkeypatch):
+def test_session_and_apc_mixed_batch_matches_recomputation(vllm_runner, monkeypatch):
+    """APC and delta turns share KV while retaining independent writable tails."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        enable_prefix_caching=True,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=128,
+        max_num_seqs=2,
+        max_num_batched_tokens=128,
+        block_size=16,
+        kv_cache_memory_bytes=128 * 1024 * 1024,
+        gpu_memory_utilization=0.04,
+    ) as model:
+        llm = model.llm
+
+        def params(version=None, cold=False, mode="delta"):
+            return SamplingParams(
+                temperature=0,
+                max_tokens=1,
+                ignore_eos=True,
+                skip_reading_prefix_cache=cold,
+                extra_args={
+                    "session_cache": {"id": "agent", "version": version, "mode": mode}
+                }
+                if version is not None
+                else None,
+            )
+
+        prefix = [101] * 33
+        llm.generate({"prompt_token_ids": prefix}, params(), use_tqdm=False)
+        first = llm.generate({"prompt_token_ids": prefix}, params(0), use_tqdm=False)[0]
+        assert first.num_cached_tokens == 32
+        second = llm.generate(
+            {"prompt_token_ids": [102] * 16}, params(1), use_tqdm=False
+        )[0]
+        assert second.num_cached_tokens == 33
+        history = (
+            prefix
+            + first.outputs[0].token_ids
+            + [102] * 16
+            + second.outputs[0].token_ids
+        )
+        mixed = llm.generate(
+            [{"prompt_token_ids": history + [103]}, {"prompt_token_ids": [104]}],
+            [params(), params(2)],
+            use_tqdm=False,
+        )
+        assert [r.num_cached_tokens for r in mixed] == [48, 50]
+        compacted = [101] * 32 + [105]
+        compact = llm.generate(
+            {"prompt_token_ids": compacted}, params(3, mode="replace"), use_tqdm=False
+        )[0]
+        assert compact.num_cached_tokens == 32
+        continued = llm.generate(
+            {"prompt_token_ids": [106]}, params(4), use_tqdm=False
+        )[0]
+        assert continued.num_cached_tokens == 33
+        assert llm.close_session("agent")
+        again = llm.generate(
+            {"prompt_token_ids": history + [103]}, params(), use_tqdm=False
+        )[0]
+        assert again.num_cached_tokens == 48
+        cold = llm.generate(
+            [{"prompt_token_ids": history + [t]} for t in (103, 104)]
+            + [
+                {"prompt_token_ids": compacted},
+                {"prompt_token_ids": compacted + compact.outputs[0].token_ids + [106]},
+            ],
+            params(cold=True),
+            use_tqdm=False,
+        )
+        for cached, reference in zip([*mixed, compact, continued], cold):
+            assert cached.outputs[0].token_ids == reference.outputs[0].token_ids
+        assert again.outputs[0].token_ids == cold[0].outputs[0].token_ids
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+@create_new_process_for_each_test()
+def test_session_fork_outputs_match_independent_prefill(
+    vllm_runner, monkeypatch, enable_prefix_caching
+):
     """Shared roots and replayed partial tails produce independent branch outputs."""
     monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
     with vllm_runner(
         "Qwen/Qwen3-0.6B",
         scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
         attention_config={"backend": "TRITON_ATTN"},
-        enable_prefix_caching=False,
+        enable_prefix_caching=enable_prefix_caching,
         async_scheduling=False,
         enforce_eager=True,
         max_model_len=128,
@@ -956,7 +1052,12 @@ def test_session_fork_outputs_match_independent_prefill(vllm_runner, monkeypatch
                 {"prompt_token_ids": root[:32] + [102]},
                 {"prompt_token_ids": root + [103]},
             ],
-            SamplingParams(temperature=0, max_tokens=4, ignore_eos=True),
+            SamplingParams(
+                temperature=0,
+                max_tokens=4,
+                ignore_eos=True,
+                skip_reading_prefix_cache=True,
+            ),
             use_tqdm=False,
         )
         for branch, reference in zip(warm, cold):

@@ -23,6 +23,7 @@ from vllm.v1.request import Request
 
 
 def run(mode, batch, context, warmup, steps):
+    session = mode in ("session", "session-apc")
     max_len = context + 64 + 16 + warmup + steps + 64
     scheduler = create_scheduler(
         model="Qwen/Qwen3-0.6B",
@@ -30,14 +31,14 @@ def run(mode, batch, context, warmup, steps):
         max_model_len=max_len,
         max_num_batched_tokens=batch * max_len,
         num_blocks=batch * ((max_len + 15) // 16) + 32,
-        enable_prefix_caching=mode == "apc",
-        scheduler_cls=SessionScheduler if mode == "session" else None,
+        enable_prefix_caching=mode != "session",
+        scheduler_cls=SessionScheduler if mode != "apc" else None,
     )
-    hasher = get_request_block_hasher(16, sha256) if mode == "apc" else None
+    hasher = get_request_block_hasher(16, sha256) if mode != "session" else None
     histories = [[100 + i] + [7] * (context - 1) for i in range(batch)]
 
     def request(i, version, max_tokens):
-        tokens = histories[i] if version == 0 or mode == "apc" else [8] * 64
+        tokens = histories[i] if version == 0 or not session else [8] * 64
         return Request(
             f"{version}-{i}",
             tokens,
@@ -45,7 +46,7 @@ def run(mode, batch, context, warmup, steps):
                 max_tokens=max_tokens,
                 ignore_eos=True,
                 extra_args={"session_cache": {"id": str(i), "version": version}}
-                if mode == "session"
+                if session
                 else None,
             ),
             None,
@@ -111,7 +112,7 @@ def run(mode, batch, context, warmup, steps):
         elif step == warmup + steps:
             completion = sample
     assert scheduler.get_num_unfinished_requests() == 0
-    if mode == "session":
+    if session:
         assert scheduler.kv_cache_manager.num_session_evictions == 0
         for i in range(batch):
             assert scheduler.close_session(str(i))
@@ -145,12 +146,19 @@ def main():
     parser.add_argument("--warmup", type=int, default=100)
     parser.add_argument("--steps", type=int, default=512)
     parser.add_argument("--rounds", type=int, default=3)
+    parser.add_argument(
+        "--modes",
+        nargs="+",
+        choices=["apc", "session", "session-apc", "apc-on-session"],
+        default=["apc", "session", "session-apc", "apc-on-session"],
+    )
     args = parser.parse_args()
     init_none_hash(sha256)
     records = []
     for batch in args.batches:
         for repeat in range(args.rounds):
-            modes = ["apc", "session"] if repeat % 2 == 0 else ["session", "apc"]
+            start = repeat % len(args.modes)
+            modes = args.modes[start:] + args.modes[:start]
             for mode in modes:
                 gc.collect()
                 record = run(mode, batch, args.context, args.warmup, args.steps)

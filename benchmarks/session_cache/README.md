@@ -1,12 +1,36 @@
 # Session cache diagnostics
 
-These scripts investigate the experimental session-only scheduler. They are not
+These scripts investigate explicit session continuation, with or without APC.
+They are not
 an agent workload suite or production throughput evidence. Use the same checkout,
 GPU, and configuration for both modes. Current defaults use Qwen3-0.6B, one GPU,
 TRITON_ATTN, eager execution, synchronous scheduling, and forced output tokens.
 Neither Mooncake nor speculative decoding is enabled in these measurements.
 
-## Observed behavior on the current prototype
+## APC compatibility
+
+`SessionScheduler` now also accepts `enable_prefix_caching=True`. Ordinary
+requests use APC, explicit delta turns resume retained state, and both use the
+same physical block pool. New sessions can hit ordinary requests' prefixes;
+ordinary requests can hit completed session blocks. Sessions retain their hash
+chain and cache-registration cursor, hashing new tokens rather than reconstructing
+history hashes on each turn. This adds incremental hashing and index maintenance
+compared with the APC-disabled experiment. The input path can also hash a delta
+before the scheduler replaces those hashes with the stored chain.
+
+`mode="replace"` on a versioned session command replaces history under the same
+ID, for explicit compaction. It reuses eligible APC prefixes and keeps versions
+monotonic. It does not infer compaction from a delta. Ordinary `session_id` hints
+do not enable the delta protocol. See the
+[feature documentation](../../docs/features/automatic_prefix_caching.md#experimental-session-cache-with-apc).
+
+The CPU phase script compares four modes: `apc` (default scheduler), `session`
+(APC disabled), `session-apc` (explicit continuation with APC enabled), and
+`apc-on-session` (ordinary requests on the session scheduler). Modes rotate across
+rounds; it measures real scheduler calls with simulated GPU outputs, not serving
+throughput. Older captures below use the APC-disabled prototype unless stated.
+
+## Historical session-only observations
 
 The [raw observations](observations.json) were captured on 2026-11-20 with
 upstream base `54bf2e700e` and prototype `b3a4cd99e1`, on a GB200. These are

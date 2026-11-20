@@ -1,14 +1,20 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Experimental session-owned KV cache, without automatic prefix matching."""
+"""Experimental explicit session continuation alongside automatic prefix caching."""
 
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from vllm.outputs import RequestError
+from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
-from vllm.v1.core.kv_cache_utils import KVCacheBlock
+from vllm.v1.core.kv_cache_utils import (
+    BlockHash,
+    KVCacheBlock,
+    get_request_block_hasher,
+    init_none_hash,
+)
 from vllm.v1.core.sched.output import SchedulerOutput
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.single_type_kv_cache_manager import FullAttentionManager
@@ -31,6 +37,8 @@ class SessionState:
     num_computed_tokens: int = 0
     blocks: tuple[list[KVCacheBlock], ...] = ()
     request_id: str | None = None
+    block_hashes: list[BlockHash] = field(default_factory=list)
+    num_cached_blocks: tuple[int, ...] = ()
 
 
 class SessionKVCacheManager(KVCacheManager):
@@ -50,6 +58,8 @@ class SessionKVCacheManager(KVCacheManager):
             keep = max(0, len(blocks) - num_blocks)
             self.block_pool.free_blocks(reversed(blocks[keep:]))
             del blocks[keep:]
+            if session.num_cached_blocks:
+                session.num_cached_blocks = (min(session.num_cached_blocks[0], keep),)
             session.num_computed_tokens = min(
                 session.num_computed_tokens,
                 keep * self.coordinator.single_type_managers[0].block_size,
@@ -60,6 +70,7 @@ class SessionKVCacheManager(KVCacheManager):
         for blocks in session.blocks:
             self.block_pool.free_blocks(reversed(blocks))
         session.blocks = ()
+        session.num_cached_blocks = ()
         session.num_computed_tokens = 0
 
     def allocate_slots(
@@ -89,6 +100,10 @@ class SessionKVCacheManager(KVCacheManager):
         session.num_computed_tokens = min(
             request.num_computed_tokens, request.num_tokens - 1
         )
+        session.num_cached_blocks = tuple(
+            manager.num_cached_block.get(request.request_id, 0)
+            for manager in self.coordinator.single_type_managers
+        )
         session.blocks = tuple(
             manager.pop_blocks_for_free(request.request_id)
             for manager in self.coordinator.single_type_managers
@@ -98,13 +113,19 @@ class SessionKVCacheManager(KVCacheManager):
     def resume(self, session_id: str, session: SessionState, request: Request) -> None:
         self.idle.pop(session_id, None)
         if session.blocks:
-            for manager, blocks in zip(
-                self.coordinator.single_type_managers, session.blocks, strict=True
+            for manager, blocks, num_cached in zip(
+                self.coordinator.single_type_managers,
+                session.blocks,
+                session.num_cached_blocks,
+                strict=True,
             ):
                 assert request.request_id not in manager.req_to_blocks
                 manager.req_to_blocks[request.request_id] = blocks
+                if self.enable_caching:
+                    manager.num_cached_block[request.request_id] = num_cached
             request.num_computed_tokens = session.num_computed_tokens
             session.blocks = ()
+            session.num_cached_blocks = ()
 
     def reset_prefix_cache(self) -> bool:
         while self.idle:
@@ -112,12 +133,11 @@ class SessionKVCacheManager(KVCacheManager):
         return super().reset_prefix_cache()
 
     def estimate_cached_tokens(self, request: Request) -> int:
-        # No block hashes exist in this mode; do not scan the history for them.
-        return 0
+        return super().estimate_cached_tokens(request) if self.enable_caching else 0
 
 
 class SessionScheduler(Scheduler):
-    """Select with `scheduler_cls`, APC and async scheduling disabled.
+    """Select with `scheduler_cls` and async scheduling disabled.
 
     `SamplingParams.extra_args["session_cache"]` contains `id` and the
     expected `version` (0 creates a session). Each successful turn increments
@@ -133,8 +153,7 @@ class SessionScheduler(Scheduler):
         config = self.vllm_config
         parallel = config.parallel_config
         if (
-            self.cache_config.enable_prefix_caching
-            or self.scheduler_config.async_scheduling
+            self.scheduler_config.async_scheduling
             or config.kv_transfer_config is not None
             or config.ec_transfer_config is not None
             or config.aux_output_config.enabled
@@ -158,7 +177,7 @@ class SessionScheduler(Scheduler):
         ):
             raise ValueError(
                 "SessionScheduler requires a single-rank, text-only full-attention "
-                "model, APC and async scheduling disabled, and no connectors or "
+                "model, async scheduling disabled, and no connectors or "
                 "LoRA. Only stateless ngram speculative decoding is supported."
             )
         if not isinstance(config.additional_config, dict):
@@ -181,6 +200,13 @@ class SessionScheduler(Scheduler):
         self.sessions: dict[str, SessionState] = {}
         self.request_sessions: dict[str, str] = {}
         self.pending_errors: list[tuple[int, EngineCoreOutput]] = []
+        self.session_block_hasher = None
+        if self.cache_config.enable_prefix_caching:
+            hash_fn = get_hash_fn_by_name(self.cache_config.prefix_caching_hash_algo)
+            init_none_hash(hash_fn)
+            self.session_block_hasher = get_request_block_hasher(
+                self.hash_block_size, hash_fn
+            )
 
     def add_request(self, request: Request) -> None:
         params = request.sampling_params
@@ -219,12 +245,17 @@ class SessionScheduler(Scheduler):
             or request.prompt_embeds is not None
             or request.mm_features
             or request.lora_request is not None
-            or request.block_hashes
         ):
-            raise ValueError("Session turns require un-hashed text tokens and n=1")
-        if not isinstance(command, dict) or set(command) != {"id", "version"}:
-            raise ValueError("session_cache requires exactly id and version")
+            raise ValueError("Session turns require text tokens and n=1")
+        if (
+            not isinstance(command, dict)
+            or not {"id", "version"} <= command.keys()
+            or command.keys() - {"id", "version", "mode"}
+            or command.get("mode", "delta") not in ("delta", "replace")
+        ):
+            raise ValueError("session_cache requires id, version and optional mode")
         session_id, version = command["id"], command["version"]
+        replace = command.get("mode") == "replace"
         if (
             not isinstance(session_id, str)
             or not session_id
@@ -234,19 +265,26 @@ class SessionScheduler(Scheduler):
         session = self.sessions.get(session_id)
         if request.num_prompt_tokens >= self.max_model_len:
             raise ValueError("Session input exceeds the model context limit")
-        if session is None:
-            if version != 0:
-                raise ValueError("Unknown session; create a new session with version 0")
-            if len(self.sessions) >= self.max_sessions:
-                raise ValueError("Session limit reached; close an idle session first")
-            session = SessionState(
-                request._all_token_ids, request.prompt_token_ids, request.cache_salt
-            )
-        else:
+        if session is not None:
             if session.request_id is not None:
                 raise ValueError("Session already has an active turn")
             if version != session.version or request.cache_salt != session.cache_salt:
                 raise ValueError("Session version or cache namespace mismatch")
+        elif version != 0:
+            raise ValueError("Unknown session; create a new session with version 0")
+        elif len(self.sessions) >= self.max_sessions:
+            raise ValueError("Session limit reached; close an idle session first")
+        if session is None or replace:
+            if session_id in self.kv_cache_manager.idle:
+                self.kv_cache_manager.evict(session_id)
+            session = SessionState(
+                request._all_token_ids,
+                request.prompt_token_ids,
+                request.cache_salt,
+                version=version,
+                block_hashes=request.block_hashes,
+            )
+        else:
             if len(session.token_ids) + request.num_prompt_tokens >= self.max_model_len:
                 raise ValueError("Session continuation exceeds the model context limit")
             # Preserve both token buffers; only append the previous output and delta.
@@ -262,6 +300,11 @@ class SessionScheduler(Scheduler):
             request._all_token_ids = session.token_ids
             request.all_token_ids = ConstantList(session.token_ids)
             request.num_prompt_tokens = len(session.token_ids)
+        # Incoming hashes describe only the submitted delta. Continue the stored
+        # chain over the reconstructed history so ordinary APC can reuse it too.
+        request.block_hashes = session.block_hashes
+        request._block_hasher = self.session_block_hasher
+        request.update_block_hashes()
         session.request_id = request.request_id
         self.sessions[session_id] = session
         self.request_sessions[request.request_id] = session_id
@@ -337,6 +380,10 @@ class SessionScheduler(Scheduler):
             source.cache_salt,
             num_computed_tokens=num_blocks * block_size,
             blocks=(source.blocks[0][:num_blocks],) if num_blocks else (),
+            block_hashes=source.block_hashes[: num_tokens // self.hash_block_size],
+            num_cached_blocks=(min(source.num_cached_blocks[0], num_blocks),)
+            if num_blocks
+            else (),
         )
         # Share only complete, computed blocks; each child replays its private tail.
         if session.blocks:
