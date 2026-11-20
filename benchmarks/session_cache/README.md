@@ -192,6 +192,25 @@ the hash lookup is absent; use the common logical-token denominator above.
 
 ## Design questions these probes can answer
 
+The next cache-policy comparison is HBM-only: no host KV tier or Mooncake.
+Compare whole-idle-session eviction with dropping a block-aligned suffix while
+preserving an explicitly recorded valid prefix. Measure at identical absolute KV
+byte budgets, including retained partial tails. Then compare lifecycle-aware
+policies with the same hints available to APC. Record token reuse, recomputation,
+resume latency, active batch size, and completed work under a resume-latency
+target. A smaller prefill can admit more requests when the token budget binds;
+it does not guarantee a larger decode batch when KV capacity or max sequences
+binds instead. These policy variants are not implemented yet.
+
+The first sharing extension will be an explicit shared-root snapshot with private
+child sessions, without automatic sub-session matching. Hybrid follow-up must
+inventory attention KV, window state, recurrent/convolution state and worker
+buffers, then establish a recoverable boundary before adding eviction or fork.
+Existing APC checkpoints and supported sub-block reuse belong in that baseline.
+SD must distinguish committed state from speculative scratch; rejected drafts
+are never valid shared prefix state in either design. Stateful SD and offload
+follow the HBM-only comparison, with transfer and restore costs measured separately.
+
 Explicit continuation can remove history hashing, prefix searches, and per-turn
 block reference reacquisition/release. It does not remove physical paging,
 committed-token boundaries, or worker input preparation. With the single-GPU
