@@ -1,8 +1,8 @@
 # Session cache diagnostics
 
 These scripts investigate explicit session continuation, with or without APC.
-They are not
-an agent workload suite or production throughput evidence. Use the same checkout,
+They are not an agent workload suite or production throughput evidence.
+Use the same checkout,
 GPU, and configuration for both modes. Current defaults use Qwen3-0.6B, one GPU,
 TRITON_ATTN, eager execution, synchronous scheduling, and forced output tokens.
 Neither Mooncake nor speculative decoding is enabled in these measurements.
@@ -29,6 +29,85 @@ The CPU phase script compares four modes: `apc` (default scheduler), `session`
 `apc-on-session` (ordinary requests on the session scheduler). Modes rotate across
 rounds; it measures real scheduler calls with simulated GPU outputs, not serving
 throughput. Older captures below use the APC-disabled prototype unless stated.
+
+### Compatibility validation and CPU cost
+
+Implementation `24d9e721c9` passes 18 selected scheduler tests and 9 real-model
+session tests, including both APC settings, ngram SD, mixed batches, explicit
+forks, pressure replay and same-ID replacement. The mixed-batch test was rerun
+after adding a cold-output comparison for the replacement itself: 1 passed.
+The [validation output excerpts](apc-compat-validation.txt) includes the expected
+pre-fix failure. Model tests use Qwen3-0.6B, GB200, TRITON_ATTN, eager/sync and
+batch invariance; they establish token-output correctness on these cases, not
+task accuracy or production feature parity.
+
+[CPU observations](apc-compat-cpu-observations.json) compare four modes on the
+same ARM Neoverse-V2 host. There are three rounds with rotated ordering per batch,
+100 warmup and 512 measured decode steps per round. Each request has a distinct
+16K history and appends 64 tokens. The synthetic KV capacity admits all requests
+without eviction; this does not establish that the batch fits a real GPU.
+Values below are medians of per-round measurements in milliseconds, for the
+entire batch. Admission includes request construction, add_request, first schedule
+and result update. It excludes tokenization, worker work and GPU compute.
+
+| Mode | Admission, 64 requests | Decode per step, 64 | Admission, 256 | Decode per step, 256 |
+| --- | --- | --- | --- | --- |
+| APC, default scheduler | 197.59 | 0.606 | 928.19 | 2.948 |
+| Session, APC disabled | 4.25 | 0.575 | 17.85 | 2.378 |
+| Explicit session with APC | 5.78 | 0.635 | 27.28 | 2.671 |
+| Ordinary APC on session scheduler | 196.84 | 0.639 | 866.76 | 2.667 |
+
+Explicit continuation retains the admission benefit, but compatibility is not
+free. It restores incremental hashing and cache-index maintenance. At 64 requests,
+decode medians across rounds range from 0.605–0.618 ms for default APC,
+0.630–0.637 ms for explicit session with APC, and 0.633–0.639 ms for ordinary
+requests on the session scheduler. This is a measured CPU regression to investigate,
+not evidence of zero overhead. At 256 requests the ranges overlap: respectively
+2.529–3.016, 2.652–2.757, and 2.640–2.700 ms; the noisy medians do not establish
+a decode improvement. No profiler, GPU model, SD or Mooncake is used here.
+
+```bash
+HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" \
+  .venv/bin/python benchmarks/session_cache/measure_cpu_phases.py \
+  --batches 64 256 --context 16384 --warmup 100 --steps 512 --rounds 3 \
+  --output /tmp/apc-compat-cpu.json
+```
+
+### APC-compatible resident GPU diagnostic
+
+[Per-turn observations](apc-compat-gpu-observations.json) on the same implementation
+use Qwen3-0.6B / GB200 / TRITON_ATTN / eager synchronous, a 12 GiB KV pool and
+16 forced output tokens per request. There is one warmup and two measured
+trajectories per case. APC runs first, then session with APC; no SD or Mooncake.
+Times cover `LLM.generate` with lightweight counters and exclude setup turns,
+except for the shared-prefix case, which includes the first cold request.
+
+| Case | APC token reuse | Session + APC token reuse | APC output tokens/s | Session + APC output tokens/s |
+| --- | --- | --- | --- | --- |
+| Serial continuation | 99.52% | 99.61% | 33.87–38.24 | 42.61–42.63 |
+| Four new sessions with shared system prefix | 74.71% | 74.71% | 24.47–25.66 | 26.89–27.80 |
+| Four sessions, batched continuation | 99.52% | 99.61% | 133.20–138.73 | 120.25–135.62 |
+
+Request hit rates are 100% for both continuation cases and 75% for shared-prefix
+fanout in both modes. Shared-prefix resident/reusable blocks are 1,040 versus
+1,044: APC-compatible sessions recover automatic sharing, with four private
+partial tails. All configurations have the same 7,020 usable physical blocks.
+No explicit fork or caller-provided shared-root reference is used in this capture.
+
+These results do not establish throughput non-regression: the batched case includes
+a slower session trajectory, and the sample size, fixed ordering and run variation
+prevent attributing the difference. Serial admission improvements do not guarantee
+batched serving gains. Mixed ordinary/session traffic under capacity pressure,
+async scheduling and CUDA graphs still need evaluation.
+
+```bash
+CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" VLLM_GPU_SYNC_CHECK=error \
+  .venv/bin/python benchmarks/session_cache/measure_reuse.py \
+  --mode apc --regime resident --output /tmp/apc-compat-baseline.json
+CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" VLLM_GPU_SYNC_CHECK=error \
+  .venv/bin/python benchmarks/session_cache/measure_reuse.py \
+  --mode session-apc --regime resident --output /tmp/apc-compat-session.json
+```
 
 ## Historical session-only observations
 

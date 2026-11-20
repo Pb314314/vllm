@@ -8,7 +8,9 @@ from pathlib import Path
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=["apc", "session"], required=True)
+    parser.add_argument(
+        "--mode", choices=["apc", "session", "session-apc"], required=True
+    )
     parser.add_argument("--regime", choices=["resident", "pressure"], required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument(
@@ -22,7 +24,7 @@ def main():
 
     if args.mode == "apc" and args.eviction_policy != "whole":
         parser.error("--eviction-policy applies only to session mode")
-    if args.shared_root and (args.mode != "session" or args.regime != "resident"):
+    if args.shared_root and (args.mode == "apc" or args.regime != "resident"):
         parser.error("--shared-root requires resident session mode")
     if args.scenario and args.regime != "resident":
         parser.error("--scenario requires resident mode")
@@ -31,7 +33,7 @@ def main():
         model="Qwen/Qwen3-0.6B",
         scheduler_cls="session_perf_hooks."
         + ("APCMetricsScheduler" if args.mode == "apc" else "SessionMetricsScheduler"),
-        enable_prefix_caching=args.mode == "apc",
+        enable_prefix_caching=args.mode != "session",
         async_scheduling=False,
         enforce_eager=True,
         enable_chunked_prefill=True,
@@ -91,7 +93,7 @@ def main():
                             extra_args={
                                 "session_cache": {"id": sid, "version": version}
                             }
-                            if args.mode == "session"
+                            if args.mode != "apc"
                             else None,
                         )
                     )
@@ -191,7 +193,7 @@ def main():
                     ),
                     flush=True,
                 )
-            if args.mode == "session":
+            if args.mode != "apc":
                 for sid in histories:
                     assert llm.close_session(sid)
     Path(args.output).write_text(
