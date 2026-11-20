@@ -126,8 +126,9 @@ The session retains the original block lists and token buffers between requests.
 Resume transfers ownership of these lists without hashing the history, looking
 up APC entries, or acquiring per-block references. The last sampled token may
 still need computation. Idle sessions use no running request slot. Worker request
-metadata is currently rebuilt on resume: this prototype does **not** eliminate
-the full-history worker IPC or block-table upload.
+metadata is currently rebuilt on resume, including full token-history staging
+and block-table upload. The single-GPU in-process executor passes this metadata
+directly to the worker; there is no additional engine-to-worker IPC in that setup.
 
 Under allocation pressure, the oldest idle resident session loses **all** of its
 KV. Its token history and version survive, so its next turn replays the history.
