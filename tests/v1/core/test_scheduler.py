@@ -58,6 +58,7 @@ from vllm.v1.core.sched.diffusion_scheduler import (
 from vllm.v1.core.sched.interface import PauseState
 from vllm.v1.core.sched.output import CachedRequestData, SchedulerOutput
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.core.sched.session_scheduler import SessionScheduler
 from vllm.v1.core.single_type_kv_cache_manager import (
     CrossAttentionManager,
     MambaManager,
@@ -9364,3 +9365,409 @@ def test_cpu_encoder_input_updates_preserve_shm_handles():
     )
     assert scheduler.schedule().encoder_input_updates == {request.request_id: {1: None}}
     assert request.mm_features[0].data is handle
+
+
+def _session_turn(req_id: str, session_id: str, version: int, tokens: list[int]):
+    return Request(
+        request_id=req_id,
+        prompt_token_ids=tokens,
+        sampling_params=SamplingParams(
+            max_tokens=1,
+            ignore_eos=True,
+            extra_args={"session_cache": {"id": session_id, "version": version}},
+        ),
+        pooling_params=None,
+    )
+
+
+def test_session_and_apc_share_blocks_in_both_directions():
+    """Ordinary requests seed sessions and reuse their output without owning them."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler, block_size=16, enable_prefix_caching=True
+    )
+    init_none_hash(sha256)
+    hasher = get_request_block_hasher(16, sha256)
+
+    def ordinary(req_id, tokens):
+        return Request(
+            req_id,
+            tokens,
+            SamplingParams(max_tokens=1, ignore_eos=True),
+            None,
+            block_hasher=hasher,
+        )
+
+    def finish(request):
+        scheduler.add_request(request)
+        scheduled = scheduler.schedule()
+        scheduler.update_from_output(
+            scheduled,
+            ModelRunnerOutput(req_ids=[request.request_id], sampled_token_ids=[[2]]),
+        )
+        return scheduled
+
+    finish(ordinary("seed", [1] * 33))
+    first = _session_turn("first", "agent", 0, [1] * 33)
+    assert finish(first).num_scheduled_tokens == {"first": 1}
+    history_hashes = first.block_hashes[:]
+    second = _session_turn("second", "agent", 1, [3] * 16)
+    assert finish(second).num_scheduled_tokens == {"second": 17}
+    assert second.block_hashes[:2] == history_hashes
+    expected = ordinary("expected", [1] * 33 + [2] + [3] * 16 + [2])
+    assert second.block_hashes == expected.block_hashes
+
+    # A stateless sibling and the resumed session execute in the same batch.
+    sibling = ordinary("sibling", list(second.all_token_ids) + [4])
+    third = _session_turn("third", "agent", 2, [5])
+    scheduler.add_request(sibling)
+    scheduler.add_request(third)
+    scheduled = scheduler.schedule()
+    assert scheduled.num_scheduled_tokens == {"sibling": 4, "third": 2}
+    block_ids = [r.block_ids[0] for r in scheduled.scheduled_new_reqs]
+    assert block_ids[0][:3] == block_ids[1][:3]
+    assert block_ids[0][3] != block_ids[1][3]
+    scheduler.update_from_output(
+        scheduled,
+        ModelRunnerOutput(req_ids=["sibling", "third"], sampled_token_ids=[[6], [7]]),
+    )
+    assert scheduler.close_session("agent")
+    assert finish(ordinary("after-close", [1] * 33)).num_scheduled_tokens == {
+        "after-close": 1
+    }
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+def test_session_replace_keeps_id_and_rejects_stale_history(enable_prefix_caching):
+    """Compaction replaces history once; later deltas use the new history/version."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler, enable_prefix_caching=enable_prefix_caching
+    )
+
+    def finish(request):
+        scheduler.add_request(request)
+        scheduled = scheduler.schedule()
+        result = scheduler.update_from_output(
+            scheduled,
+            ModelRunnerOutput(
+                req_ids=list(scheduled.num_scheduled_tokens),
+                sampled_token_ids=[[2]] if scheduled.num_scheduled_tokens else [],
+            ),
+        )
+        return scheduled, result
+
+    original = [1] * 32 + [3] * 16
+    finish(_session_turn("first", "agent", 0, original))
+
+    def replacement(req_id, version):
+        return Request(
+            req_id,
+            [1] * 32 + [4],
+            SamplingParams(
+                max_tokens=1,
+                ignore_eos=True,
+                extra_args={
+                    "session_cache": {
+                        "id": "agent",
+                        "version": version,
+                        "mode": "replace",
+                    }
+                },
+            ),
+            None,
+        )
+
+    _, rejected = finish(replacement("stale", 0))
+    assert rejected[0].outputs[0].finish_reason == FinishReason.ERROR
+    assert list(scheduler.sessions["agent"].token_ids) == original + [2]
+    scheduled, _ = finish(replacement("compact", 1))
+    assert scheduled.num_scheduled_tokens == {
+        "compact": 1 if enable_prefix_caching else 33
+    }
+    continued, _ = finish(_session_turn("next", "agent", 2, [5]))
+    assert continued.num_scheduled_tokens == {"next": 2}
+    assert list(scheduler.sessions["agent"].token_ids) == [1] * 32 + [4, 2, 5, 2]
+    assert scheduler.close_session("agent")
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+def test_session_resume_reuses_partial_tail_without_prefix_matching(
+    enable_prefix_caching,
+):
+    """A new turn computes only the unsaved sampled token and its new input."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        block_size=16,
+        enable_prefix_caching=enable_prefix_caching,
+    )
+    first = _session_turn("first", "agent", 0, [1] * 19)
+    scheduler.add_request(first)
+    output = scheduler.schedule()
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
+    )
+    free_after_first = scheduler.kv_cache_manager.block_pool.get_num_free_blocks()
+    assert scheduler.get_num_unfinished_requests() == 0
+    assert bool(first.block_hashes) == enable_prefix_caching
+
+    second = _session_turn("second", "agent", 1, [3, 4])
+    scheduler.add_request(second)
+    resumed = scheduler.schedule()
+    assert resumed.num_scheduled_tokens == {"second": 3}
+    assert resumed.scheduled_new_reqs[0].num_computed_tokens == 19
+    assert list(second.prompt_token_ids) == [1] * 19 + [2, 3, 4]
+    assert (
+        scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == free_after_first
+    )
+    assert bool(second.block_hashes) == enable_prefix_caching
+    scheduler.update_from_output(
+        resumed, ModelRunnerOutput(req_ids=["second"], sampled_token_ids=[[5]])
+    )
+    assert scheduler.close_session("agent")
+    assert not scheduler.close_session("agent")
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
+
+
+def test_session_eviction_replays_history_and_preserves_other_sessions():
+    """Memory pressure evicts a whole idle session; its next turn can recompute."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler, num_blocks=5, block_size=16
+    )
+    for req_id in ("a", "b", "c"):
+        scheduler.add_request(_session_turn(req_id, req_id, 0, [1] * 19))
+        output = scheduler.schedule()
+        assert output.num_scheduled_tokens == {req_id: 19}
+        scheduler.update_from_output(
+            output, ModelRunnerOutput(req_ids=[req_id], sampled_token_ids=[[2]])
+        )
+    assert not scheduler.sessions["a"].blocks
+    assert scheduler.sessions["b"].blocks
+    assert scheduler.sessions["c"].blocks
+    assert scheduler.kv_cache_manager.num_session_evictions == 1
+    scheduler.add_request(_session_turn("a2", "a", 1, [3]))
+    output = scheduler.schedule()
+    assert output.num_scheduled_tokens == {"a2": 21}
+    assert list(scheduler.requests["a2"].prompt_token_ids) == [1] * 19 + [2, 3]
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["a2"], sampled_token_ids=[[4]])
+    )
+    for session_id in ("a", "b", "c"):
+        assert scheduler.close_session(session_id)
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 4
+
+
+@pytest.mark.parametrize("eviction_policy, retained", [("whole", 0), ("prefix", 32)])
+def test_session_pressure_preserves_valid_prefix(eviction_policy, retained):
+    """Free the missing capacity, then recompute only the evicted suffix."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        num_blocks=5,
+        block_size=16,
+        additional_config={"session_cache": {"eviction_policy": eviction_policy}},
+    )
+    for req_id, length in (("a", 33), ("b", 17)):
+        scheduler.add_request(_session_turn(req_id, req_id, 0, [1] * length))
+        output = scheduler.schedule()
+        scheduler.update_from_output(
+            output, ModelRunnerOutput(req_ids=[req_id], sampled_token_ids=[[2]])
+        )
+    assert scheduler.sessions["a"].num_computed_tokens == retained
+    manager = scheduler.kv_cache_manager
+    assert manager.num_session_evicted_blocks == (3 if retained == 0 else 1)
+    scheduler.add_request(_session_turn("a2", "a", 1, [3]))
+    output = scheduler.schedule()
+    assert output.num_scheduled_tokens == {"a2": 35 - retained}
+    assert output.scheduled_new_reqs[0].num_computed_tokens == retained
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["a2"], sampled_token_ids=[[4]])
+    )
+    assert scheduler.close_session("a")
+    assert scheduler.close_session("b")
+    assert manager.block_pool.get_num_free_blocks() == 4
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+def test_session_fork_shares_only_full_blocks_and_survives_parent_close(
+    enable_prefix_caching,
+):
+    """Forked prefixes remain valid while each branch writes its own partial tail."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        block_size=16,
+        enable_prefix_caching=enable_prefix_caching,
+    )
+    scheduler.add_request(_session_turn("root", "root", 0, [1] * 19))
+    output = scheduler.schedule()
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["root"], sampled_token_ids=[[2]])
+    )
+    pool = scheduler.kv_cache_manager.block_pool
+    free_before = pool.get_num_free_blocks()
+    for sid in ("a", "b"):
+        scheduler.fork_session("root", sid, 1, num_tokens=19)
+    assert pool.get_num_free_blocks() == free_before
+    shared = scheduler.sessions["root"].blocks[0][0]
+    assert shared.ref_cnt == 3
+    assert scheduler.close_session("root")
+    assert shared.ref_cnt == 2
+
+    for sid, delta in (("a", 3), ("b", 4)):
+        scheduler.add_request(_session_turn(sid, sid, 0, [delta]))
+    output = scheduler.schedule()
+    assert output.num_scheduled_tokens == {"a": 4, "b": 4}
+    for request in output.scheduled_new_reqs:
+        assert request.num_computed_tokens == 16
+        assert request.block_ids[0][0] == shared.block_id
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["a", "b"], sampled_token_ids=[[5], [6]])
+    )
+    assert (
+        scheduler.sessions["a"].blocks[0][1] is not scheduler.sessions["b"].blocks[0][1]
+    )
+    assert list(scheduler.sessions["a"].token_ids) == [1] * 19 + [3, 5]
+    assert list(scheduler.sessions["b"].token_ids) == [1] * 19 + [4, 6]
+    assert scheduler.close_session("a")
+    assert shared.ref_cnt == 1
+    assert scheduler.close_session("b")
+    assert pool.get_num_free_blocks() == 9999
+
+
+@pytest.mark.parametrize("eviction_policy", ["whole", "prefix"])
+def test_session_fork_pressure_counts_physical_capacity(eviction_policy):
+    """Dropping a shared reference cannot be counted as available HBM."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        block_size=16,
+        num_blocks=5,
+        additional_config={"session_cache": {"eviction_policy": eviction_policy}},
+    )
+    for sid, length in (("root", 33), ("c", 17), ("d", 17)):
+        scheduler.add_request(_session_turn(sid, sid, 0, [1] * length))
+        output = scheduler.schedule()
+        assert output.num_scheduled_tokens == {sid: length}
+        scheduler.update_from_output(
+            output, ModelRunnerOutput(req_ids=[sid], sampled_token_ids=[[2]])
+        )
+        if sid == "root":
+            for child in ("a", "b"):
+                scheduler.fork_session("root", child, 1, num_tokens=32)
+    for sid in ("root", "a", "b"):
+        assert scheduler.sessions[sid].num_computed_tokens == 0
+    assert scheduler.sessions["c"].num_computed_tokens == 17
+    assert scheduler.kv_cache_manager.num_session_evicted_blocks == 3
+    for sid in ("root", "a", "b", "c", "d"):
+        assert scheduler.close_session(sid)
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 4
+
+
+def test_session_rejects_concurrent_and_stale_turns_without_mutation():
+    scheduler = create_scheduler(scheduler_cls=SessionScheduler)
+    scheduler.add_request(_session_turn("first", "agent", 0, [1] * 19))
+    scheduler.add_request(_session_turn("concurrent", "agent", 0, [9]))
+    with pytest.raises(ValueError, match="active turn"):
+        scheduler.close_session("agent")
+    with pytest.raises(ValueError, match="active turn"):
+        scheduler.fork_session("agent", "child", 0)
+    output = scheduler.schedule()
+    result = scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
+    )
+    error = next(o for o in result[0].outputs if o.request_id == "concurrent")
+    assert error.finish_reason == FinishReason.ERROR
+    assert "active turn" in error.error.message
+    with pytest.raises(ValueError, match="version"):
+        scheduler.fork_session("agent", "child", 0)
+    with pytest.raises(ValueError, match="nonempty prefix"):
+        scheduler.fork_session("agent", "child", 1, num_tokens=21)
+    assert "child" not in scheduler.sessions
+    scheduler.add_request(_session_turn("stale", "agent", 0, [9]))
+    output = scheduler.schedule()
+    assert not output.num_scheduled_tokens
+    result = scheduler.update_from_output(output, ModelRunnerOutput(req_ids=[]))
+    assert result[0].outputs[0].finish_reason == FinishReason.ERROR
+    assert "version" in result[0].outputs[0].error.message
+    scheduler.add_request(_session_turn("valid", "agent", 1, [3]))
+    assert scheduler.schedule().num_scheduled_tokens == {"valid": 2}
+    assert list(scheduler.requests["valid"].prompt_token_ids) == [1] * 19 + [2, 3]
+
+
+def test_session_reset_invalidates_kv_and_abort_ends_logical_session():
+    scheduler = create_scheduler(scheduler_cls=SessionScheduler)
+    scheduler.add_request(_session_turn("first", "agent", 0, [1] * 19))
+    output = scheduler.schedule()
+    scheduler.update_from_output(
+        output, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]])
+    )
+    assert scheduler.reset_prefix_cache()
+    scheduler.add_request(_session_turn("second", "agent", 1, [3]))
+    assert scheduler.schedule().num_scheduled_tokens == {"second": 21}
+    scheduler.finish_requests("second", RequestStatus.FINISHED_ABORTED)
+    assert not scheduler.close_session("agent")
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
+
+
+def test_session_queued_turn_does_not_pin_idle_kv():
+    """Queued continuations remain eviction candidates until they are admitted."""
+    scheduler = create_scheduler(
+        scheduler_cls=SessionScheduler,
+        max_num_seqs=1,
+        num_blocks=5,
+        block_size=16,
+    )
+    for session_id in ("a", "b"):
+        scheduler.add_request(_session_turn(session_id, session_id, 0, [1] * 19))
+        scheduled = scheduler.schedule()
+        scheduler.update_from_output(
+            scheduled, ModelRunnerOutput(req_ids=[session_id], sampled_token_ids=[[2]])
+        )
+    scheduler.add_request(_session_turn("new", "new", 0, [3] * 19))
+    scheduler.add_request(_session_turn("a2", "a", 1, [4]))
+    scheduled = scheduler.schedule()
+    assert scheduled.num_scheduled_tokens == {"new": 19}
+    assert not scheduler.sessions["a"].blocks
+    scheduler.update_from_output(
+        scheduled, ModelRunnerOutput(req_ids=["new"], sampled_token_ids=[[5]])
+    )
+    assert scheduler.schedule().num_scheduled_tokens == {"a2": 21}
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+def test_session_speculative_rejection_retains_only_committed_kv(enable_prefix_caching):
+    scheduler = create_scheduler(
+        model="Qwen/Qwen3-0.6B",
+        scheduler_cls=SessionScheduler,
+        num_speculative_tokens=3,
+        speculative_method="ngram",
+        enable_prefix_caching=enable_prefix_caching,
+    )
+    first = Request(
+        request_id="first",
+        prompt_token_ids=[1] * 19,
+        sampling_params=SamplingParams(
+            max_tokens=3,
+            ignore_eos=True,
+            extra_args={"session_cache": {"id": "agent", "version": 0}},
+        ),
+        pooling_params=None,
+    )
+    scheduler.add_request(first)
+    scheduler.update_from_output(
+        scheduler.schedule(),
+        ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[2]]),
+    )
+    scheduler.update_draft_token_ids(DraftTokenIds(["first"], [[3, 8, 9]]))
+    scheduled = scheduler.schedule()
+    assert scheduled.scheduled_spec_decode_tokens == {"first": [3, 8, 9]}
+    scheduler.update_from_output(
+        scheduled, ModelRunnerOutput(req_ids=["first"], sampled_token_ids=[[3, 4]])
+    )
+    scheduler.add_request(_session_turn("second", "agent", 1, [5]))
+    scheduled = scheduler.schedule()
+    assert scheduled.scheduled_new_reqs[0].num_computed_tokens == 21
+    assert list(scheduler.requests["second"].prompt_token_ids) == [1] * 19 + [
+        2,
+        3,
+        4,
+        5,
+    ]

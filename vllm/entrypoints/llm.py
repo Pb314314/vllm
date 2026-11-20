@@ -839,6 +839,34 @@ class LLM(
     def stop_profile(self) -> None:
         self.llm_engine.stop_profile()
 
+    def fork_session(
+        self,
+        source_session_id: str,
+        session_id: str,
+        *,
+        version: int,
+        num_tokens: int | None = None,
+    ) -> None:
+        """Fork an idle session's prefix (experimental SessionScheduler only).
+
+        Args:
+            source_session_id: Existing idle session to copy.
+            session_id: Unused destination ID. Its first turn uses version 0.
+            version: Expected source version.
+            num_tokens: Prefix length to copy, or the complete token history.
+
+        Full resident blocks are shared; a partial tail is replayed by each child.
+        Token history is copied even if the source's KV has been evicted.
+
+        """
+        self.llm_engine.engine_core.fork_session(
+            source_session_id, session_id, version, num_tokens
+        )
+
+    def close_session(self, session_id: str) -> bool:
+        """Release an idle session's KV and token history (SessionScheduler only)."""
+        return self.llm_engine.engine_core.close_session(session_id)
+
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
     ) -> bool:

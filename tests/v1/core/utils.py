@@ -99,6 +99,7 @@ def create_scheduler(
     lora_config: LoRAConfig | None = None,
     speculative_config: SpeculativeConfig | None = None,
     encoder_cache_size: int | None = None,
+    additional_config: dict | None = None,
 ) -> Scheduler | AsyncScheduler:
     """Create scheduler under test.
 
@@ -232,6 +233,7 @@ def create_scheduler(
         diffusion_config=diffusion_config,
         ec_transfer_config=ec_transfer_config,
         lora_config=lora_config,
+        additional_config=additional_config or {},
         observability_config=ObservabilityConfig(
             per_request_spec_decode_metrics=per_request_spec_decode_metrics,
         ),

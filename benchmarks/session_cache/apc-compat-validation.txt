@@ -1,0 +1,106 @@
+Validation excerpts; trailing whitespace normalized.
+Qwen/Qwen3-0.6B; GB200; TRITON_ATTN; eager synchronous; batch-invariant output comparisons.
+
+Before fix: 42bfae7e7b; new bidirectional sharing test
+Excerpt: the truncated local-variable configuration rendering is omitted below.
+HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" .venv/bin/python -m pytest tests/v1/core/test_scheduler.py -k session_and_apc_share_blocks -q
+Running 1 items in this shard
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_session_and_apc_share_blocks_in_both_directions _____________
+
+    def test_session_and_apc_share_blocks_in_both_directions():
+        """Ordinary requests seed sessions and reuse their output without owning them."""
+>       scheduler = create_scheduler(
+            scheduler_cls=SessionScheduler, block_size=16, enable_prefix_caching=True
+        )
+
+tests/v1/core/test_scheduler.py:9385:
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+tests/v1/core/utils.py:260: in create_scheduler
+    scheduler = scheduler_cls(
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <vllm.v1.core.sched.session_scheduler.SessionScheduler object at 0x5ac150cc2750>
+args = ()
+[local-variable rendering omitted]
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        config = self.vllm_config
+        parallel = config.parallel_config
+        if (
+            self.cache_config.enable_prefix_caching
+            or self.scheduler_config.async_scheduling
+            or config.kv_transfer_config is not None
+            or config.ec_transfer_config is not None
+            or config.aux_output_config.enabled
+            or config.lora_config is not None
+            or config.model_config.runner_type != "generate"
+            or config.model_config.is_encoder_decoder
+            or config.model_config.is_multimodal_model
+            or parallel.world_size != 1
+            or parallel.data_parallel_size != 1
+            or parallel.decode_context_parallel_size != 1
+            or parallel.prefill_context_parallel_size != 1
+            or any(
+                group.manager_cls is not FullAttentionManager
+                or any(type(spec) is not AttentionSpec for spec in group.distinct_specs)
+                for group in self.kv_cache_config.kv_cache_groups
+            )
+            or (
+                config.speculative_config is not None
+                and config.speculative_config.method != "ngram"
+            )
+        ):
+>           raise ValueError(
+                "SessionScheduler requires a single-rank, text-only full-attention "
+                "model, APC and async scheduling disabled, and no connectors or "
+                "LoRA. Only stateless ngram speculative decoding is supported."
+            )
+E           ValueError: SessionScheduler requires a single-rank, text-only full-attention model, APC and async scheduling disabled, and no connectors or LoRA. Only stateless ngram speculative decoding is supported.
+
+vllm/v1/core/sched/session_scheduler.py:159: ValueError
+------------------------------ Captured log call -------------------------------
+WARNING  vllm.transformers_utils.config:config.py:1612 Could not retrieve safetensors metadata for facebook/opt-125m (Hub fetch failed and the cached snapshot holds no weights yet).
+=========================== short test summary info ============================
+FAILED tests/v1/core/test_scheduler.py::test_session_and_apc_share_blocks_in_both_directions
+1 failed, 322 deselected in 2.77s
+
+After fix: runtime 24d9e721c9; scheduler tests
+HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" .venv/bin/python -m pytest tests/v1/core/test_scheduler.py -k session -q
+Running 18 items in this shard
+..................                                                       [100%]
+18 passed, 310 deselected in 9.08s
+
+After fix: runtime 24d9e721c9; model tests before extra compact cold-output assertion
+CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" VLLM_GPU_SYNC_CHECK=error .venv/bin/python -m pytest tests/v1/e2e/general/test_streaming_input.py -k 'session_turns_match or session_prefix_eviction or session_fork_outputs or session_and_apc_mixed' -q
+Running 9 items in this shard
+.........                                                                [100%]
+=============================== warnings summary ===============================
+tests/v1/e2e/general/test_streaming_input.py::test_session_turns_match_recomputation[False-False]
+tests/v1/e2e/general/test_streaming_input.py::test_session_turns_match_recomputation[False-True]
+tests/v1/e2e/general/test_streaming_input.py::test_session_turns_match_recomputation[True-False]
+tests/v1/e2e/general/test_streaming_input.py::test_session_turns_match_recomputation[True-True]
+tests/v1/e2e/general/test_streaming_input.py::test_session_prefix_eviction_matches_recomputation[False]
+tests/v1/e2e/general/test_streaming_input.py::test_session_prefix_eviction_matches_recomputation[True]
+tests/v1/e2e/general/test_streaming_input.py::test_session_and_apc_mixed_batch_matches_recomputation
+tests/v1/e2e/general/test_streaming_input.py::test_session_fork_outputs_match_independent_prefill[False]
+tests/v1/e2e/general/test_streaming_input.py::test_session_fork_outputs_match_independent_prefill[True]
+  /home/bopang/vllm-session-cache/tests/utils.py:1824: DeprecationWarning: This process (pid=376812) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    pid = os.fork()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+9 passed, 16 deselected, 9 warnings in 233.80s (0:03:53)
+
+Committed 24d9e721c9; additional compact cold-output assertion
+CUDA_VISIBLE_DEVICES=0 HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" VLLM_GPU_SYNC_CHECK=error .venv/bin/python -m pytest tests/v1/e2e/general/test_streaming_input.py -k session_and_apc_mixed -q
+Running 1 items in this shard
+.                                                                        [100%]
+=============================== warnings summary ===============================
+tests/v1/e2e/general/test_streaming_input.py::test_session_and_apc_mixed_batch_matches_recomputation
+  /home/bopang/vllm-session-cache/tests/utils.py:1824: DeprecationWarning: This process (pid=515092) is multi-threaded, use of fork() may lead to deadlocks in the child.
+    pid = os.fork()
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 24 deselected, 1 warning in 25.96s

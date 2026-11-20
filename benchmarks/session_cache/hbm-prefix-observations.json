@@ -1,0 +1,1197 @@
+{
+  "prototype": "c4e77d9b0ef1252ff7727821efd96bd279cd4705",
+  "upstream_base": "54bf2e700e05cc70f59ae23272640bfe3ebf776a",
+  "model": "Qwen/Qwen3-0.6B",
+  "device": "GB200 x1, TRITON_ATTN, eager synchronous",
+  "method": "HBM-only; two distinct 16K histories alternate four measured turns, each +64 input and 16 fixed output tokens. Each configuration has one warmup trajectory and two measured trajectories. No Mooncake or SD. 3 GiB order APC/whole/prefix; 2 and 4 GiB order prefix/APC/whole. Not randomized, no causal throughput-speedup claim. Timed region LLM.generate; metadata counters enabled, no profiler. Per-step scheduler traces omitted; per-turn raw measurements and aggregate counters retained.",
+  "records": [
+    {
+      "variant": "apc",
+      "config": {
+        "mode": "apc",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-apc-2048.json",
+        "eviction_policy": "whole",
+        "kv_cache_mib": 2048
+      },
+      "kv_cache_mib": 2048,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 4.024582045036368,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 8896,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.13475521085797382,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 0.9938920253677805,
+            "output_tokens_per_second": 15.902272405884489,
+            "recomputed_prompt_tokens": 57120
+          },
+          "rows": [
+            {
+              "seconds": 0.981426710030064,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2304,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.9945778379915282,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.0312737199710682,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.0173037770437077,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2144,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 3570,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 1168,
+            "capacity_blocks": 1169
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 4.03107128792908,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 8896,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.13475521085797382,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 0.9922920519857532,
+            "output_tokens_per_second": 15.876672831772051,
+            "recomputed_prompt_tokens": 57120
+          },
+          "rows": [
+            {
+              "seconds": 1.0159519049338996,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2304,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.0278218819294125,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.9777117040939629,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.0095857969718054,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2144,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 3570,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 1168,
+            "capacity_blocks": 1169
+          }
+        }
+      ]
+    },
+    {
+      "variant": "session-whole",
+      "config": {
+        "mode": "session",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-session-whole-2048.json",
+        "eviction_policy": "whole",
+        "kv_cache_mib": 2048
+      },
+      "kv_cache_mib": 2048,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 4.6990299741737545,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 0,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 0,
+            "token_reuse_rate": 0.0,
+            "request_hit_rate": 0.0,
+            "turns_per_second": 0.8512395158116294,
+            "output_tokens_per_second": 13.61983225298607,
+            "recomputed_prompt_tokens": 66016
+          },
+          "rows": [
+            {
+              "seconds": 1.158865757053718,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.182066610082984,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.1761186770163476,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.1819789300207049,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 4,
+            "session_trims": 0,
+            "session_evicted_blocks": 4120,
+            "resident_blocks": 1035,
+            "capacity_blocks": 1169
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 4.871214085957035,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 0,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 0,
+            "token_reuse_rate": 0.0,
+            "request_hit_rate": 0.0,
+            "turns_per_second": 0.821150524164271,
+            "output_tokens_per_second": 13.138408386628337,
+            "recomputed_prompt_tokens": 66016
+          },
+          "rows": [
+            {
+              "seconds": 1.2335866820067167,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.1948339969385415,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.226887420983985,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.215905986027792,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 4,
+            "session_trims": 0,
+            "session_evicted_blocks": 4120,
+            "resident_blocks": 1035,
+            "capacity_blocks": 1169
+          }
+        }
+      ]
+    },
+    {
+      "variant": "session-prefix",
+      "config": {
+        "mode": "session",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-session-prefix-2048.json",
+        "eviction_policy": "prefix",
+        "kv_cache_mib": 2048
+      },
+      "kv_cache_mib": 2048,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 4.410228121210821,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 8896,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.13475521085797382,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 0.9069825619137829,
+            "output_tokens_per_second": 14.511720990620526,
+            "recomputed_prompt_tokens": 57120
+          },
+          "rows": [
+            {
+              "seconds": 1.0447464500321075,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2304,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.1225715220207348,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.0861351280473173,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.1567750211106613,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2144,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 8,
+            "session_evicted_blocks": 3574,
+            "resident_blocks": 1169,
+            "capacity_blocks": 1169
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 4.65334444900509,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 8896,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.13475521085797382,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 0.8595968005023187,
+            "output_tokens_per_second": 13.753548808037099,
+            "recomputed_prompt_tokens": 57120
+          },
+          "rows": [
+            {
+              "seconds": 1.2814799989573658,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2304,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.1419975250028074,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.1070982520468533,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2224,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 1.1227686729980633,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 2144,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 8,
+            "session_evicted_blocks": 3574,
+            "resident_blocks": 1169,
+            "capacity_blocks": 1169
+          }
+        }
+      ]
+    },
+    {
+      "variant": "apc",
+      "config": {
+        "mode": "apc",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-apc-3072.json",
+        "eviction_policy": "whole",
+        "kv_cache_mib": 3072
+      },
+      "kv_cache_mib": 3072,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 2.582456988049671,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 46336,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.701890450799806,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 1.5489125350431834,
+            "output_tokens_per_second": 24.782600560690934,
+            "recomputed_prompt_tokens": 19680
+          },
+          "rows": [
+            {
+              "seconds": 0.7435119049623609,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11664,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.6126811400754377,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.6089061979437247,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.6173577450681478,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11504,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 1230,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 1753,
+            "capacity_blocks": 1754
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 2.4010515360860154,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 46336,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.701890450799806,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 1.6659367530779663,
+            "output_tokens_per_second": 26.65498804924746,
+            "recomputed_prompt_tokens": 19680
+          },
+          "rows": [
+            {
+              "seconds": 0.6121431250358,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11664,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.6021340100560337,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.5951193280052394,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.5916550729889423,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11504,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 1230,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 1753,
+            "capacity_blocks": 1754
+          }
+        }
+      ]
+    },
+    {
+      "variant": "session-whole",
+      "config": {
+        "mode": "session",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-session-whole-3072.json",
+        "eviction_policy": "whole",
+        "kv_cache_mib": 3072
+      },
+      "kv_cache_mib": 3072,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 4.898862530128099,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 0,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 0,
+            "token_reuse_rate": 0.0,
+            "request_hit_rate": 0.0,
+            "turns_per_second": 0.8165160739661346,
+            "output_tokens_per_second": 13.064257183458153,
+            "recomputed_prompt_tokens": 66016
+          },
+          "rows": [
+            {
+              "seconds": 1.2393085910007358,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.223420666065067,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.2284520859830081,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.207681187079288,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 4,
+            "session_trims": 0,
+            "session_evicted_blocks": 4120,
+            "resident_blocks": 1035,
+            "capacity_blocks": 1754
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 4.993315043859184,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 0,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 0,
+            "token_reuse_rate": 0.0,
+            "request_hit_rate": 0.0,
+            "turns_per_second": 0.8010710249334718,
+            "output_tokens_per_second": 12.81713639893555,
+            "recomputed_prompt_tokens": 66016
+          },
+          "rows": [
+            {
+              "seconds": 1.212540320935659,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.167564734001644,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.370255351997912,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            },
+            {
+              "seconds": 1.2429546369239688,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 0,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 0
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 4,
+            "session_trims": 0,
+            "session_evicted_blocks": 4120,
+            "resident_blocks": 1035,
+            "capacity_blocks": 1754
+          }
+        }
+      ]
+    },
+    {
+      "variant": "session-prefix",
+      "config": {
+        "mode": "session",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-session-prefix-3072.json",
+        "eviction_policy": "prefix",
+        "kv_cache_mib": 3072
+      },
+      "kv_cache_mib": 3072,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 2.403675613924861,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 46336,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.701890450799806,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 1.6641180602022116,
+            "output_tokens_per_second": 26.625888963235386,
+            "recomputed_prompt_tokens": 19680
+          },
+          "rows": [
+            {
+              "seconds": 0.6049526289571077,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11664,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.6032620379701257,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.603753141942434,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.5917078050551936,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11504,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 8,
+            "session_evicted_blocks": 1234,
+            "resident_blocks": 1754,
+            "capacity_blocks": 1754
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 3.0026387420948595,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 46336,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.701890450799806,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 1.332161589712024,
+            "output_tokens_per_second": 21.314585435392384,
+            "recomputed_prompt_tokens": 19680
+          },
+          "rows": [
+            {
+              "seconds": 0.6063453640090302,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11664,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.6160555980168283,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.8761305790394545,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11584,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.9041072010295466,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 11504,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 8,
+            "session_evicted_blocks": 1234,
+            "resident_blocks": 1754,
+            "capacity_blocks": 1754
+          }
+        }
+      ]
+    },
+    {
+      "variant": "apc",
+      "config": {
+        "mode": "apc",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-apc-4096.json",
+        "eviction_policy": "whole",
+        "kv_cache_mib": 4096
+      },
+      "kv_cache_mib": 4096,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 1.5440549418563023,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 65696,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.9951526902569074,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 2.5905813916123335,
+            "output_tokens_per_second": 41.449302265797336,
+            "recomputed_prompt_tokens": 320
+          },
+          "rows": [
+            {
+              "seconds": 0.3868996719829738,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16384,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3850048870081082,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16384,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3889714468969032,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16464,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3831789359683171,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16464,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 2068,
+            "capacity_blocks": 2339
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 1.5728314209263772,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 65696,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.9951526902569074,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 2.543184187943074,
+            "output_tokens_per_second": 40.690947007089186,
+            "recomputed_prompt_tokens": 320
+          },
+          "rows": [
+            {
+              "seconds": 0.38678363896906376,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16384,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.39946901600342244,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16384,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3962363749742508,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16464,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3903423909796402,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16464,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 2068,
+            "capacity_blocks": 2339
+          }
+        }
+      ]
+    },
+    {
+      "variant": "session-whole",
+      "config": {
+        "mode": "session",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-session-whole-4096.json",
+        "eviction_policy": "whole",
+        "kv_cache_mib": 4096
+      },
+      "kv_cache_mib": 4096,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 1.546996871009469,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 65756,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.9960615608337373,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 2.585654874266075,
+            "output_tokens_per_second": 41.3704779882572,
+            "recomputed_prompt_tokens": 260
+          },
+          "rows": [
+            {
+              "seconds": 0.388063856982626,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3845376829849556,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3784097160678357,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3959856149740517,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 2070,
+            "capacity_blocks": 2339
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 1.5764084450202063,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 65756,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.9960615608337373,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 2.537413455653448,
+            "output_tokens_per_second": 40.598615290455164,
+            "recomputed_prompt_tokens": 260
+          },
+          "rows": [
+            {
+              "seconds": 0.39028174499981105,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.391683696070686,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.3975182540016249,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.39692474994808435,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 2070,
+            "capacity_blocks": 2339
+          }
+        }
+      ]
+    },
+    {
+      "variant": "session-prefix",
+      "config": {
+        "mode": "session",
+        "regime": "pressure",
+        "output": "/home/bopang/session-cache-experiment/profiling/hbm-session-prefix-4096.json",
+        "eviction_policy": "prefix",
+        "kv_cache_mib": 4096
+      },
+      "kv_cache_mib": 4096,
+      "note": "Small fixed-work diagnostic, eager and sync, no SD/Mooncake. No cProfile/torch profiler; lightweight counters enabled. Excludes setup turns except shared-prefix cold fanout. Two measured trajectories after one warmup, not confidence intervals.",
+      "records": [
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 0,
+          "totals": {
+            "seconds": 1.6707985999528319,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 65756,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.9960615608337373,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 2.394064730550363,
+            "output_tokens_per_second": 38.30503568880581,
+            "recomputed_prompt_tokens": 260
+          },
+          "rows": [
+            {
+              "seconds": 0.4022199360188097,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.4401176800020039,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.42550399200990796,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.4029569919221103,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 2070,
+            "capacity_blocks": 2339
+          }
+        },
+        {
+          "scenario": "alternating_pressure",
+          "repeat": 1,
+          "totals": {
+            "seconds": 1.7066317058634013,
+            "logical_prompt_tokens": 66016,
+            "cached_tokens": 65756,
+            "turns": 4,
+            "output_tokens": 64,
+            "hit_turns": 4,
+            "token_reuse_rate": 0.9960615608337373,
+            "request_hit_rate": 1.0,
+            "turns_per_second": 2.3437980123405486,
+            "output_tokens_per_second": 37.50076819744878,
+            "recomputed_prompt_tokens": 260
+          },
+          "rows": [
+            {
+              "seconds": 0.41949560900684446,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.4342751889489591,
+              "logical_prompt_tokens": 16464,
+              "cached_tokens": 16399,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.4160499459831044,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            },
+            {
+              "seconds": 0.4368109619244933,
+              "logical_prompt_tokens": 16544,
+              "cached_tokens": 16479,
+              "turns": 1,
+              "output_tokens": 16,
+              "hit_turns": 1
+            }
+          ],
+          "engine": {
+            "block_evictions": 0,
+            "session_evictions": 0,
+            "session_trims": 0,
+            "session_evicted_blocks": 0,
+            "resident_blocks": 2070,
+            "capacity_blocks": 2339
+          }
+        }
+      ]
+    }
+  ]
+}

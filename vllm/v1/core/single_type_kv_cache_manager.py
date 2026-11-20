@@ -341,8 +341,11 @@ class SingleTypeKVCacheManager(ABC):
         num_req_blocks = len(self.req_to_blocks.get(request_id, ()))
         num_unbacked_blocks = self._num_unbacked_leading_blocks(num_tokens_main_model)
 
-        if request_id in self.num_cached_block:
-            # Fast-path: a running request won't have any new prefix-cache hits.
+        if request_id in self.num_cached_block or (
+            type(self) is FullAttentionManager and not new_computed_blocks
+        ):
+            # Full attention without incoming hits needs only the owned capacity,
+            # including when APC is disabled and no cached-block marker exists.
             assert len(new_computed_blocks) == 0
             # NOTE: With speculative decoding, request's blocks may be allocated
             # for draft tokens which are later rejected. In this case,

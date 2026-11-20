@@ -17,6 +17,7 @@ from collections.abc import AsyncGenerator
 import pytest
 import pytest_asyncio
 
+from tests.utils import create_new_process_for_each_test
 from vllm import SamplingParams
 from vllm.engine.protocol import StreamingInput
 from vllm.exceptions import VLLMValidationError
@@ -748,3 +749,319 @@ async def test_streaming_input_delayed_generator_exit(engine: AsyncLLM):
     )
 
     print(f"Delayed exit test passed. Generated: {full_text}")
+
+
+@pytest.mark.parametrize("speculative", [False, True])
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+@create_new_process_for_each_test()
+def test_session_turns_match_recomputation(
+    vllm_runner, monkeypatch, speculative, enable_prefix_caching
+):
+    """Explicit delta turns preserve outputs, including after whole-session eviction."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        enable_prefix_caching=enable_prefix_caching,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=512,
+        max_num_seqs=4,
+        max_num_batched_tokens=128,
+        enable_chunked_prefill=True,
+        kv_cache_memory_bytes=128 * 1024 * 1024,
+        gpu_memory_utilization=0.04,
+        disable_log_stats=False,
+        speculative_config=(
+            {
+                "method": "ngram",
+                "num_speculative_tokens": 3,
+                "prompt_lookup_min": 1,
+                "prompt_lookup_max": 3,
+            }
+            if speculative
+            else None
+        ),
+    ) as model:
+        llm = model.llm
+        tokenizer = llm.get_tokenizer()
+        with pytest.raises(VLLMValidationError, match="n=1"):
+            llm.generate(
+                {"prompt_token_ids": [1]},
+                SamplingParams(
+                    n=2,
+                    max_tokens=1,
+                    extra_args={"session_cache": {"id": "invalid", "version": 0}},
+                ),
+                use_tqdm=False,
+            )
+        history = []
+        warm_accepted = 0
+        for version, text in enumerate(
+            ["Hello world! " * 24, "Hello world! " * 4, "Hello world! " * 4]
+            if speculative
+            else [
+                "The capital of France is",
+                ". The capital of Germany is",
+                ". Summarize:",
+            ]
+        ):
+            delta = tokenizer.encode(text, add_special_tokens=False)
+            if version == 1:
+                rejected = llm.generate(
+                    {"prompt_token_ids": [9]},
+                    SamplingParams(
+                        max_tokens=1,
+                        extra_args={"session_cache": {"id": "agent", "version": 0}},
+                    ),
+                    use_tqdm=False,
+                )[0]
+                assert rejected.outputs[0].finish_reason == "error"
+                assert "version" in rejected.outputs[0].stop_reason
+            if version == 2:
+                assert llm.reset_prefix_cache()
+            accepted_before = sum(
+                metric.value
+                for metric in llm.get_metrics()
+                if metric.name == "vllm:spec_decode_num_accepted_tokens"
+            )
+            warm = llm.generate(
+                {"prompt_token_ids": delta},
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=8,
+                    ignore_eos=True,
+                    extra_args={"session_cache": {"id": "agent", "version": version}},
+                ),
+                use_tqdm=False,
+            )[0]
+            warm_accepted += (
+                sum(
+                    metric.value
+                    for metric in llm.get_metrics()
+                    if metric.name == "vllm:spec_decode_num_accepted_tokens"
+                )
+                - accepted_before
+            )
+            history.extend(delta)
+            cold = llm.generate(
+                {"prompt_token_ids": history},
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=8,
+                    ignore_eos=True,
+                    skip_reading_prefix_cache=True,
+                ),
+                use_tqdm=False,
+            )[0]
+            assert warm.outputs[0].token_ids == cold.outputs[0].token_ids
+            if version == 1:
+                assert warm.num_cached_tokens == len(history) - len(delta) - 1
+            else:
+                assert warm.num_cached_tokens == 0
+            history.extend(warm.outputs[0].token_ids)
+        assert llm.close_session("agent")
+        assert not llm.close_session("agent")
+        if speculative:
+            assert warm_accepted > 0
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+@create_new_process_for_each_test()
+def test_session_prefix_eviction_matches_recomputation(
+    vllm_runner, monkeypatch, enable_prefix_caching
+):
+    """An HBM capacity miss drops a suffix without corrupting retained KV."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        additional_config={"session_cache": {"eviction_policy": "prefix"}},
+        enable_prefix_caching=enable_prefix_caching,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=64,
+        max_num_seqs=1,
+        max_num_batched_tokens=32,
+        block_size=16,
+        num_gpu_blocks_override=5,
+        gpu_memory_utilization=0.04,
+        enable_chunked_prefill=True,
+    ) as model:
+        llm = model.llm
+
+        def generate(tokens, session_id=None, version=0):
+            return llm.generate(
+                {"prompt_token_ids": tokens},
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=1,
+                    ignore_eos=True,
+                    skip_reading_prefix_cache=session_id is None,
+                    extra_args={"session_cache": {"id": session_id, "version": version}}
+                    if session_id is not None
+                    else None,
+                ),
+                use_tqdm=False,
+            )[0]
+
+        first = generate([101] * 40, "a")
+        generate([102] * 24, "b")
+        resumed = generate([103], "a", 1)
+        assert resumed.num_cached_tokens == 32
+        cold = generate([101] * 40 + first.outputs[0].token_ids + [103])
+        assert resumed.outputs[0].token_ids == cold.outputs[0].token_ids
+        assert llm.close_session("a")
+        assert llm.close_session("b")
+
+
+@create_new_process_for_each_test()
+def test_session_and_apc_mixed_batch_matches_recomputation(vllm_runner, monkeypatch):
+    """APC and delta turns share KV while retaining independent writable tails."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        enable_prefix_caching=True,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=128,
+        max_num_seqs=2,
+        max_num_batched_tokens=128,
+        block_size=16,
+        kv_cache_memory_bytes=128 * 1024 * 1024,
+        gpu_memory_utilization=0.04,
+    ) as model:
+        llm = model.llm
+
+        def params(version=None, cold=False, mode="delta"):
+            return SamplingParams(
+                temperature=0,
+                max_tokens=1,
+                ignore_eos=True,
+                skip_reading_prefix_cache=cold,
+                extra_args={
+                    "session_cache": {"id": "agent", "version": version, "mode": mode}
+                }
+                if version is not None
+                else None,
+            )
+
+        prefix = [101] * 33
+        llm.generate({"prompt_token_ids": prefix}, params(), use_tqdm=False)
+        first = llm.generate({"prompt_token_ids": prefix}, params(0), use_tqdm=False)[0]
+        assert first.num_cached_tokens == 32
+        second = llm.generate(
+            {"prompt_token_ids": [102] * 16}, params(1), use_tqdm=False
+        )[0]
+        assert second.num_cached_tokens == 33
+        history = (
+            prefix
+            + first.outputs[0].token_ids
+            + [102] * 16
+            + second.outputs[0].token_ids
+        )
+        mixed = llm.generate(
+            [{"prompt_token_ids": history + [103]}, {"prompt_token_ids": [104]}],
+            [params(), params(2)],
+            use_tqdm=False,
+        )
+        assert [r.num_cached_tokens for r in mixed] == [48, 50]
+        compacted = [101] * 32 + [105]
+        compact = llm.generate(
+            {"prompt_token_ids": compacted}, params(3, mode="replace"), use_tqdm=False
+        )[0]
+        assert compact.num_cached_tokens == 32
+        continued = llm.generate(
+            {"prompt_token_ids": [106]}, params(4), use_tqdm=False
+        )[0]
+        assert continued.num_cached_tokens == 33
+        assert llm.close_session("agent")
+        again = llm.generate(
+            {"prompt_token_ids": history + [103]}, params(), use_tqdm=False
+        )[0]
+        assert again.num_cached_tokens == 48
+        cold = llm.generate(
+            [{"prompt_token_ids": history + [t]} for t in (103, 104)]
+            + [
+                {"prompt_token_ids": compacted},
+                {"prompt_token_ids": compacted + compact.outputs[0].token_ids + [106]},
+            ],
+            params(cold=True),
+            use_tqdm=False,
+        )
+        for cached, reference in zip([*mixed, compact, continued], cold):
+            assert cached.outputs[0].token_ids == reference.outputs[0].token_ids
+        assert again.outputs[0].token_ids == cold[0].outputs[0].token_ids
+
+
+@pytest.mark.parametrize("enable_prefix_caching", [False, True])
+@create_new_process_for_each_test()
+def test_session_fork_outputs_match_independent_prefill(
+    vllm_runner, monkeypatch, enable_prefix_caching
+):
+    """Shared roots and replayed partial tails produce independent branch outputs."""
+    monkeypatch.setenv("VLLM_BATCH_INVARIANT", "1")
+    with vllm_runner(
+        "Qwen/Qwen3-0.6B",
+        scheduler_cls="vllm.v1.core.sched.session_scheduler.SessionScheduler",
+        attention_config={"backend": "TRITON_ATTN"},
+        enable_prefix_caching=enable_prefix_caching,
+        async_scheduling=False,
+        enforce_eager=True,
+        max_model_len=128,
+        max_num_seqs=2,
+        max_num_batched_tokens=64,
+        enable_chunked_prefill=True,
+        block_size=16,
+        kv_cache_memory_bytes=128 * 1024 * 1024,
+        gpu_memory_utilization=0.04,
+    ) as model:
+        llm = model.llm
+        root = [101] * 35
+        llm.generate(
+            {"prompt_token_ids": root},
+            SamplingParams(
+                temperature=0,
+                max_tokens=1,
+                extra_args={"session_cache": {"id": "root", "version": 0}},
+            ),
+            use_tqdm=False,
+        )
+        for sid, length in (("a", 32), ("b", 35)):
+            llm.fork_session("root", sid, version=1, num_tokens=length)
+        assert llm.close_session("root")
+        warm = llm.generate(
+            [{"prompt_token_ids": [102]}, {"prompt_token_ids": [103]}],
+            [
+                SamplingParams(
+                    temperature=0,
+                    max_tokens=4,
+                    ignore_eos=True,
+                    extra_args={"session_cache": {"id": sid, "version": 0}},
+                )
+                for sid in ("a", "b")
+            ],
+            use_tqdm=False,
+        )
+        cold = llm.generate(
+            [
+                {"prompt_token_ids": root[:32] + [102]},
+                {"prompt_token_ids": root + [103]},
+            ],
+            SamplingParams(
+                temperature=0,
+                max_tokens=4,
+                ignore_eos=True,
+                skip_reading_prefix_cache=True,
+            ),
+            use_tqdm=False,
+        )
+        for branch, reference in zip(warm, cold):
+            assert branch.num_cached_tokens == 32
+            assert branch.outputs[0].token_ids == reference.outputs[0].token_ids
+        assert llm.close_session("a")
+        assert llm.close_session("b")

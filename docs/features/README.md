@@ -1,5 +1,9 @@
 # Features
 
+## Experimental Session Cache
+
+- [Session cache with APC](automatic_prefix_caching.md#experimental-session-cache-with-apc)
+
 ## KV Cache Offloading
 
 - [UMBPStoreConnector](umbp_store_connector_usage.md)

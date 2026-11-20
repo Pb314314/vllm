@@ -35,6 +35,36 @@ from vllm.v1.request import Request
 pytestmark = pytest.mark.cpu_test
 
 
+@pytest.mark.parametrize("enable_caching", [False, True])
+def test_full_attention_capacity_without_prefix_hits(enable_caching):
+    """Capacity estimates match allocation across tails and draft rejection."""
+    spec = AttentionSpec(
+        block_size=16, num_kv_heads=1, head_size=1, dtype=torch.float32
+    )
+    pool = BlockPool(
+        num_gpu_blocks=16, enable_caching=enable_caching, hash_block_size=16
+    )
+    manager = FullAttentionManager(
+        new_kv_cache_group(["layer"], spec),
+        block_pool=pool,
+        enable_caching=enable_caching,
+        kv_cache_group_id=0,
+        scheduler_block_size=16,
+    )
+    initial_free = pool.get_num_free_blocks()
+    computed = 0
+    for end in (1, 15, 16, 17, 36, 18, 40):
+        predicted = manager.get_num_blocks_to_allocate(
+            "r", end, [], computed, computed, end
+        )
+        free_before = pool.get_num_free_blocks()
+        manager.allocate_new_blocks("r", end, end)
+        assert predicted == free_before - pool.get_num_free_blocks()
+        computed = end
+    manager.free("r")
+    assert pool.get_num_free_blocks() == initial_free
+
+
 def test_external_computed_blocks_do_not_corrupt_free_pool():
     block_size = 4
     spec = AttentionSpec(
