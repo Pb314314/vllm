@@ -1,0 +1,359 @@
+{
+  "config": {
+    "output": "/home/bopang/session-cache-experiment/profiling/cpu-phases.json",
+    "batches": [
+      64,
+      256
+    ],
+    "context": 16384,
+    "warmup": 100,
+    "steps": 512,
+    "rounds": 3
+  },
+  "note": "Sync, same-process alternated rounds, real scheduler with fake GPU outputs. No cProfile, worker, IPC, SD, or Mooncake. Homogeneous request positions align block boundaries. Not a reproduction of PR63934 async M4 timings. Per-step samples omitted here; the reproduction command emits them.",
+  "records": [
+    {
+      "mode": "apc",
+      "batch": 64,
+      "context": 16384,
+      "admission": {
+        "construct_us": 142480.427,
+        "add_us": 146.016,
+        "schedule_us": 61549.651,
+        "update_us": 970.85,
+        "scheduled_tokens": 5120
+      },
+      "decode_median": {
+        "schedule_us": 421.729,
+        "update_us": 172.176,
+        "total_us": 606.1614999999999
+      },
+      "decode_mean_total_us": 626.0921015625,
+      "ordinary_median_total_us": 602.001,
+      "boundary_median_total_us": 740.3209999999999,
+      "completion": {
+        "schedule_us": 403.136,
+        "update_us": 7041.646,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 7444.782
+      },
+      "round": 0
+    },
+    {
+      "mode": "session",
+      "batch": 64,
+      "context": 16384,
+      "admission": {
+        "construct_us": 1081.058,
+        "add_us": 323.521,
+        "schedule_us": 2386.18,
+        "update_us": 246.592,
+        "scheduled_tokens": 4160
+      },
+      "decode_median": {
+        "schedule_us": 434.209,
+        "update_us": 156.2885,
+        "total_us": 600.897
+      },
+      "decode_mean_total_us": 605.742439453125,
+      "ordinary_median_total_us": 600.4495,
+      "boundary_median_total_us": 632.5129999999999,
+      "completion": {
+        "schedule_us": 420.576,
+        "update_us": 439.521,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 860.097
+      },
+      "round": 0
+    },
+    {
+      "mode": "session",
+      "batch": 64,
+      "context": 16384,
+      "admission": {
+        "construct_us": 1138.626,
+        "add_us": 298.4,
+        "schedule_us": 2563.269,
+        "update_us": 242.688,
+        "scheduled_tokens": 4160
+      },
+      "decode_median": {
+        "schedule_us": 439.3765,
+        "update_us": 158.88,
+        "total_us": 607.841
+      },
+      "decode_mean_total_us": 612.576271484375,
+      "ordinary_median_total_us": 606.577,
+      "boundary_median_total_us": 648.8009999999999,
+      "completion": {
+        "schedule_us": 417.633,
+        "update_us": 432.737,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 850.37
+      },
+      "round": 1
+    },
+    {
+      "mode": "apc",
+      "batch": 64,
+      "context": 16384,
+      "admission": {
+        "construct_us": 138756.932,
+        "add_us": 131.456,
+        "schedule_us": 62305.844,
+        "update_us": 897.058,
+        "scheduled_tokens": 5120
+      },
+      "decode_median": {
+        "schedule_us": 421.72799999999995,
+        "update_us": 174.704,
+        "total_us": 600.849
+      },
+      "decode_mean_total_us": 624.467982421875,
+      "ordinary_median_total_us": 597.7294999999999,
+      "boundary_median_total_us": 747.4254999999999,
+      "completion": {
+        "schedule_us": 427.744,
+        "update_us": 7229.006,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 7656.75
+      },
+      "round": 1
+    },
+    {
+      "mode": "apc",
+      "batch": 64,
+      "context": 16384,
+      "admission": {
+        "construct_us": 135071.548,
+        "add_us": 102.656,
+        "schedule_us": 59520.624,
+        "update_us": 836.513,
+        "scheduled_tokens": 5120
+      },
+      "decode_median": {
+        "schedule_us": 425.073,
+        "update_us": 174.48000000000002,
+        "total_us": 606.289
+      },
+      "decode_mean_total_us": 629.988119140625,
+      "ordinary_median_total_us": 602.354,
+      "boundary_median_total_us": 751.3775,
+      "completion": {
+        "schedule_us": 426.625,
+        "update_us": 7177.005,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 7603.63
+      },
+      "round": 2
+    },
+    {
+      "mode": "session",
+      "batch": 64,
+      "context": 16384,
+      "admission": {
+        "construct_us": 1027.361,
+        "add_us": 317.025,
+        "schedule_us": 2360.996,
+        "update_us": 244.385,
+        "scheduled_tokens": 4160
+      },
+      "decode_median": {
+        "schedule_us": 441.009,
+        "update_us": 157.6,
+        "total_us": 602.897
+      },
+      "decode_mean_total_us": 608.220517578125,
+      "ordinary_median_total_us": 602.001,
+      "boundary_median_total_us": 648.2094999999999,
+      "completion": {
+        "schedule_us": 442.177,
+        "update_us": 426.849,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 869.0260000000001
+      },
+      "round": 2
+    },
+    {
+      "mode": "apc",
+      "batch": 256,
+      "context": 16384,
+      "admission": {
+        "construct_us": 551375.911,
+        "add_us": 358.721,
+        "schedule_us": 265772.049,
+        "update_us": 4527.368,
+        "scheduled_tokens": 20480
+      },
+      "decode_median": {
+        "schedule_us": 1862.42,
+        "update_us": 769.7139999999999,
+        "total_us": 2645.413
+      },
+      "decode_mean_total_us": 2739.46724609375,
+      "ordinary_median_total_us": 2630.2765,
+      "boundary_median_total_us": 3184.0699999999997,
+      "completion": {
+        "schedule_us": 1775.811,
+        "update_us": 30528.473,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 32304.284000000003
+      },
+      "round": 0
+    },
+    {
+      "mode": "session",
+      "batch": 256,
+      "context": 16384,
+      "admission": {
+        "construct_us": 4240.936,
+        "add_us": 1095.714,
+        "schedule_us": 9368.625,
+        "update_us": 1034.946,
+        "scheduled_tokens": 16640
+      },
+      "decode_median": {
+        "schedule_us": 1839.2035,
+        "update_us": 672.2255,
+        "total_us": 2516.7565000000004
+      },
+      "decode_mean_total_us": 2552.707845703125,
+      "ordinary_median_total_us": 2511.3165,
+      "boundary_median_total_us": 2750.181,
+      "completion": {
+        "schedule_us": 1794.34,
+        "update_us": 1604.867,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 3399.207
+      },
+      "round": 0
+    },
+    {
+      "mode": "session",
+      "batch": 256,
+      "context": 16384,
+      "admission": {
+        "construct_us": 4122.055,
+        "add_us": 1095.042,
+        "schedule_us": 9494.93,
+        "update_us": 1041.858,
+        "scheduled_tokens": 16640
+      },
+      "decode_median": {
+        "schedule_us": 1829.2515,
+        "update_us": 666.433,
+        "total_us": 2503.061
+      },
+      "decode_mean_total_us": 2536.8203203125,
+      "ordinary_median_total_us": 2498.021,
+      "boundary_median_total_us": 2725.253,
+      "completion": {
+        "schedule_us": 1852.068,
+        "update_us": 1627.683,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 3479.751
+      },
+      "round": 1
+    },
+    {
+      "mode": "apc",
+      "batch": 256,
+      "context": 16384,
+      "admission": {
+        "construct_us": 536800.331,
+        "add_us": 368.545,
+        "schedule_us": 255657.022,
+        "update_us": 3714.471,
+        "scheduled_tokens": 20480
+      },
+      "decode_median": {
+        "schedule_us": 1789.619,
+        "update_us": 739.681,
+        "total_us": 2538.4845
+      },
+      "decode_mean_total_us": 2636.2434375,
+      "ordinary_median_total_us": 2530.165,
+      "boundary_median_total_us": 3085.766,
+      "completion": {
+        "schedule_us": 1775.139,
+        "update_us": 29627.32,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 31402.459
+      },
+      "round": 1
+    },
+    {
+      "mode": "apc",
+      "batch": 256,
+      "context": 16384,
+      "admission": {
+        "construct_us": 533200.709,
+        "add_us": 336.449,
+        "schedule_us": 267762.26,
+        "update_us": 3656.774,
+        "scheduled_tokens": 20480
+      },
+      "decode_median": {
+        "schedule_us": 1814.1315,
+        "update_us": 744.8815,
+        "total_us": 2571.829
+      },
+      "decode_mean_total_us": 2667.523626953125,
+      "ordinary_median_total_us": 2563.125,
+      "boundary_median_total_us": 3131.062,
+      "completion": {
+        "schedule_us": 1796.356,
+        "update_us": 29584.087,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 31380.443
+      },
+      "round": 2
+    },
+    {
+      "mode": "session",
+      "batch": 256,
+      "context": 16384,
+      "admission": {
+        "construct_us": 4175.976,
+        "add_us": 1114.626,
+        "schedule_us": 9503.826,
+        "update_us": 1098.786,
+        "scheduled_tokens": 16640
+      },
+      "decode_median": {
+        "schedule_us": 1867.8429999999998,
+        "update_us": 684.3050000000001,
+        "total_us": 2557.1090000000004
+      },
+      "decode_mean_total_us": 2581.660013671875,
+      "ordinary_median_total_us": 2553.045,
+      "boundary_median_total_us": 2763.0454999999997,
+      "completion": {
+        "schedule_us": 1833.571,
+        "update_us": 1649.987,
+        "allocate_boundary": false,
+        "hash_boundary": false,
+        "total_us": 3483.558
+      },
+      "round": 2
+    }
+  ],
+  "environment": {
+    "prototype": "22bb235a950a96defbc09e57ef49e0dc9d24bfed",
+    "upstream_base": "54bf2e700e05cc70f59ae23272640bfe3ebf776a",
+    "cpu": "ARM Neoverse-V2, 140 logical CPUs",
+    "python": "3.12.3",
+    "captured_date_utc": "2026-11-20"
+  }
+}

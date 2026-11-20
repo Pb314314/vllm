@@ -59,6 +59,66 @@ at that boundary. Worker persistence is a separate optimization, and must not
 reserve active batch slots for every idle session. Keep async scheduling and
 CUDA graph compatibility in the design before drawing production conclusions.
 
+## CPU cost by phase
+
+`measure_cpu_phases.py` separates resident continuation admission, steady decode,
+and turn completion using the real synchronous schedulers with fake GPU outputs.
+It does not run a worker, GPU forward, IPC, Mooncake, or speculative decoding.
+
+```bash
+HF_HUB_OFFLINE=1 PYTHONPATH="$PWD" \
+  .venv/bin/python benchmarks/session_cache/measure_cpu_phases.py \
+  --output /tmp/cpu-phases.json
+```
+
+[Per-round observations](cpu-phase-observations.json) were captured on prototype
+`22bb235a95`, base `54bf2e700e`, with Python 3.12.3 on an ARM Neoverse-V2 host.
+Each request has a distinct 16K history, 16 generated setup tokens, and a 64-token
+continuation. Three same-process rounds alternate APC/session ordering. Each
+round warms 100 decode steps and measures 512; turn completion is separate.
+The synthetic KV pool and token budget admit every continuation together, without
+eviction. This is not a claim that these batches fit a real GPU configuration.
+
+Values are medians of the three per-round measurements, in milliseconds:
+
+| CPU phase, entire batch | APC, 64 requests | Session, 64 | APC, 256 | Session, 256 |
+| --- | --- | --- | --- | --- |
+| Continuation admission, once per turn | 202.09 | 4.04 | 804.96 | 15.75 |
+| Steady decode schedule, per step | 0.422 | 0.439 | 1.814 | 1.839 |
+| Steady decode update, per step | 0.174 | 0.158 | 0.745 | 0.672 |
+| Steady decode combined median, per step | 0.606 | 0.603 | 2.572 | 2.517 |
+| Steady decode combined mean, per step | 0.626 | 0.608 | 2.668 | 2.553 |
+| Completion schedule + update, once per turn | 7.60 | 0.86 | 31.40 | 3.48 |
+
+Independent medians need not add up. The ranges of per-round decode combined
+medians were 0.601–0.606 versus 0.601–0.608 ms at 64 requests, and 2.538–2.645
+versus 2.503–2.557 ms at 256. Small differences do not establish a stable speedup.
+All requests have aligned token positions, so block-boundary costs are synchronized;
+the means include those costs, which a median alone can underrepresent.
+
+Admission includes Request/SamplingParams construction, add_request, first
+schedule, and first result update. APC receives full history while session receives
+a delta. These are aggregate batch CPU costs, not hash-lookup-only time, GPU
+prefill latency, TTFT, or cold/chunked-prefill measurements. Prefill schedules
+80 versus 65 tokens per request. Decode schedules one token per request in both
+modes. Creating fake GPU output objects and model/config setup are outside timing.
+
+The main saving is at turn boundaries. Decode still traverses requests, checks
+allocation, constructs scheduler outputs, and updates sampled-token state. APC
+also checks for incremental hashes and publishes full cache blocks; session skips
+that work. The session allocator currently wraps the normal allocation path, so
+removing APC does not remove per-step allocation checks. Faster turn completion
+retains owned KV; releasing it is deferred until session close or eviction, which
+is outside the completion timing, not eliminated from the session lifetime.
+
+[Upstream #63934](https://github.com/vllm-project/vllm/pull/63934) independently
+optimizes no-op decode allocation while retaining APC. Its M4 Pro/async scheduler
+numbers are not directly comparable to this synchronous ARM-host probe. That
+optimization is absent from this baseline. A later comparison should include an
+optimized APC baseline and equivalent no-op handling for session mode. Session
+ownership alone does not replace decode-loop optimization or demonstrate a
+serving-throughput gain.
+
 ## Function and GPU profiling
 
 Run from the repository root, with its dependencies installed:
