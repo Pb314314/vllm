@@ -108,7 +108,11 @@ class ChatTurnBoundaries:
         if not any(m["role"] == "assistant" for m in messages):
             engine_input["prefix_match_positions"] = ()
             return
-        if len(messages) < 2 or messages[-2]["role"] != "assistant":
+        if (
+            len(messages) < 2
+            or messages[-2]["role"] != "assistant"
+            or self.end_token is None
+        ):
             return
         header_length = len(self.assistant_start)
         for pos in range(len(tokens) - generation_length - 1, -1, -1):
@@ -121,8 +125,11 @@ class ChatTurnBoundaries:
             # or a trace replays recorded rather than generated assistant text.
             if self.deepseek:
                 start += 1
-            for end in range(start, len(tokens) - generation_length):
-                if tokens[end] == self.end_token:
-                    engine_input["prefix_match_positions"] = (start, end)
-                    return
+            try:
+                end = tokens.index(
+                    self.end_token, start, len(tokens) - generation_length
+                )
+            except ValueError:
+                return
+            engine_input["prefix_match_positions"] = (start, end)
             return
