@@ -16,6 +16,7 @@ import math
 import os
 import queue
 import socket
+import struct
 import threading
 import time
 from collections.abc import Callable, Sequence
@@ -71,6 +72,9 @@ from vllm.distributed.kv_transfer.kv_connector.v1.mooncake_store.layout import (
     StoreShardId,
     TokenMajorStoreLayout,
     group_compact_kernel_blocks,
+)
+from vllm.distributed.kv_transfer.kv_connector.v1.mooncake_store.lookup_plan_cache import (  # noqa: E501
+    LookupPlanCache,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.mooncake_store.protocol import (  # noqa: E501
     LOOKUP_MSG,
@@ -1617,6 +1621,12 @@ class MooncakeStoreWorker:
             self.kv_role in ("kv_producer", "kv_both") or self.save_decode_cache
         )
         self.load_async = extra_config.get("load_async", True)
+        plan_cache_bytes = extra_config.get("turn_lookup_cache_bytes", 0)
+        if type(plan_cache_bytes) is not int or plan_cache_bytes < 0:
+            raise ValueError("turn_lookup_cache_bytes must be a nonnegative integer")
+        self._lookup_plan_cache = (
+            LookupPlanCache(plan_cache_bytes) if plan_cache_bytes else None
+        )
         # Mirrors MooncakeStoreConnector._capacity_only.
         self._capacity_only = (
             self.kv_role == "kv_consumer"
@@ -2520,7 +2530,10 @@ class MooncakeStoreWorker:
         return MooncakeStoreWorkerMetadata(completed_saves=completed_saves)
 
     def lookup(
-        self, num_tokens: int, block_hashes: Sequence[BlockHash]
+        self,
+        num_tokens: int,
+        block_hashes: Sequence[BlockHash],
+        prefix_match_positions: tuple[int, ...] | None = None,
     ) -> MooncakeLookupResult | None:
         """Check how many prefix tokens exist in the store.
 
@@ -2541,6 +2554,17 @@ class MooncakeStoreWorker:
         candidate_meta: list[tuple[int, bytes, int]] = []
         fine_grained = self.coord.enable_partial_hash_hits
         lookup_masks = None if fine_grained else self.coord.lookup_mask(token_len)
+        plan_cache = (
+            getattr(self, "_lookup_plan_cache", None)
+            if prefix_match_positions is not None
+            else None
+        )
+        construction_start = time.perf_counter() if plan_cache is not None else 0.0
+        reused_keys = 0
+        positions = tuple(
+            self.coord.align_lookup_length(position)
+            for position in (prefix_match_positions or ())[-2:]
+        )
         for g_idx, db in enumerate(self.token_dbs):
             if not self._kv_cache_groups[g_idx].prefix_cacheable:
                 continue
@@ -2551,7 +2575,26 @@ class MooncakeStoreWorker:
             max_units = (
                 min(token_len, len(block_hashes) * self.hash_block_size) // unit_size
             )
-            for unit_id in range(max_units):
+            cacheable_plan = plan_cache is not None and lookup_mask is None
+            group_keys = [] if cacheable_plan else candidate_keys
+            group_meta = [] if cacheable_plan else candidate_meta
+            start_unit = 0
+            if cacheable_plan:
+                assert plan_cache is not None
+                plan = plan_cache.get(
+                    g_idx,
+                    unit_size,
+                    self.hash_block_size,
+                    block_hashes,
+                    positions,
+                    max_units,
+                )
+                if plan is not None:
+                    group_keys.extend(plan.keys)
+                    group_meta.extend(plan.meta)
+                    start_unit = len(plan.meta)
+                    reused_keys += len(plan.keys)
+            for unit_id in range(start_unit, max_units):
                 block_id = unit_id * unit_size // spec_block_size
                 if lookup_mask is not None and (
                     block_id >= len(lookup_mask) or not lookup_mask[block_id]
@@ -2561,11 +2604,21 @@ class MooncakeStoreWorker:
                 h = block_hashes[end_token // self.hash_block_size - 1]
                 hash_hex = h.hex()
                 for key_prefix in key_prefixes:
-                    candidate_keys.append(
-                        PoolKey.build_key_string(key_prefix, hash_hex)
-                    )
-                candidate_meta.append((g_idx, bytes(h), end_token))
+                    group_keys.append(PoolKey.build_key_string(key_prefix, hash_hex))
+                group_meta.append((g_idx, bytes(h), end_token))
+            if cacheable_plan:
+                assert plan_cache is not None
+                plan_cache.put(g_idx, group_keys, group_meta, len(key_prefixes))
+                candidate_keys.extend(group_keys)
+                candidate_meta.extend(group_meta)
 
+        if plan_cache is not None:
+            self._record_kv_connector_operation(
+                "lookup_key_plan",
+                time.perf_counter() - construction_start,
+                reused_keys,
+                status="hit" if reused_keys else "miss",
+            )
         if not candidate_keys:
             return MooncakeLookupResult(0)
 
@@ -2812,7 +2865,14 @@ class LookupKeyServer:
                     blob = all_frames[3].buffer
                     block_hashes = BlobBlockHashes(blob, hash_len)
                     try:
-                        result = self.store_worker.lookup(num_tokens, block_hashes)
+                        if len(all_frames) == 5:
+                            hints = bytes(all_frames[4])
+                            positions = struct.unpack(f">{len(hints) // 4}I", hints)
+                            result = self.store_worker.lookup(
+                                num_tokens, block_hashes, positions
+                            )
+                        else:
+                            result = self.store_worker.lookup(num_tokens, block_hashes)
                         self.socket.send(
                             RESP_ERR
                             if result is None
@@ -2831,6 +2891,11 @@ class LookupKeyServer:
                         if self.store_worker.kv_send_thread is not None:
                             self.store_worker.kv_send_thread.request_queue.join()
                         self.store_worker.store.remove_all(force=True)
+                        plan_cache = getattr(
+                            self.store_worker, "_lookup_plan_cache", None
+                        )
+                        if plan_cache is not None:
+                            plan_cache.clear()
                         logger.info("Mooncake store reset via remove_all succeeded.")
                         self.socket.send(RESP_OK)
                     except Exception as e:
@@ -2952,17 +3017,27 @@ class LookupKeyClient:
         return self.socket.recv(flags=zmq.NOBLOCK)
 
     def _lookup(
-        self, num_tokens: int, block_hashes: list[BlockHash], deadline: float
+        self,
+        num_tokens: int,
+        block_hashes: list[BlockHash],
+        deadline: float,
+        prefix_match_positions: tuple[int, ...] | None = None,
     ) -> MooncakeLookupResult:
         if time.monotonic() >= deadline:
             raise self._LookupExpired("Mooncake lookup expired while queued")
         hash_len = len(block_hashes[0]) if block_hashes else 0
-        all_frames = (
+        all_frames: tuple[bytes, ...] = (
             LOOKUP_MSG,
             num_tokens.to_bytes(4, byteorder="big"),
             hash_len.to_bytes(2, byteorder="big"),
             b"".join(block_hashes),
         )
+        if prefix_match_positions is not None:
+            all_frames += (
+                struct.pack(
+                    f">{len(prefix_match_positions)}I", *prefix_match_positions
+                ),
+            )
         return decode_lookup_response(self._request(all_frames, deadline))
 
     def lookup(
@@ -2971,6 +3046,7 @@ class LookupKeyClient:
         num_tokens: int,
         block_hashes: list[BlockHash],
         non_block: bool = False,
+        prefix_match_positions: tuple[int, ...] | None = None,
     ) -> MooncakeLookupResult | None:
         """If non_block is True, will return None until the result is ready,
         then cache it until expiry or discard()."""
@@ -2991,9 +3067,12 @@ class LookupKeyClient:
             if not self.circuit_breaker.allow():
                 return MooncakeLookupResult(0)
             deadline = now + self._lookup_timeout_s
+            extra_args = (
+                (prefix_match_positions,) if prefix_match_positions is not None else ()
+            )
             state = LookupState(
                 future=self.executor.submit(
-                    self._lookup, num_tokens, list(block_hashes), deadline
+                    self._lookup, num_tokens, list(block_hashes), deadline, *extra_args
                 ),
                 signature=signature,
                 deadline=deadline,
@@ -3021,7 +3100,11 @@ class LookupKeyClient:
         return result
 
     def prefetch(
-        self, req_id: str, num_tokens: int, block_hashes: list[BlockHash]
+        self,
+        req_id: str,
+        num_tokens: int,
+        block_hashes: list[BlockHash],
+        prefix_match_positions: tuple[int, ...] | None = None,
     ) -> bool:
         """Start a lookup for a newly added request; a later lookup(req_id)
         reuses it. At most `lookup_prefetch_limit` prefetches are in flight;
@@ -3035,8 +3118,11 @@ class LookupKeyClient:
             return False
         try:
             deadline = time.monotonic() + self._lookup_timeout_s
+            extra_args = (
+                (prefix_match_positions,) if prefix_match_positions is not None else ()
+            )
             future = self.executor.submit(
-                self._lookup, num_tokens, list(block_hashes), deadline
+                self._lookup, num_tokens, list(block_hashes), deadline, *extra_args
             )
         except RuntimeError:  # executor shut down
             slots.release()

@@ -138,6 +138,10 @@ class MooncakeStoreScheduler:
         kvc_extra_config = vllm_config.kv_transfer_config.kv_connector_extra_config
         self.load_async = kvc_extra_config.get("load_async", True)
         self.lookup_async = kvc_extra_config.get("lookup_async", False)
+        plan_cache_bytes = kvc_extra_config.get("turn_lookup_cache_bytes", 0)
+        if type(plan_cache_bytes) is not int or plan_cache_bytes < 0:
+            raise ValueError("turn_lookup_cache_bytes must be a nonnegative integer")
+        self._turn_lookup_cache = bool(plan_cache_bytes)
         # Skips lookup CPU cost on instances that never load KV from the store.
         self.enable_lookup = kvc_extra_config.get("enable_lookup", True)
         self.save_decode_cache = kvc_extra_config.get("save_decode_cache", False)
@@ -227,9 +231,17 @@ class MooncakeStoreScheduler:
             or not request.block_hashes
         ):
             return
-        self.client.prefetch(
-            request.request_id, request.num_tokens, request.block_hashes
-        )
+        if getattr(self, "_turn_lookup_cache", False):
+            self.client.prefetch(
+                request.request_id,
+                request.num_tokens,
+                request.block_hashes,
+                prefix_match_positions=request.prefix_match_positions,
+            )
+        else:
+            self.client.prefetch(
+                request.request_id, request.num_tokens, request.block_hashes
+            )
 
     def get_num_new_matched_tokens(
         self,
@@ -247,12 +259,21 @@ class MooncakeStoreScheduler:
         if request.num_tokens < self._lookup_align():
             return 0, False
 
-        lookup_result = self.client.lookup(
-            request.request_id,
-            request.num_tokens,
-            request.block_hashes,
-            non_block=self.lookup_async,
-        )
+        if getattr(self, "_turn_lookup_cache", False):
+            lookup_result = self.client.lookup(
+                request.request_id,
+                request.num_tokens,
+                request.block_hashes,
+                non_block=self.lookup_async,
+                prefix_match_positions=request.prefix_match_positions,
+            )
+        else:
+            lookup_result = self.client.lookup(
+                request.request_id,
+                request.num_tokens,
+                request.block_hashes,
+                non_block=self.lookup_async,
+            )
         if lookup_result is None:
             # Lookup not ready yet; scheduler will retry on a later step.
             return None, False
