@@ -269,6 +269,52 @@ def test_turn_prefix_lookup_extends_checkpoint_and_does_not_pin_blocks():
     assert manager.block_pool.get_num_free_blocks() == 19
 
 
+def test_turn_prefix_keeps_apc_physical_sharing_after_duplicate_prefill():
+    """A shortcut must not pin a second copy of an already active prefix."""
+    manager = make_kv_cache_manager(
+        make_kv_cache_config(16, 64),
+        max_model_len=512,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+    )
+    first = make_request("first", list(range(128)), 16, sha256)
+    manager.allocate_slots(first, 128)
+    first.num_computed_tokens = 128
+    canonical_ids = manager.get_block_ids(first.request_id)[0]
+
+    duplicate = make_request(
+        "duplicate",
+        list(range(128)),
+        16,
+        sha256,
+        prompt_logprobs=5,
+        prefix_match_positions=(),
+    )
+    reused, hit, _ = manager.get_computed_blocks(duplicate)
+    assert hit == 0
+    manager.allocate_slots(duplicate, 128, hit, reused)
+    duplicate.num_computed_tokens = 128
+    assert manager.get_block_ids(duplicate.request_id)[0] != canonical_ids
+    manager.record_turn_checkpoint(duplicate)
+    manager.free(duplicate)
+
+    consumer = make_request(
+        "consumer",
+        list(range(160)),
+        16,
+        sha256,
+        prefix_match_positions=(128,),
+    )
+    reused, hit, _ = manager.get_computed_blocks(consumer)
+    assert hit == 128
+    assert reused.get_block_ids()[0] == canonical_ids
+    manager.allocate_slots(consumer, 160 - hit, hit, reused)
+    assert manager.block_pool.get_num_free_blocks() == 53
+    manager.free(first)
+    manager.free(consumer)
+    assert manager.block_pool.get_num_free_blocks() == 63
+
+
 @pytest.mark.parametrize("change", ["middle", "reuse", "reset", "edit", "salt"])
 def test_turn_prefix_invalid_checkpoint_falls_back_to_apc(change):
     """A surviving tail must never hide an evicted or overwritten middle block."""
