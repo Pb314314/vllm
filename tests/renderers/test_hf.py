@@ -39,13 +39,22 @@ assert chatml_jinja_path.exists()
 
 
 @pytest.mark.parametrize("response_length", [0, 1, 15, 16, 17, 64])
-def test_turn_prefix_hint_preserves_rendered_tokens(response_length):
+@pytest.mark.parametrize(
+    ("model", "tokenizer_mode"),
+    [
+        ("Qwen/Qwen2.5-1.5B-Instruct", "auto"),
+        ("MiniMaxAI/MiniMax-M3.1-Flash", "auto"),
+        ("deepseek-ai/DeepSeek-V4.1-Flash", "deepseek_v41"),
+    ],
+)
+def test_turn_prefix_hint_preserves_rendered_tokens(
+    response_length, model, tokenizer_mode
+):
     """Derive a real historical assistant boundary without rerendering history."""
     from vllm.entrypoints.openai.chat_completion.turn_prefix import ChatTurnBoundaries
     from vllm.inputs.engine import tokens_input
 
-    model = "Qwen/Qwen2.5-1.5B-Instruct"
-    tokenizer = get_tokenizer(model)
+    tokenizer = get_tokenizer(model, tokenizer_mode=tokenizer_mode)
     messages = [
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello"},
@@ -61,19 +70,25 @@ def test_turn_prefix_hint_preserves_rendered_tokens(response_length):
     boundaries = ChatTurnBoundaries(tokenizer, None)
     boundaries.add_hint(request, engine_input)
     assert engine_input["prompt_token_ids"] == tokens
-    (position,) = engine_input["prefix_match_positions"]
-    assert tokens[position] == tokenizer.convert_tokens_to_ids("<|im_end|>")
+    prompt_position, position = engine_input["prefix_match_positions"]
+    assert tokens[position] == boundaries.end_token
     previous_prompt = tokenizer.apply_chat_template(
         messages[:2], tokenize=True, add_generation_prompt=True, return_dict=False
     )
-    assert tokens[: len(previous_prompt)] == previous_prompt
+    # DeepSeek changes the historical reasoning header when dropping thinking.
+    stable_length = len(previous_prompt) - int(boundaries.deepseek)
+    assert tokens[:stable_length] == previous_prompt[:stable_length]
+    assert prompt_position == len(previous_prompt)
     assert position >= len(previous_prompt)
 
-    custom = ChatTurnBoundaries(tokenizer, "{{ messages }}")
     plain = tokens_input(tokens)
-    custom.add_hint(request, plain)
+    # A custom per-request template always falls back, including DeepSeek.
+    custom = ChatCompletionRequest(
+        model=model, messages=messages, chat_template="{{ messages }}"
+    )
+    boundaries.add_hint(custom, plain)
     assert "prefix_match_positions" not in plain
-    messages[2]["content"] += "<|im_end|>"
+    messages[2]["content"] += boundaries.delimiters[0]
     boundaries.add_hint(ChatCompletionRequest(model=model, messages=messages), plain)
     assert "prefix_match_positions" not in plain
 

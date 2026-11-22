@@ -159,12 +159,7 @@ class OpenAIServingChat(GenerateBaseServing):
 
         self.online_renderer = online_renderer
         self._turn_boundaries = None
-        if (
-            envs.VLLM_TURN_PREFIX_CACHE
-            and type(self) is OpenAIServingChat
-            and not reasoning_parser
-            and not enable_auto_tools
-        ):
+        if envs.VLLM_TURN_PREFIX_CACHE and type(self) is OpenAIServingChat:
             from .turn_prefix import ChatTurnBoundaries
 
             tokenizer = self.renderer.tokenizer

@@ -2733,8 +2733,8 @@ def test_preempt_during_execution(monkeypatch, turn_prefix_cache):
         index = scheduler.kv_cache_manager.turn_prefix_cache
         assert index is not None
         # The stale output must not publish the preempted request's KV.
-        assert (5, requests[0].block_hashes[4]) in index.entries
-        assert (5, requests[1].block_hashes[4]) not in index.entries
+        assert (5, requests[0].block_hashes[4], 0) in index.entries
+        assert (5, requests[1].block_hashes[4], 0) not in index.entries
 
 
 def test_turn_prefix_abort_does_not_publish_inflight_blocks(monkeypatch):

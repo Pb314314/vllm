@@ -86,22 +86,32 @@ VLLM_TURN_PREFIX_CACHE=1 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
     --enable-prefix-caching
 ```
 
-The first version uses the Python API frontend and recognizes the shipped
-Qwen2.5-Instruct text chat template.
-It supports streaming and non-streaming responses, a single engine/GPU, one
-full-attention KV cache group, and local GPU caching. Requests with tools,
-multimodal content, reasoning parsers, custom templates, prompt truncation, or
-explicit session-cache commands use the original path. Hybrid models,
-speculative decoding, parallel execution, and KV connectors also retain their
-original paths. Raw text and token-ID requests continue to use ordinary APC.
+The experimental Python frontend recognizes the shipped Qwen2.5-Instruct and
+MiniMax-M3.1-Flash text templates, and vLLM's native DeepSeek-V4.1 tokenizer.
+It supports streaming and non-streaming responses. Requests with tools,
+multimodal content, custom templates, template overrides, prompt truncation, or
+explicit session-cache commands use the original path. Raw text and token-ID
+requests continue to use ordinary APC.
+
+The shortcut seeds standard full-attention cache groups within the normal cache
+coordinator. Other groups retain their original matching and alignment rules;
+speculative decoding retains its normal proof, lookahead and replay rules.
+Tensor/data parallel execution and connectors can use these local shortcuts.
+Pipeline and context parallel execution remain on the ordinary path. A local
+checkpoint does not bypass remote-cache validation or KV transfer. These are
+experimental paths; target-model serving and performance validation are required
+before using a newly supported combination in production.
 
 The server derives the previous assistant turn's position from the final
 rendered tokens without changing the prompt or retokenizing each historical
-turn. At most two adjacent complete-block boundaries are probed. A match must
+turn. It considers the previous assistant's input and output boundaries, with at
+most two neighboring complete-block positions per boundary and cache group.
+The input boundary is useful when reasoning is rewritten between turns. A match must
 have the same chained prefix hash, including the cache salt, and all recorded
-blocks must still have their original cache-registration identities. It then
-continues ordinary APC lookup after the checkpoint, preserving longer prefix
-hits. A missing, invalid, or inapplicable checkpoint falls back to ordinary APC.
+blocks must still have their original cache-registration identities. Each group's
+lookup continues after its checkpoint, followed by the original cross-group
+reconciliation, preserving ordinary APC's hit length. A missing, invalid, or
+inapplicable checkpoint falls back to ordinary APC.
 Compaction and edited histories therefore require no new client protocol.
 
 Checkpoints are recorded after prefill and at successful generation completion,
@@ -118,9 +128,11 @@ table queries alone do not establish an end-to-end speedup.
 When enabled, `/metrics` additionally exposes:
 
 - `vllm:turn_prefix_cache_queries_total` and `vllm:turn_prefix_cache_hits_total`:
-  requests probing and hitting the shortcut (scheduler retries may probe again).
-- `vllm:turn_prefix_cache_skipped_block_lookups_total`: block lookups bypassed by
-  valid checkpoints, excluding the suffix still queried through APC.
+  cache-group probes and valid checkpoint hits. One request can probe several
+  groups, and scheduler retries may probe again.
+- `vllm:turn_prefix_cache_skipped_block_lookups_total`: group/block lookups actually
+  bypassed in the coordinator, excluding the suffix still queried through APC.
+  A valid checkpoint can save no queries if another group prevents its use.
 - `vllm:turn_prefix_cache_invalidations_total`: stale entries rejected on lookup.
 - `vllm:turn_prefix_cache_entries` and `vllm:turn_prefix_cache_metadata_bytes`:
   current index size and conservatively accounted metadata, not GPU usage.

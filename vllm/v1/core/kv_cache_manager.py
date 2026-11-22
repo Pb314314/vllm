@@ -21,7 +21,7 @@ from vllm.v1.core.single_type_kv_cache_manager import (
     MambaManager,
     get_kv_cache_kind,
 )
-from vllm.v1.core.turn_prefix_cache import TurnPrefixCache
+from vllm.v1.core.turn_prefix_cache import TurnPrefixCache, TurnPrefixLookup
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
@@ -206,14 +206,16 @@ class KVCacheManager:
         )
         self.kv_cache_config = kv_cache_config
         self.turn_prefix_cache: TurnPrefixCache | None = None
+        self.turn_prefix_managers = tuple(
+            manager
+            for manager in self.coordinator.single_type_managers
+            if type(manager) is FullAttentionManager
+            and manager.block_size % hash_block_size == 0
+        )
         if (
             enable_turn_prefix_cache
             and enable_caching
-            and self.num_kv_cache_groups == 1
-            and type(self.coordinator.single_type_managers[0]) is FullAttentionManager
-            and scheduler_block_size == hash_block_size
-            and not use_eagle
-            and not num_hash_lookahead_tokens
+            and self.turn_prefix_managers
             and dcp_world_size == pcp_world_size == 1
         ):
             self.turn_prefix_cache = TurnPrefixCache(hash_block_size)
@@ -340,28 +342,34 @@ class KVCacheManager:
         # num_computed_tokens to be block-size aligned. Removing this limitation
         # could slightly improve performance in the future.
         max_cache_hit_length = request.get_max_cache_hit_length(max_cache_hit_length)
-        turn_blocks = (
-            self.turn_prefix_cache.lookup(request, max_cache_hit_length)
-            if self.turn_prefix_cache is not None
-            else None
-        )
-        computed_blocks: tuple[list[KVCacheBlock], ...]
-        if turn_blocks is not None:
-            prefix_length = len(turn_blocks) * self.block_pool.hash_block_size
-            suffix_blocks, suffix_length, num_uncached = (
-                self.coordinator.find_longest_cache_hit(
-                    request.block_hashes[len(turn_blocks) :],
-                    max_cache_hit_length - prefix_length,
+        known_blocks = None
+        if (
+            self.turn_prefix_cache is not None
+            and self.turn_prefix_cache.supports(request)
+            and request.prefix_match_positions
+        ):
+            known_blocks = TurnPrefixLookup({})
+            for manager in self.turn_prefix_managers:
+                checkpoint_blocks = self.turn_prefix_cache.lookup(
+                    request,
+                    max_cache_hit_length,
+                    group_id=manager.kv_cache_group_id,
+                    block_size=manager.block_size,
                 )
+                if checkpoint_blocks is not None:
+                    known_blocks.blocks[manager.kv_cache_group_id] = checkpoint_blocks
+        computed_blocks, num_new_computed_tokens, num_uncached = (
+            self.coordinator.find_longest_cache_hit(
+                request.block_hashes,
+                max_cache_hit_length,
+                request.num_tokens,
+                known_full_attention_blocks=known_blocks,
             )
-            turn_blocks.extend(suffix_blocks[0])
-            computed_blocks = (turn_blocks,)
-            num_new_computed_tokens = prefix_length + suffix_length
-        else:
-            computed_blocks, num_new_computed_tokens, num_uncached = (
-                self.coordinator.find_longest_cache_hit(
-                    request.block_hashes, max_cache_hit_length, request.num_tokens
-                )
+        )
+        if known_blocks is not None:
+            assert self.turn_prefix_cache is not None
+            self.turn_prefix_cache.stats.skipped_block_lookups += (
+                known_blocks.skipped_block_lookups
             )
 
         # When kv_cache_report_mode is "full", emit BlockStored events
@@ -864,20 +872,30 @@ class KVCacheManager:
             request.num_computed_tokens - request.num_in_flight_tokens,
             request.num_tokens,
         )
-        blocks = self.coordinator.single_type_managers[0].req_to_blocks.get(
-            request.request_id, ()
-        )
-        if (
+        record_prefill = (
             not request.turn_prefill_checkpoint_recorded
             and committed >= request.num_prompt_tokens
-        ):
-            cache.register(request, blocks, request.num_prompt_tokens)
-            request.turn_prefill_checkpoint_recorded = True
-        if request.status in (
+        )
+        record_output = request.status in (
             RequestStatus.FINISHED_STOPPED,
             RequestStatus.FINISHED_LENGTH_CAPPED,
-        ):
-            cache.register(request, blocks, committed)
+        )
+        if not (record_prefill or record_output):
+            return
+        for manager in self.turn_prefix_managers:
+            blocks = manager.req_to_blocks.get(request.request_id, ())
+            for position in ((request.num_prompt_tokens,) if record_prefill else ()) + (
+                (committed,) if record_output else ()
+            ):
+                cache.register(
+                    request,
+                    blocks,
+                    position,
+                    group_id=manager.kv_cache_group_id,
+                    block_size=manager.block_size,
+                )
+        if record_prefill:
+            request.turn_prefill_checkpoint_recorded = True
 
     def create_kv_cache_blocks(
         self, blocks: tuple[list[KVCacheBlock], ...]

@@ -389,10 +389,7 @@ class Scheduler(SchedulerInterface):
             ),
             enable_turn_prefix_cache=(
                 envs.VLLM_TURN_PREFIX_CACHE
-                and self.parallel_config.world_size == 1
-                and self.parallel_config.data_parallel_size == 1
-                and self.connector is None
-                and speculative_config is None
+                and self.parallel_config.pipeline_parallel_size == 1
             ),
         )
         # Mamba managers already account for their speculative state blocks.

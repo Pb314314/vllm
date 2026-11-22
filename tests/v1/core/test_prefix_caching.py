@@ -343,6 +343,113 @@ def test_turn_checkpoint_only_registers_completed_prefixes():
     manager.free(producer)
 
 
+@pytest.mark.parametrize(
+    "spec_types", [["full", "full"], ["full", "sliding_window"], ["full", "mamba"]]
+)
+@pytest.mark.parametrize("lookahead", [0, 1])
+@pytest.mark.parametrize("evict_middle", [False, True])
+def test_turn_shortcut_preserves_hybrid_and_speculative_hits(
+    spec_types, lookahead, evict_middle
+):
+    """A validated full prefix must still obey other groups and SD proof rules."""
+    config = _make_hybrid_kv_cache_config(16, 100, spec_types)
+    manager = make_kv_cache_manager(
+        config,
+        max_model_len=512,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+        use_eagle=not lookahead,
+        num_hash_lookahead_tokens=lookahead,
+    )
+    producer = make_request(
+        "producer",
+        list(range(129)),
+        16,
+        sha256,
+        num_hash_lookahead_tokens=lookahead,
+        prefix_match_positions=(),
+    )
+    allocated = manager.allocate_slots(producer, 129)
+    assert allocated is not None
+    producer.num_computed_tokens = 129
+    manager.record_turn_checkpoint(producer)
+    manager.free(producer)
+    if evict_middle:
+        manager.evict_blocks({allocated.blocks[0][3].block_id})
+    consumer = make_request(
+        "consumer",
+        list(range(161)),
+        16,
+        sha256,
+        num_hash_lookahead_tokens=lookahead,
+        prefix_match_positions=(129,),
+    )
+    reference = make_request(
+        "reference",
+        list(range(161)),
+        16,
+        sha256,
+        num_hash_lookahead_tokens=lookahead,
+    )
+    blocks, length, uncached = manager.get_computed_blocks(consumer)
+    expected, expected_length, expected_uncached = manager.get_computed_blocks(
+        reference
+    )
+    assert length == expected_length
+    assert uncached == expected_uncached
+    assert blocks.blocks == expected.blocks
+    cache = manager.turn_prefix_cache
+    assert cache is not None
+    assert cache.stats.hits > 0 or evict_middle
+    assert all(
+        b.ref_cnt == 0 for group in blocks.blocks for b in group if not b.is_null
+    )
+
+
+@pytest.mark.parametrize("evict_group", [None, 0, 1])
+def test_turn_shortcut_handles_different_physical_block_sizes(evict_group):
+    """Compressed and ordinary full-attention groups share token coordinates."""
+    config = make_kv_cache_config(16, 100)
+    config.kv_cache_groups.append(
+        new_kv_cache_group(
+            ["compressed"],
+            AttentionSpec(
+                block_size=32,
+                num_kv_heads=1,
+                head_size=1,
+                dtype=torch.float32,
+            ),
+        )
+    )
+    manager = make_kv_cache_manager(
+        config,
+        max_model_len=512,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+    )
+    producer = make_request(
+        "producer", list(range(129)), 16, sha256, prefix_match_positions=()
+    )
+    allocated = manager.allocate_slots(producer, 129)
+    assert allocated is not None
+    producer.num_computed_tokens = 129
+    manager.record_turn_checkpoint(producer)
+    manager.free(producer)
+    if evict_group is not None:
+        manager.evict_blocks({allocated.blocks[evict_group][1].block_id})
+    consumer = make_request(
+        "consumer", list(range(161)), 16, sha256, prefix_match_positions=(129,)
+    )
+    reference = make_request("reference", list(range(161)), 16, sha256)
+    actual, length, uncached = manager.get_computed_blocks(consumer)
+    expected, expected_length, expected_uncached = manager.get_computed_blocks(
+        reference
+    )
+    assert (length, uncached) == (expected_length, expected_uncached)
+    assert actual.blocks == expected.blocks
+    assert manager.turn_prefix_cache.stats.hits > 0
+
+
 def test_turn_checkpoint_metadata_budget_does_not_change_gpu_ownership():
     from vllm.v1.core.turn_prefix_cache import TurnPrefixCache
 

@@ -19,6 +19,12 @@ class _Checkpoint:
     metadata_bytes: int
 
 
+@dataclass(slots=True)
+class TurnPrefixLookup:
+    blocks: dict[int, list[KVCacheBlock]]
+    skipped_block_lookups: int = 0
+
+
 class TurnPrefixCache:
     """Bounded, non-owning shortcuts into the existing full-attention APC.
 
@@ -32,7 +38,9 @@ class TurnPrefixCache:
         self.block_size = block_size
         self.max_entries = max_entries
         self.max_bytes = max_bytes
-        self.entries: OrderedDict[tuple[int, BlockHash], _Checkpoint] = OrderedDict()
+        self.entries: OrderedDict[tuple[int, BlockHash, int], _Checkpoint] = (
+            OrderedDict()
+        )
         self.metadata_bytes = 0
         self.stats = TurnPrefixCacheStats()
 
@@ -48,18 +56,34 @@ class TurnPrefixCache:
             and not (request.sampling_params.extra_args or {}).get("session_cache")
         )
 
-    def lookup(self, request: Request, max_length: int) -> list[KVCacheBlock] | None:
+    def lookup(
+        self,
+        request: Request,
+        max_length: int,
+        *,
+        group_id: int = 0,
+        block_size: int | None = None,
+    ) -> list[KVCacheBlock] | None:
         if not self.supports(request) or not request.prefix_match_positions:
             return None
         self.stats.queries += 1
         # The sampled final token may not have KV, and retokenization can
         # change a turn's tail. Probe at most two neighboring full blocks.
-        position = request.prefix_match_positions[-1]
-        end = min(position, max_length) // self.block_size
-        for count in (end, end - 1):
-            if count <= 0 or count > len(request.block_hashes):
+        block_size = block_size or self.block_size
+        positions = request.prefix_match_positions[-2:]
+        candidates = dict.fromkeys(
+            count
+            for position in reversed(positions)
+            for count in (
+                min(position, max_length) // block_size,
+                min(position, max_length) // block_size - 1,
+            )
+        )
+        for count in candidates:
+            hash_count = count * block_size // self.block_size
+            if count <= 0 or hash_count > len(request.block_hashes):
                 continue
-            key = (count, request.block_hashes[count - 1])
+            key = (hash_count, request.block_hashes[hash_count - 1], group_id)
             entry = self.entries.get(key)
             if entry is None:
                 continue
@@ -71,19 +95,29 @@ class TurnPrefixCache:
                 continue
             self.entries.move_to_end(key)
             self.stats.hits += 1
-            self.stats.skipped_block_lookups += count
             return list(entry.blocks)
         return None
 
     def register(
-        self, request: Request, blocks: Sequence[KVCacheBlock], num_committed: int
+        self,
+        request: Request,
+        blocks: Sequence[KVCacheBlock],
+        num_committed: int,
+        *,
+        group_id: int = 0,
+        block_size: int | None = None,
     ) -> None:
         if not self.supports(request):
             return
-        count = min(num_committed // self.block_size, len(request.block_hashes))
+        block_size = block_size or self.block_size
+        count = (
+            min(num_committed, len(request.block_hashes) * self.block_size)
+            // block_size
+        )
         if count <= 0 or count > len(blocks):
             return
-        key = (count, request.block_hashes[count - 1])
+        hash_count = count * block_size // self.block_size
+        key = (hash_count, request.block_hashes[hash_count - 1], group_id)
         if key in self.entries:
             old = self.entries.pop(key)
             self.metadata_bytes -= old.metadata_bytes

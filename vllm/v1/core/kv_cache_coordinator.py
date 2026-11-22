@@ -19,6 +19,7 @@ from vllm.v1.core.single_type_kv_cache_manager import (
     SlidingWindowManager,
     create_single_type_manager,
 )
+from vllm.v1.core.turn_prefix_cache import TurnPrefixLookup
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
@@ -481,6 +482,7 @@ class KVCacheCoordinator(ABC):
         block_hashes: list[BlockHash],
         max_cache_hit_length: int,
         num_request_tokens: int | None = None,
+        known_full_attention_blocks: TurnPrefixLookup | None = None,
     ) -> tuple[tuple[list[KVCacheBlock], ...], int, int]:
         """Returns the per-group hit blocks, the hit length, and the number of
         `num_uncached_common_prefix_tokens` (a shared prefix that a
@@ -543,6 +545,7 @@ class KVCacheCoordinatorNoPrefixCache(KVCacheCoordinator):
         block_hashes: list[BlockHash],
         max_cache_hit_length: int,
         num_request_tokens: int | None = None,
+        known_full_attention_blocks: TurnPrefixLookup | None = None,
     ) -> tuple[tuple[list[KVCacheBlock], ...], int, int]:
         blocks: tuple[list[KVCacheBlock], ...] = tuple(
             [] for _ in range(self.num_single_type_manager)
@@ -608,6 +611,7 @@ class UnitaryKVCacheCoordinator(KVCacheCoordinator):
         block_hashes: list[BlockHash],
         max_cache_hit_length: int,
         num_request_tokens: int | None = None,
+        known_full_attention_blocks: TurnPrefixLookup | None = None,
     ) -> tuple[tuple[list[KVCacheBlock], ...], int, int]:
         hit_blocks, hit_length = self.single_type_managers[0].find_longest_cache_hit(
             block_hashes=block_hashes,
@@ -621,6 +625,11 @@ class UnitaryKVCacheCoordinator(KVCacheCoordinator):
             dcp_world_size=self.dcp_world_size,
             pcp_world_size=self.pcp_world_size,
             num_request_tokens=num_request_tokens,
+            **(
+                {"known_prefix": known_full_attention_blocks}
+                if type(self.single_type_managers[0]) is FullAttentionManager
+                else {}
+            ),
         )
         # Single group: nothing "uncached common" -- no other group to lag it.
         return hit_blocks, hit_length, 0
@@ -806,6 +815,7 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
         block_hashes: list[BlockHash],
         max_cache_hit_length: int,
         num_request_tokens: int | None = None,
+        known_full_attention_blocks: TurnPrefixLookup | None = None,
     ) -> tuple[tuple[list[KVCacheBlock], ...], int, int]:
         """Find the longest cache hit using an iterative fixed-point algorithm.
 
@@ -818,6 +828,8 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
             block_hashes: The block hashes of the request.
             max_cache_hit_length: The maximum length of the cache hit.
             num_request_tokens: The request length; see the base class.
+            known_full_attention_blocks: Validated full-block prefixes. Other
+                cache groups and EAGLE proof/drop rules still use normal APC.
 
         Returns:
             A tuple containing:
@@ -905,6 +917,11 @@ class HybridKVCacheCoordinator(KVCacheCoordinator):
                         first_group_id
                     ].pcp_world_size,
                     num_request_tokens=num_request_tokens,
+                    **(
+                        {"known_prefix": known_full_attention_blocks}
+                        if manager_cls is FullAttentionManager
+                        else {}
+                    ),
                 )
                 if drop_eagle_block:
                     eagle_verified.add(idx)

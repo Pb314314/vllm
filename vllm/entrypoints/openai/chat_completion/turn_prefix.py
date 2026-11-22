@@ -12,22 +12,46 @@ from vllm.tokenizers import TokenizerLike
 _QWEN25_TEMPLATE_SHA256 = (
     "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f"
 )
+_MINIMAX31_TEMPLATE_SHA256 = (
+    "961e3f96b2c08d26555efdfeb3b384d5e81181bf0cfc04edbadc31c6e507b431"
+)
 
 
 class ChatTurnBoundaries:
     def __init__(self, tokenizer: TokenizerLike, template: str | None) -> None:
         template = template or getattr(tokenizer, "chat_template", None)
-        self.supported = (
-            isinstance(template, str)
-            and hashlib.sha256(template.encode()).hexdigest() == _QWEN25_TEMPLATE_SHA256
+        digest = (
+            hashlib.sha256(template.encode()).hexdigest()
+            if isinstance(template, str)
+            else None
         )
+        self.deepseek = (
+            getattr(tokenizer.apply_chat_template, "__module__", None)
+            == "vllm.tokenizers.deepseek_v41"
+        )
+        self.supported = self.deepseek or digest in (
+            _QWEN25_TEMPLATE_SHA256,
+            _MINIMAX31_TEMPLATE_SHA256,
+        )
+        self.delimiters: tuple[str, ...] = ("<|im_start|>", "<|im_end|>")
+        start, end = "<|im_start|>assistant\n", "<|im_end|>"
+        if digest == _MINIMAX31_TEMPLATE_SHA256:
+            start, end = "]~b]ai\n", "[e~["
+            self.delimiters = ("]~b]", "[e~[")
+        elif self.deepseek:
+            start, end = "<｜Assistant｜>", "<｜end▁of▁sentence｜>"
+            self.delimiters = (start, end, "<｜User｜>")
         self.end_token = None
         self.assistant_start = []
         if self.supported:
-            self.end_token = tokenizer.convert_tokens_to_ids("<|im_end|>")
-            self.assistant_start = tokenizer.encode(
-                "<|im_start|>assistant\n", add_special_tokens=False
-            )
+            self.end_token = tokenizer.convert_tokens_to_ids(end)
+            self.assistant_start = tokenizer.encode(start, add_special_tokens=False)
+        self.generation_suffixes = [self.assistant_start]
+        if self.deepseek:
+            self.generation_suffixes = [
+                tokenizer.encode(start + thinking, add_special_tokens=False)
+                for thinking in ("<think>", "</think>")
+            ]
 
     def add_hint(
         self, request: ChatCompletionRequest, engine_input: EngineInput
@@ -50,14 +74,24 @@ class ChatTurnBoundaries:
         if any(
             m["role"] not in ("system", "user", "assistant")
             or not isinstance(m.get("content"), str)
-            or any(k not in ("role", "content") for k in m)
-            or "<|im_start|>" in m["content"]
-            or "<|im_end|>" in m["content"]
+            or any(
+                k not in ("role", "content", "reasoning", "reasoning_content")
+                for k in m
+            )
+            or any(delimiter in m["content"] for delimiter in self.delimiters)
             for m in messages
         ):
             return
         tokens = engine_input["prompt_token_ids"]
-        if tokens[-len(self.assistant_start) :] != self.assistant_start:
+        generation_length = next(
+            (
+                len(suffix)
+                for suffix in self.generation_suffixes
+                if suffix and tokens[-len(suffix) :] == suffix
+            ),
+            None,
+        )
+        if generation_length is None:
             return
         # Empty hints mark eligible first turns for checkpoint registration.
         if not any(m["role"] == "assistant" for m in messages):
@@ -65,11 +99,19 @@ class ChatTurnBoundaries:
             return
         if len(messages) < 2 or messages[-2]["role"] != "assistant":
             return
-        ends = 0
-        for pos in range(len(tokens) - 1, -1, -1):
-            if tokens[pos] == self.end_token:
-                ends += 1
-                if ends == 2:
-                    # Position before the previous assistant's closing marker.
-                    engine_input["prefix_match_positions"] = (pos,)
+        header_length = len(self.assistant_start)
+        for pos in range(len(tokens) - generation_length - 1, -1, -1):
+            if tokens[pos] != self.assistant_start[0]:
+                continue
+            if tokens[pos : pos + header_length] != self.assistant_start:
+                continue
+            start = pos + header_length
+            # The previous prompt is also useful when reasoning is rewritten
+            # or a trace replays recorded rather than generated assistant text.
+            if self.deepseek:
+                start += 1
+            for end in range(start, len(tokens) - generation_length):
+                if tokens[end] == self.end_token:
+                    engine_input["prefix_match_positions"] = (start, end)
                     return
+            return
