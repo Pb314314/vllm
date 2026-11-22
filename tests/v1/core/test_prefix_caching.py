@@ -133,6 +133,7 @@ def make_request(
     num_hash_lookahead_tokens: int = 0,
     session_id: str | None = None,
     sampling_params: SamplingParams | None = None,
+    prefix_match_positions: tuple[int, ...] | None = None,
 ):
     mm_features = []
     if mm_positions is not None:
@@ -162,6 +163,7 @@ def make_request(
             block_size, hash_fn, num_hash_lookahead_tokens
         ),
         session_id=session_id,
+        prefix_match_positions=prefix_match_positions,
     )
 
 
@@ -212,6 +214,162 @@ def make_kv_cache_config(block_size: int, num_blocks: int) -> KVCacheConfig:
 
 
 HISPARSE_BLOCK_SIZE = 16
+
+
+def test_turn_prefix_lookup_extends_checkpoint_and_does_not_pin_blocks():
+    """A shortcut must preserve ordinary APC's longer hit and eviction order."""
+    manager = make_kv_cache_manager(
+        make_kv_cache_config(16, 20),
+        max_model_len=512,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+    )
+    producer = make_request(
+        "producer", list(range(128)), 16, sha256, prefix_match_positions=()
+    )
+    manager.allocate_slots(producer, 128)
+    producer.num_computed_tokens = 128
+    manager.record_turn_checkpoint(producer)
+    manager.free(producer)
+    assert manager.block_pool.get_num_free_blocks() == 19
+
+    ordinary = make_request("ordinary", list(range(160)), 16, sha256)
+    manager.allocate_slots(ordinary, 160)
+    manager.free(ordinary)
+    consumer = make_request(
+        "consumer", list(range(176)), 16, sha256, prefix_match_positions=(128,)
+    )
+    blocks, hit, _ = manager.get_computed_blocks(consumer)
+    expected = manager.get_computed_blocks(
+        make_request("reference", list(range(176)), 16, sha256)
+    )[1]
+    assert hit == expected == 160
+    assert len(blocks.blocks[0]) == 10
+    cache = manager.turn_prefix_cache
+    assert cache is not None and cache.stats.hits == 1
+    assert cache.stats.skipped_block_lookups == 8
+    assert all(b.ref_cnt == 0 for b in blocks.blocks[0])
+    manager.allocate_slots(consumer, 16, hit, blocks)
+    assert all(b.ref_cnt == 1 for b in blocks.blocks[0])
+    sibling = make_request(
+        "sibling",
+        list(range(160)) + [300] * 16,
+        16,
+        sha256,
+        prefix_match_positions=(128,),
+    )
+    shared, sibling_hit, _ = manager.get_computed_blocks(sibling)
+    assert sibling_hit == hit
+    assert shared.blocks == blocks.blocks
+    manager.allocate_slots(sibling, 16, sibling_hit, shared)
+    assert all(b.ref_cnt == 2 for b in blocks.blocks[0])
+    manager.free(consumer)
+    assert all(b.ref_cnt == 1 for b in blocks.blocks[0])
+    manager.free(sibling)
+    assert manager.block_pool.get_num_free_blocks() == 19
+
+
+@pytest.mark.parametrize("change", ["middle", "reuse", "reset", "edit", "salt"])
+def test_turn_prefix_invalid_checkpoint_falls_back_to_apc(change):
+    """A surviving tail must never hide an evicted or overwritten middle block."""
+    manager = make_kv_cache_manager(
+        make_kv_cache_config(16, 9),
+        max_model_len=256,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+    )
+    tokens = list(range(128))
+    producer = make_request("producer", tokens, 16, sha256, prefix_match_positions=())
+    blocks = manager.allocate_slots(producer, 128)
+    assert blocks is not None
+    producer.num_computed_tokens = 128
+    manager.record_turn_checkpoint(producer)
+    manager.free(producer)
+    if change == "middle":
+        manager.evict_blocks({blocks.blocks[0][3].block_id})
+    elif change == "reuse":
+        # Recycle every block and register identical content under fresh keys.
+        replacement = make_request("replacement", tokens, 16, sha256)
+        manager.allocate_slots(replacement, 128)
+        manager.free(replacement)
+    elif change == "reset":
+        assert manager.reset_prefix_cache()
+    elif change == "edit":
+        tokens[17] += 1
+    salt = "other" if change == "salt" else None
+    consumer = make_request(
+        "consumer",
+        tokens + [200],
+        16,
+        sha256,
+        cache_salt=salt,
+        prefix_match_positions=(128,),
+    )
+    ordinary = make_request("ordinary", tokens + [200], 16, sha256, cache_salt=salt)
+    _, hit, _ = manager.get_computed_blocks(consumer)
+    assert hit == manager.get_computed_blocks(ordinary)[1]
+    cache = manager.turn_prefix_cache
+    assert cache is not None and cache.stats.hits == 0
+    if change in ("middle", "reuse"):
+        assert cache.stats.invalidations == 1
+
+
+def test_turn_checkpoint_only_registers_completed_prefixes():
+    manager = make_kv_cache_manager(
+        make_kv_cache_config(16, 20),
+        max_model_len=256,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+    )
+    producer = make_request(
+        "producer", list(range(128)), 16, sha256, prefix_match_positions=()
+    )
+    manager.allocate_slots(producer, 128)
+    producer.num_computed_tokens = 128
+    producer.num_in_flight_tokens = 64
+    manager.record_turn_checkpoint(producer)
+    cache = manager.turn_prefix_cache
+    assert cache is not None and not cache.entries
+    producer.num_in_flight_tokens = 0
+    manager.record_turn_checkpoint(producer)
+    assert len(cache.entries) == 1
+    producer.append_output_token_ids(list(range(128, 144)))
+    manager.allocate_slots(producer, 16)
+    producer.num_computed_tokens = 144
+    producer.num_in_flight_tokens = 1
+    producer.status = RequestStatus.FINISHED_LENGTH_CAPPED
+    manager.record_turn_checkpoint(producer)
+    assert all(key[0] == 8 for key in cache.entries)
+    manager.free(producer)
+
+
+def test_turn_checkpoint_metadata_budget_does_not_change_gpu_ownership():
+    from vllm.v1.core.turn_prefix_cache import TurnPrefixCache
+
+    manager = make_kv_cache_manager(
+        make_kv_cache_config(16, 20),
+        max_model_len=256,
+        hash_block_size=16,
+    )
+    cache = TurnPrefixCache(16, max_entries=1, max_bytes=4096)
+    for offset in (0, 1000):
+        request = make_request(
+            str(offset),
+            list(range(offset, offset + 64)),
+            16,
+            sha256,
+            prefix_match_positions=(),
+        )
+        blocks = manager.allocate_slots(request, 64)
+        assert blocks is not None
+        cache.register(request, blocks.blocks[0], 64)
+        manager.free(request)
+        assert len(cache.entries) == 1
+        assert cache.metadata_bytes <= 4096
+        assert manager.block_pool.get_num_free_blocks() == 19
+    tiny = TurnPrefixCache(16, max_bytes=1)
+    tiny.register(request, blocks.blocks[0], 64)
+    assert not tiny.entries
 
 
 def make_hisparse_kv_cache_config(

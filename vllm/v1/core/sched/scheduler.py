@@ -7,6 +7,7 @@ from collections.abc import Iterable
 from dataclasses import replace
 from typing import Any
 
+from vllm import envs
 from vllm.compilation.cuda_graph import CUDAGraphStat
 from vllm.config import KVEventsConfig, VllmConfig
 from vllm.distributed.aux_output_connector.connector import (
@@ -385,6 +386,13 @@ class Scheduler(SchedulerInterface):
             watermark=self.scheduler_config.watermark,
             enable_mamba_shared_prefix_checkpoint=(
                 self.cache_config.enable_mamba_shared_prefix_checkpoint
+            ),
+            enable_turn_prefix_cache=(
+                envs.VLLM_TURN_PREFIX_CACHE
+                and self.parallel_config.world_size == 1
+                and self.parallel_config.data_parallel_size == 1
+                and self.connector is None
+                and speculative_config is None
             ),
         )
         # Mamba managers already account for their speculative state blocks.
@@ -2574,6 +2582,15 @@ class Scheduler(SchedulerInterface):
                 request.status = RequestStatus.FINISHED_ERROR
                 request.resumable = False
                 stopped = True
+
+            if (
+                self.kv_cache_manager.turn_prefix_cache is not None
+                and not output_is_stale
+                and status_before_stop == RequestStatus.RUNNING
+                and request.prefix_match_positions is not None
+                and (not request.turn_prefill_checkpoint_recorded or stopped)
+            ):
+                self.kv_cache_manager.record_turn_checkpoint(request)
 
             routed_experts = None
             should_emit_output = bool(

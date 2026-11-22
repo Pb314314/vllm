@@ -118,6 +118,16 @@ class CachingMetrics:
 
 
 @dataclass(slots=True)
+class TurnPrefixCacheStats:
+    queries: int = 0
+    hits: int = 0
+    skipped_block_lookups: int = 0
+    invalidations: int = 0
+    entries: int = 0
+    metadata_bytes: int = 0
+
+
+@dataclass(slots=True)
 class PrefixCacheStats(BaseCacheStats):
     """Stores prefix cache hit statistics.
     - `reset`: Whether `reset_prefix_cache` was invoked.
@@ -134,6 +144,8 @@ class PrefixCacheStats(BaseCacheStats):
     """The `hits` number for preempted requests."""
     hits_by_source: dict[CacheHitSource, int] = field(default_factory=dict)
     """`hits` split by the cache tier that supplied them (connector stats only)."""
+
+    turn_cache: TurnPrefixCacheStats | None = None
 
     def record(
         self,

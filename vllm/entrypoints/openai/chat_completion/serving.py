@@ -11,6 +11,7 @@ from typing import Any, Final, cast
 
 from fastapi import Request
 
+from vllm import envs
 from vllm.engine.protocol import EngineClient
 from vllm.entrypoints.generate.base.protocol import (
     DeltaMessage,
@@ -157,6 +158,23 @@ class OpenAIServingChat(GenerateBaseServing):
         )
 
         self.online_renderer = online_renderer
+        self._turn_boundaries = None
+        if (
+            envs.VLLM_TURN_PREFIX_CACHE
+            and type(self) is OpenAIServingChat
+            and not reasoning_parser
+            and not enable_auto_tools
+        ):
+            from .turn_prefix import ChatTurnBoundaries
+
+            tokenizer = self.renderer.tokenizer
+            # This default is supplied even for non-Cohere templates, which
+            # ignore it. Other template overrides conservatively disable hints.
+            template_overrides = set(default_chat_template_kwargs or ()) - {
+                "cohere_format"
+            }
+            if tokenizer is not None and not template_overrides:
+                self._turn_boundaries = ChatTurnBoundaries(tokenizer, chat_template)
         self.response_role = response_role
         self.chat_template = chat_template
         self.chat_template_content_format: Final = chat_template_content_format
@@ -330,6 +348,10 @@ class OpenAIServingChat(GenerateBaseServing):
             return result
 
         conversation, engine_inputs = result
+
+        if self._turn_boundaries is not None:
+            for engine_input in engine_inputs:
+                self._turn_boundaries.add_hint(request, engine_input)
 
         request_id = (
             f"chatcmpl-{self._base_request_id(raw_request, request.request_id)}"

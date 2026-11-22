@@ -2,6 +2,7 @@
 
 ## Experimental Session Cache
 
+- [Automatic turn-prefix matching](automatic_prefix_caching.md#experimental-turn-prefix-matching-for-chat-completions)
 - [Session cache with APC](automatic_prefix_caching.md#experimental-session-cache-with-apc)
 
 ## KV Cache Offloading

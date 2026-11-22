@@ -17,9 +17,11 @@ from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import KVCacheBlock, KVCacheBlockCopy, trim_null_head
 from vllm.v1.core.single_type_kv_cache_manager import (
     CrossAttentionManager,
+    FullAttentionManager,
     MambaManager,
     get_kv_cache_kind,
 )
+from vllm.v1.core.turn_prefix_cache import TurnPrefixCache
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
@@ -146,6 +148,7 @@ class KVCacheManager:
         metrics_collector: KVCacheMetricsCollector | None = None,
         watermark: float = 0.0,
         enable_mamba_shared_prefix_checkpoint: bool = False,
+        enable_turn_prefix_cache: bool = False,
     ) -> None:
         self.max_model_len = max_model_len
         # When unset, fall back to `max_model_len` so the recycling-aware cap
@@ -202,6 +205,18 @@ class KVCacheManager:
             if manager.retains_longer_hit
         )
         self.kv_cache_config = kv_cache_config
+        self.turn_prefix_cache: TurnPrefixCache | None = None
+        if (
+            enable_turn_prefix_cache
+            and enable_caching
+            and self.num_kv_cache_groups == 1
+            and type(self.coordinator.single_type_managers[0]) is FullAttentionManager
+            and scheduler_block_size == hash_block_size
+            and not use_eagle
+            and not num_hash_lookahead_tokens
+            and dcp_world_size == pcp_world_size == 1
+        ):
+            self.turn_prefix_cache = TurnPrefixCache(hash_block_size)
 
         # Watermark: minimum number of KV cache blocks to keep free when
         # admitting waiting/preempted requests, to avoid frequent preemptions.
@@ -245,6 +260,9 @@ class KVCacheManager:
         if not self.log_stats:
             return None
         stats = self.prefix_cache_stats
+        if self.turn_prefix_cache is not None:
+            assert stats is not None
+            stats.turn_cache = self.turn_prefix_cache.take_stats()
         self.prefix_cache_stats = PrefixCacheStats()
         return stats
 
@@ -322,11 +340,29 @@ class KVCacheManager:
         # num_computed_tokens to be block-size aligned. Removing this limitation
         # could slightly improve performance in the future.
         max_cache_hit_length = request.get_max_cache_hit_length(max_cache_hit_length)
-        computed_blocks, num_new_computed_tokens, num_uncached = (
-            self.coordinator.find_longest_cache_hit(
-                request.block_hashes, max_cache_hit_length, request.num_tokens
-            )
+        turn_blocks = (
+            self.turn_prefix_cache.lookup(request, max_cache_hit_length)
+            if self.turn_prefix_cache is not None
+            else None
         )
+        computed_blocks: tuple[list[KVCacheBlock], ...]
+        if turn_blocks is not None:
+            prefix_length = len(turn_blocks) * self.block_pool.hash_block_size
+            suffix_blocks, suffix_length, num_uncached = (
+                self.coordinator.find_longest_cache_hit(
+                    request.block_hashes[len(turn_blocks) :],
+                    max_cache_hit_length - prefix_length,
+                )
+            )
+            turn_blocks.extend(suffix_blocks[0])
+            computed_blocks = (turn_blocks,)
+            num_new_computed_tokens = prefix_length + suffix_length
+        else:
+            computed_blocks, num_new_computed_tokens, num_uncached = (
+                self.coordinator.find_longest_cache_hit(
+                    request.block_hashes, max_cache_hit_length, request.num_tokens
+                )
+            )
 
         # When kv_cache_report_mode is "full", emit BlockStored events
         # for the reused prefix cache blocks so that external consumers
@@ -718,6 +754,8 @@ class KVCacheManager:
         """
         if not self.coordinator.reset_prefix_cache():
             return False
+        if self.turn_prefix_cache is not None:
+            self.turn_prefix_cache.clear()
         if self.log_stats:
             assert self.prefix_cache_stats is not None
             self.prefix_cache_stats.reset = True
@@ -817,6 +855,29 @@ class KVCacheManager:
         """
         if self.enable_caching:
             self.coordinator.cache_blocks(request, num_computed_tokens)
+
+    def record_turn_checkpoint(self, request: Request) -> None:
+        cache = self.turn_prefix_cache
+        if cache is None or not cache.supports(request):
+            return
+        committed = min(
+            request.num_computed_tokens - request.num_in_flight_tokens,
+            request.num_tokens,
+        )
+        blocks = self.coordinator.single_type_managers[0].req_to_blocks.get(
+            request.request_id, ()
+        )
+        if (
+            not request.turn_prefill_checkpoint_recorded
+            and committed >= request.num_prompt_tokens
+        ):
+            cache.register(request, blocks, request.num_prompt_tokens)
+            request.turn_prefill_checkpoint_recorded = True
+        if request.status in (
+            RequestStatus.FINISHED_STOPPED,
+            RequestStatus.FINISHED_LENGTH_CAPPED,
+        ):
+            cache.register(request, blocks, committed)
 
     def create_kv_cache_blocks(
         self, blocks: tuple[list[KVCacheBlock], ...]

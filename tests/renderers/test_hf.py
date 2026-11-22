@@ -37,6 +37,47 @@ EXAMPLES_DIR = VLLM_PATH / "examples"
 chatml_jinja_path = VLLM_PATH / "examples/template_chatml.jinja"
 assert chatml_jinja_path.exists()
 
+
+@pytest.mark.parametrize("response_length", [0, 1, 15, 16, 17, 64])
+def test_turn_prefix_hint_preserves_rendered_tokens(response_length):
+    """Derive a real historical assistant boundary without rerendering history."""
+    from vllm.entrypoints.openai.chat_completion.turn_prefix import ChatTurnBoundaries
+    from vllm.inputs.engine import tokens_input
+
+    model = "Qwen/Qwen2.5-1.5B-Instruct"
+    tokenizer = get_tokenizer(model)
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hello"},
+        {"role": "assistant", "content": " hello" * response_length},
+        {"role": "user", "content": "Continue"},
+    ]
+    tokens = tokenizer.apply_chat_template(
+        messages, tokenize=True, add_generation_prompt=True, return_dict=False
+    )
+    assert isinstance(tokens, list)
+    engine_input = tokens_input(tokens.copy())
+    request = ChatCompletionRequest(model=model, messages=messages)
+    boundaries = ChatTurnBoundaries(tokenizer, None)
+    boundaries.add_hint(request, engine_input)
+    assert engine_input["prompt_token_ids"] == tokens
+    (position,) = engine_input["prefix_match_positions"]
+    assert tokens[position] == tokenizer.convert_tokens_to_ids("<|im_end|>")
+    previous_prompt = tokenizer.apply_chat_template(
+        messages[:2], tokenize=True, add_generation_prompt=True, return_dict=False
+    )
+    assert tokens[: len(previous_prompt)] == previous_prompt
+    assert position >= len(previous_prompt)
+
+    custom = ChatTurnBoundaries(tokenizer, "{{ messages }}")
+    plain = tokens_input(tokens)
+    custom.add_hint(request, plain)
+    assert "prefix_match_positions" not in plain
+    messages[2]["content"] += "<|im_end|>"
+    boundaries.add_hint(ChatCompletionRequest(model=model, messages=messages), plain)
+    assert "prefix_match_positions" not in plain
+
+
 # Define models, templates, and their corresponding expected outputs
 MODEL_TEMPLATE_GENERATION_OUTPUT = [
     (

@@ -11,6 +11,166 @@ from tests.utils import RemoteOpenAIServer
 MODEL_NAME = "Qwen/Qwen2.5-1.5B-Instruct"
 
 
+def test_turn_prefix_cache_real_chat_round_trip():
+    """Ordinary Chat API requests take the shortcut without changing APC hits."""
+    import copy
+    import time
+
+    import requests
+
+    from tests.models.utils import check_logprobs_close
+
+    history = [
+        {"role": "system", "content": "You are helpful. " * 160},
+        {"role": "user", "content": "Write a list of twenty different animals."},
+    ]
+    replay: list[list[dict[str, str]]] = []
+    reference: list[tuple[list[str], str, list[dict[str, float]]]] = []
+    reference_hits: list[int] = []
+    reference_tokens: list[list[int]] = []
+    args = [
+        "--enforce-eager",
+        "--attention-backend",
+        "TRITON_ATTN",
+        "--max-model-len",
+        "4096",
+        "--max-num-batched-tokens",
+        "256",
+        "--max-num-seqs",
+        "8",
+        "--kv-cache-memory-bytes",
+        str(1 << 30),
+        "--enable-prefix-caching",
+        "--enable-prompt-tokens-details",
+    ]
+    for enabled in (False, True):
+        with (
+            RemoteOpenAIServer(
+                MODEL_NAME,
+                args,
+                env_dict={
+                    "VLLM_TURN_PREFIX_CACHE": str(int(enabled)),
+                    "VLLM_USE_RUST_FRONTEND": "0",
+                    "VLLM_SERVER_DEV_MODE": "1",
+                },
+            ) as server,
+            server.get_client() as client,
+        ):
+            for turn in range(6):
+                if enabled:
+                    messages = replay[turn]
+                elif turn < 3:
+                    messages = copy.deepcopy(history)
+                elif turn == 3:
+                    messages = copy.deepcopy(replay[1])
+                    messages[-1]["content"] = "Name some birds instead."
+                elif turn == 4:
+                    messages = [
+                        history[0],
+                        {
+                            "role": "user",
+                            "content": "Summary: we listed animals. Go on.",
+                        },
+                    ]
+                else:
+                    messages = copy.deepcopy(replay[2])
+                    messages[2]["content"] = "A revised answer about birds."
+                token_response = requests.post(
+                    server.url_for("tokenize"),
+                    json={
+                        "model": MODEL_NAME,
+                        "messages": messages,
+                        "add_generation_prompt": True,
+                    },
+                )
+                token_response.raise_for_status()
+                tokens = token_response.json()["tokens"]
+                stream = turn == 1
+                response = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=messages,
+                    temperature=0,
+                    max_tokens=32,
+                    logprobs=True,
+                    top_logprobs=5,
+                    stream=stream,
+                    stream_options={"include_usage": True} if stream else None,
+                    extra_body={"ignore_eos": True},
+                )
+                if stream:
+                    text, probs, usage = "", [], None
+                    for chunk in response:
+                        if chunk.usage is not None:
+                            usage = chunk.usage
+                        for choice in chunk.choices:
+                            text += choice.delta.content or ""
+                            if choice.logprobs and choice.logprobs.content:
+                                probs.extend(choice.logprobs.content)
+                else:
+                    text = response.choices[0].message.content
+                    probs = response.choices[0].logprobs.content
+                    usage = response.usage
+                assert text and probs and usage is not None
+                output = (
+                    [p.token for p in probs],
+                    text,
+                    [{p.token: p.logprob for p in item.top_logprobs} for item in probs],
+                )
+                cached = usage.prompt_tokens_details.cached_tokens
+                if enabled:
+                    assert tokens == reference_tokens[turn]
+                    assert cached == reference_hits[turn]
+                    check_logprobs_close(
+                        outputs_0_lst=[reference[turn]],
+                        outputs_1_lst=[output],
+                        name_0="APC",
+                        name_1="turn lookup",
+                        always_check_logprobs=True,
+                    )
+                else:
+                    replay.append(messages)
+                    reference.append(output)
+                    reference_hits.append(cached)
+                    reference_tokens.append(tokens)
+                    history += [
+                        {"role": "assistant", "content": text},
+                        {"role": "user", "content": "Continue with more animals."},
+                    ]
+
+            # Text/token callers carry no hints and still get ordinary APC.
+            completion = client.completions.create(
+                model=MODEL_NAME,
+                prompt=tokens,
+                max_tokens=1,
+                temperature=0,
+            )
+            assert completion.usage.prompt_tokens_details.cached_tokens > 0
+
+            if enabled:
+                deadline = time.monotonic() + 15
+                while True:
+                    metrics = requests.get(server.url_for("metrics")).text
+                    hits = sum(
+                        float(line.rsplit(" ", 1)[-1])
+                        for line in metrics.splitlines()
+                        if line.startswith("vllm:turn_prefix_cache_hits_total{")
+                    )
+                    if hits >= 3:
+                        break
+                    assert time.monotonic() < deadline, metrics
+                    time.sleep(0.05)
+                assert "vllm:turn_prefix_cache_skipped_block_lookups_total" in metrics
+                reset = requests.post(server.url_for("reset_prefix_cache"))
+                reset.raise_for_status()
+                cold = client.chat.completions.create(
+                    model=MODEL_NAME,
+                    messages=replay[-1],
+                    max_tokens=1,
+                    temperature=0,
+                )
+                assert cold.usage.prompt_tokens_details.cached_tokens == 0
+
+
 @pytest.fixture(scope="module")
 def default_server_args():
     return [

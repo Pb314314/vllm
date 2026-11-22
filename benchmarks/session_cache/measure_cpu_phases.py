@@ -9,6 +9,7 @@ Run from the repository with PYTHONPATH=. and test dependencies installed.
 import argparse
 import gc
 import json
+import os
 import statistics
 import time
 from pathlib import Path
@@ -24,6 +25,8 @@ from vllm.v1.request import Request
 
 def run(mode, batch, context, warmup, steps):
     session = mode in ("session", "session-apc")
+    turn = mode in ("turn-apc", "plain-on-turn")
+    os.environ["VLLM_TURN_PREFIX_CACHE"] = str(int(turn))
     max_len = context + 64 + 16 + warmup + steps + 64
     scheduler = create_scheduler(
         model="Qwen/Qwen3-0.6B",
@@ -32,7 +35,9 @@ def run(mode, batch, context, warmup, steps):
         max_num_batched_tokens=batch * max_len,
         num_blocks=batch * ((max_len + 15) // 16) + 32,
         enable_prefix_caching=mode != "session",
-        scheduler_cls=SessionScheduler if mode != "apc" else None,
+        scheduler_cls=SessionScheduler
+        if mode in ("session", "session-apc", "apc-on-session")
+        else None,
     )
     hasher = get_request_block_hasher(16, sha256) if mode != "session" else None
     histories = [[100 + i] + [7] * (context - 1) for i in range(batch)]
@@ -51,6 +56,11 @@ def run(mode, batch, context, warmup, steps):
             ),
             None,
             block_hasher=hasher,
+            prefix_match_positions=(
+                (() if version == 0 else (len(histories[i]) - 64,))
+                if mode == "turn-apc"
+                else None
+            ),
         )
 
     for i in range(batch):
@@ -74,6 +84,8 @@ def run(mode, batch, context, warmup, steps):
     admitted = time.perf_counter_ns()
     output = scheduler.schedule()
     scheduled = time.perf_counter_ns()
+    turn_index = scheduler.kv_cache_manager.turn_prefix_cache
+    turn_hits = turn_index.stats.hits if turn_index else 0
     ids = list(output.num_scheduled_tokens)
     assert len(ids) == batch
     prefill_tokens = sum(output.num_scheduled_tokens.values())
@@ -116,6 +128,8 @@ def run(mode, batch, context, warmup, steps):
         assert scheduler.kv_cache_manager.num_session_evictions == 0
         for i in range(batch):
             assert scheduler.close_session(str(i))
+    if mode == "turn-apc":
+        assert turn_index is not None and turn_hits == batch
     median = {
         key: statistics.median(s[key] for s in samples)
         for key in ["schedule_us", "update_us", "total_us"]
@@ -128,6 +142,8 @@ def run(mode, batch, context, warmup, steps):
         "mode": mode,
         "batch": batch,
         "context": context,
+        "turn_hits": turn_hits,
+        "turn_metadata_bytes": turn_index.metadata_bytes if turn_index else 0,
         "admission": admission,
         "decode_median": median,
         "decode_mean_total_us": statistics.mean(s["total_us"] for s in samples),
@@ -149,7 +165,14 @@ def main():
     parser.add_argument(
         "--modes",
         nargs="+",
-        choices=["apc", "session", "session-apc", "apc-on-session"],
+        choices=[
+            "apc",
+            "session",
+            "session-apc",
+            "apc-on-session",
+            "turn-apc",
+            "plain-on-turn",
+        ],
         default=["apc", "session", "session-apc", "apc-on-session"],
     )
     args = parser.parse_args()

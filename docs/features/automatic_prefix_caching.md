@@ -74,6 +74,61 @@ We describe two example workloads, where APC can provide huge performance benefi
 - Long document query, where the user repeatedly queries the same long document (e.g. software manual or annual report) with different queries. In this case, instead of processing the long document again and again, APC allows vLLM to process this long document *only once*, and all future requests can avoid recomputing this long document by reusing its KV cache. This allows vLLM to serve future requests with much higher throughput and much lower latency.
 - Multi-round conversation, where the user may chat with the application multiple times in the same chatting session. In this case, instead of processing the whole chatting history again and again, APC allows vLLM to reuse the processing results of the chat history across all future rounds of conversation, allowing vLLM to serve future requests with much higher throughput and much lower latency.
 
+## Experimental turn-prefix matching for Chat Completions
+
+`VLLM_TURN_PREFIX_CACHE=1` enables an experimental lookup shortcut for ordinary
+`POST /v1/chat/completions` requests containing full conversation history. It is
+**disabled by default**. Clients do not supply session IDs, checkpoint IDs, or
+cache hints, and the HTTP request and response schemas are unchanged.
+
+```bash
+VLLM_TURN_PREFIX_CACHE=1 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --enable-prefix-caching
+```
+
+The first version uses the Python API frontend and recognizes the shipped
+Qwen2.5-Instruct text chat template.
+It supports streaming and non-streaming responses, a single engine/GPU, one
+full-attention KV cache group, and local GPU caching. Requests with tools,
+multimodal content, reasoning parsers, custom templates, prompt truncation, or
+explicit session-cache commands use the original path. Hybrid models,
+speculative decoding, parallel execution, and KV connectors also retain their
+original paths. Raw text and token-ID requests continue to use ordinary APC.
+
+The server derives the previous assistant turn's position from the final
+rendered tokens without changing the prompt or retokenizing each historical
+turn. At most two adjacent complete-block boundaries are probed. A match must
+have the same chained prefix hash, including the cache salt, and all recorded
+blocks must still have their original cache-registration identities. It then
+continues ordinary APC lookup after the checkpoint, preserving longer prefix
+hits. A missing, invalid, or inapplicable checkpoint falls back to ordinary APC.
+Compaction and edited histories therefore require no new client protocol.
+
+Checkpoints are recorded after prefill and at successful generation completion,
+using only completed full blocks. The index neither copies KV tensors nor holds
+GPU usage references, so allocation and eviction retain their existing rules.
+It is bounded to 1,024 entries and a conservative 64 MiB metadata estimate;
+eviction and cache reset can invalidate entries. Partial tails are recomputed.
+
+This version **does not reduce historical block hashing**. It trades block hash
+table lookups for a linear block-validity check and checkpoint bookkeeping. Its
+benefit depends on history length, hit rate, and registration cost; fewer hash
+table queries alone do not establish an end-to-end speedup.
+
+When enabled, `/metrics` additionally exposes:
+
+- `vllm:turn_prefix_cache_queries_total` and `vllm:turn_prefix_cache_hits_total`:
+  requests probing and hitting the shortcut (scheduler retries may probe again).
+- `vllm:turn_prefix_cache_skipped_block_lookups_total`: block lookups bypassed by
+  valid checkpoints, excluding the suffix still queried through APC.
+- `vllm:turn_prefix_cache_invalidations_total`: stale entries rejected on lookup.
+- `vllm:turn_prefix_cache_entries` and `vllm:turn_prefix_cache_metadata_bytes`:
+  current index size and conservatively accounted metadata, not GPU usage.
+
+Use normal prefix-cache token metrics alongside these counters: turn hit rate
+is not token reuse rate. See the reproducible CPU and serving diagnostics in
+[the session-cache benchmark notes](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/README.md).
+
 ## Experimental session cache with APC
 
 `SessionScheduler` supports ordinary APC requests and explicit multi-turn sessions
