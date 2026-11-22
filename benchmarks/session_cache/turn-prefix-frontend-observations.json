@@ -1,0 +1,32 @@
+[
+  {
+    "tokens": 4157,
+    "samples": 50,
+    "hf_render_tokenize_median_us": 5367.4845000000005,
+    "boundary_median_us": 13.104,
+    "boundary_range_us": [
+      12.32,
+      28.032
+    ]
+  },
+  {
+    "tokens": 16445,
+    "samples": 50,
+    "hf_render_tokenize_median_us": 22531.586499999998,
+    "boundary_median_us": 71.696,
+    "boundary_range_us": [
+      68.576,
+      114.304
+    ]
+  },
+  {
+    "tokens": 65597,
+    "samples": 50,
+    "hf_render_tokenize_median_us": 97985.14199999999,
+    "boundary_median_us": 261.28,
+    "boundary_range_us": [
+      250.464,
+      3186.846
+    ]
+  }
+]

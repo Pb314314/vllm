@@ -126,7 +126,8 @@ When enabled, `/metrics` additionally exposes:
   current index size and conservatively accounted metadata, not GPU usage.
 
 Use normal prefix-cache token metrics alongside these counters: turn hit rate
-is not token reuse rate. See the reproducible CPU and serving diagnostics in
+is not token reuse rate. Initial diagnostics show faster CPU lookup but no
+stable serving speedup. See the reproducible CPU and serving diagnostics in
 [the session-cache benchmark notes](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/README.md).
 
 ## Experimental session cache with APC

@@ -7,6 +7,176 @@ GPU, and configuration for both modes. Current defaults use Qwen3-0.6B, one GPU,
 TRITON_ATTN, eager execution, synchronous scheduling, and forced output tokens.
 Neither Mooncake nor speculative decoding is enabled in these measurements.
 
+## Automatic turn-prefix lookup, with APC retained
+
+Implementation `3b22930a5e` adds the intermediate version for ordinary full-history
+Chat Completions requests. It requires no session IDs or new HTTP fields. Enable
+`VLLM_TURN_PREFIX_CACHE=1` with APC and the default scheduler; the switch is off by
+default. This is separate from the explicit delta/session protocol below. See
+[supported inputs and fallback behavior](../../docs/features/automatic_prefix_caching.md#experimental-turn-prefix-matching-for-chat-completions).
+
+The first version optimizes **lookup only**. Previous-turn positions select at
+most two checkpoint keys; all recorded block identities are validated, then
+ordinary APC continues through the suffix. The existing allocator, GPU reference
+counts and eviction rules remain authoritative. Checkpoints contain completed
+full blocks and own no GPU references. Historical hashing is unchanged.
+
+The Chat API test caught a real integration issue: the server supplies the
+`cohere_format` template default to non-Cohere models too. Rejecting every default
+template kwarg silently disabled the shortcut. The implementation accepts that
+irrelevant default for the allowlisted Qwen template and retains conservative
+fallback for other overrides. The test asserts actual shortcut hits, not just
+successful generation.
+
+### Validation
+
+[Raw validation output](turn-prefix-validation.txt) covers:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m pytest \
+  tests/v1/core/test_prefix_caching.py tests/v1/core/test_scheduler.py \
+  -k 'prefix or session or preempt_during_execution' -q
+# 309 passed, 278 deselected in 107.38s (0:01:47)
+PYTHONPATH=. .venv/bin/python -m pytest \
+  tests/renderers/test_hf.py tests/v1/core/test_prefix_caching.py -k turn_ -q
+# 14 passed, 328 deselected in 12.54s
+PATH="$PWD/.venv/bin:$PATH" PYTHONPATH=. \
+  LD_LIBRARY_PATH="/usr/local/cuda/compat:$LD_LIBRARY_PATH" \
+  CUDA_VISIBLE_DEVICES=2 VLLM_GPU_SYNC_CHECK=error VLLM_BATCH_INVARIANT=1 \
+  .venv/bin/python -m pytest \
+  tests/entrypoints/openai/chat_completion/test_chat_completion.py \
+  -k turn_prefix -v -s
+# 1 passed, 9 deselected in 124.23s (0:02:04)
+```
+
+Real-model validation uses Qwen2.5-1.5B-Instruct, GB200, TRITON_ATTN,
+eager execution and the default async scheduler with chunked prefill. It compares
+identical rendered tokens, cached-token counts and output/logprobs with the flag
+off/on. It covers streaming, non-streaming, branches, edited history, compaction,
+raw token input and reset. Core tests additionally exercise recycled block IDs,
+an evicted middle block, cache salt, concurrent ownership, in-flight cancellation,
+stale preemption output and metadata limits. This is output-correctness evidence;
+it is not a task-accuracy evaluation or coverage of SD, hybrid or connectors.
+
+Pre-commit passes, including mypy and test tethering. Existing Buildkite
+Chat Completions, core and renderer suites select the tests. The feature test
+explicitly selects the Python frontend, including when the surrounding CI job
+uses Rust. Rust callers continue through ordinary APC.
+
+### CPU observations
+
+[Per-round raw CPU data](turn-prefix-cpu-observations.json) uses real synchronous
+schedulers and simulated GPU outputs on ARM Neoverse-V2, pinned to logical CPU
+16. The scheduler fixture uses Qwen3-0.6B configuration; no model executes. Each
+request has a distinct 16K history and appends 64 tokens. Three rounds rotate
+the mode order, with 32 warmup and 128 measured decode steps. Capacity fits all
+synthetic requests without eviction. This does not imply a real GPU fits the
+same batch.
+
+Median milliseconds for the **whole batch of 64**:
+
+| Phase | APC | Turn lookup + APC | Ordinary requests with switch on |
+| --- | ---: | ---: | ---: |
+| Construct request, including hashing | 141.96 | 143.53 | 141.83 |
+| First schedule, including lookup and allocation | 62.15 | 20.77 | 62.91 |
+| First result update, including checkpoint registration | 0.87 | 5.27 | 0.83 |
+| Total continuation admission | 205.41 | 170.22 | 204.54 |
+| Final decode schedule + result update | 7.55 | 12.96 | 7.63 |
+| Steady decode schedule + result update, per step | 0.659 | 0.679 | 0.666 |
+
+All modes schedule the same 5,120 prefill tokens. Admission ranges across rounds
+are 202.49–206.37, 166.17–170.68 and 203.83–207.14 ms. Decode ranges are
+0.658–0.669, 0.678–0.685 and 0.653–0.690 ms. The shortcut therefore trades lookup
+time for registration work and shows a small decode cost in this capture.
+Admission plus completion improves about 14% at batch 64; initial cold-turn
+registration, frontend work, IPC and workers are outside this timing boundary.
+
+Batch-1 measurements are noisy: median admission is 3.39, 3.75 and 4.62 ms,
+including substantial variation in the unchanged hashing phase. They do not
+establish low-concurrency non-regression. Do not extrapolate the batch-64 result
+to all request sizes.
+
+```bash
+PYTHONPATH=. taskset -c 16 .venv/bin/python \
+  benchmarks/session_cache/measure_cpu_phases.py \
+  --modes apc turn-apc plain-on-turn --batches 1 64 --context 16384 \
+  --warmup 32 --steps 128 --rounds 3 --output /tmp/turn-prefix-cpu.json
+```
+
+[A separate cProfile capture](turn-prefix-cpu-profile.txt) shows the remaining
+linear block-validity checks, reference acquisition and checkpoint registration.
+Profiling perturbs timings and includes the seed trajectory; it is not the source
+of the unprofiled table. [Frontend observations](turn-prefix-frontend-observations.json)
+measure 50 warmed HF template/tokenization and boundary-extraction calls on the
+same history. At about 4K/16K/64K tokens, boundary extraction medians are
+13/72/261 microseconds versus 5.4/22.5/98.0 ms for HF render + tokenize. These
+exclude API validation and thread-pool queuing. Delimiter checks still read
+historical text; they are not constant-time history verification.
+
+### Serving observations and unresolved performance concern
+
+[Raw per-request serving observations](turn-prefix-serving-observations.json)
+use Qwen2.5-1.5B-Instruct on one GB200, TRITON_ATTN, eager/default async execution,
+16-token blocks and identical 12 GiB KV pools. Both server processes stay
+resident on the same GPU, but measured workloads execute sequentially. SD,
+Mooncake and batch-invariance mode are off. This is a shared host.
+
+Eight concurrent conversations each execute eight dependent turns, with about
+16K initial tokens and 16 output tokens per turn. The initial context is synthetic
+repeated text, not a coding-agent trace. Every measured run includes
+its cold first turns after a cache reset and follows one warm trajectory. An
+interactive run uses real generated answers; subsequent runs replay exactly the
+same full requests. All six replay input digests match. Mode order is off/on,
+on/off, off/on across three pairs.
+
+| Metric | APC | Turn lookup + APC |
+| --- | ---: | ---: |
+| Requests/s, three runs | 8.58, 9.01, 9.45 | 8.91, 9.00, 7.92 |
+| Median continuation TTFT per run, ms | 113.51, 101.47, 99.14 | 108.89, 107.75, 127.02 |
+| Server process tree CPU seconds per run | 9.33, 8.94, 8.62 | 9.14, 9.05, 9.91 |
+| Reused / queried tokens, every run | 925,552 / 1,058,016 | 925,552 / 1,058,016 |
+| Eligible continuation checkpoint hits | N/A | 56 / 56 |
+
+Token reuse is **87.48% for both**. Every enabled run skips 57,840 block lookups;
+the index ends with 120 entries and a 10.11 MiB metadata estimate. The separate
+interactive run also hits all 56 continuations. Full TTFT p50/p95/p99 and raw
+request timings are included in the data; cold first turns dominate overall p95.
+
+**There is no stable serving speedup in this capture.** One enabled run is
+materially slower. Hashing, rendering and model execution remain; fewer cache
+lookups alone are insufficient. CPU admission benefits are not evidence that
+overall CPU use, TTFT or throughput improve. Keep this experimental and default
+off; isolate the variation and collect profiles of real serving before deciding
+whether to optimize hashing, reduce registration further, or expand support.
+
+Start each variant with the same command, changing only the feature flag and
+port (the capture used ports 18635/off and 18634/on):
+
+```bash
+PYTHONPATH=. CUDA_VISIBLE_DEVICES=1 VLLM_SERVER_DEV_MODE=1 \
+  VLLM_TURN_PREFIX_CACHE=0 .venv/bin/vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+  --host 127.0.0.1 --attention-backend TRITON_ATTN --enforce-eager \
+  --max-model-len 20000 --max-num-seqs 16 --block-size 16 \
+  --kv-cache-memory-bytes 12884901888 --enable-prefix-caching \
+  --enable-prompt-tokens-details --port 18635
+```
+
+Once both `/health` endpoints are ready, capture one interactive trajectory on
+the enabled server. Then replay that file on each server, alternating their order
+across independent runs. `--server-pid` records API and descendant engine CPU
+time; supply the corresponding server PID. The benchmark's development-only
+reset endpoint requires `VLLM_SERVER_DEV_MODE=1` as above.
+
+```bash
+PYTHONPATH=. .venv/bin/python benchmarks/session_cache/measure_turn_prefix_api.py \
+  --url http://127.0.0.1:18634 --sessions 8 --turns 8 --context 16384 \
+  --rounds 1 --output /tmp/turn-prefix-interactive.json
+PYTHONPATH=. .venv/bin/python benchmarks/session_cache/measure_turn_prefix_api.py \
+  --url http://127.0.0.1:18635 --sessions 8 --turns 8 --context 16384 \
+  --rounds 1 --replay /tmp/turn-prefix-interactive.json \
+  --output /tmp/turn-prefix-replay-off.json
+```
+
 ## APC compatibility
 
 `SessionScheduler` now also accepts `enable_prefix_caching=True`. Ordinary

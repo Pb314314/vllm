@@ -1,0 +1,41 @@
+Diagnostic only: cProfile perturbs timings; includes seed prefill/decode and second-turn admission/decode.
+Reproduce in this checkout with PYTHONPATH=. .venv/bin/python:
+from benchmarks.session_cache.measure_cpu_phases import run
+from vllm.v1.core.kv_cache_utils import init_none_hash
+from vllm.utils.hashing import sha256
+import cProfile, pstats
+init_none_hash(sha256)
+p = cProfile.Profile()
+p.runcall(run, "turn-apc", 64, 16384, 16, 32)
+pstats.Stats(p).sort_stats("cumulative").print_stats()
+
+Selected functions (primitive calls, total calls, exclusive seconds, inclusive seconds):
+Casting torch.bfloat16 to torch.float16.
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Fetching 9 files:   0%|          | 0/9 [00:00<?, ?it/s]
+Fetching 9 files: 100%|██████████| 9/9 [00:00<00:00, 1092.33it/s]
+('/home/bopang/vllm-session-cache/vllm/v1/request.py', 64, '__init__') (128, 128, 0.0017353560000000002, 0.685075791)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 129, '__init__') (1, 1, 0.019974099000000002, 0.301886353)
+('/home/bopang/vllm-session-cache/vllm/utils/hashing.py', 26, 'sha256') (131648, 131648, 0.07360377800000001, 0.23232079200000003)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 203, 'cache_full_blocks') (320, 320, 0.025466702, 0.079206601)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 78, 'register') (256, 256, 0.023444686000000003, 0.0744403)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 641, '_insert_block_hash') (66048, 66048, 0.021385777, 0.053427739)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 798, 'free_blocks') (128, 128, 0.022768080000000003, 0.038703685)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 78, 'insert') (66048, 66048, 0.012588215000000002, 0.027140624000000002)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 681, 'get_new_blocks') (448, 448, 0.0017189080000000001, 0.017946804)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 774, 'touch') (64, 64, 0.009335545, 0.016456693)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 91, '<genexpr>') (263232, 263232, 0.016214516, 0.016214516)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 92, '<genexpr>') (263232, 263232, 0.016001554, 0.016001554)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 51, 'lookup') (128, 128, 0.00058944, 0.010482999)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 68, '<genexpr>') (65600, 65600, 0.005001275, 0.005001275)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 903, 'get_num_free_blocks') (4866, 4866, 0.000520864, 0.000520864)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 39, 'supports') (640, 640, 0.00039824, 0.000488736)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 175, 'get_cached_block') (128, 128, 0.000133728, 0.000433344)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 124, 'take_stats') (66, 66, 8.601600000000001e-05, 0.00011449600000000001)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 66, 'get_one_block') (128, 128, 4.1184000000000004e-05, 9.6704e-05)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 912, 'get_usage') (66, 66, 8.4064e-05, 9.2608e-05)
+('/home/bopang/vllm-session-cache/vllm/utils/hashing.py', 106, 'safe_hash') (1, 1, 6.72e-06, 1.8016e-05)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 56, '__init__') (1, 1, 5.2160000000000005e-06, 1.616e-05)
+('/home/bopang/vllm-session-cache/vllm/v1/core/block_pool.py', 925, 'take_events') (66, 66, 1.1424000000000001e-05, 1.1424000000000001e-05)
+('/home/bopang/vllm-session-cache/vllm/v1/core/turn_prefix_cache.py', 29, '__init__') (1, 1, 7.424e-06, 1.0176e-05)
