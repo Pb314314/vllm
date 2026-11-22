@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import copy
+
 import jinja2
 import pytest
 import torch
@@ -38,6 +40,7 @@ chatml_jinja_path = VLLM_PATH / "examples/template_chatml.jinja"
 assert chatml_jinja_path.exists()
 
 
+@pytest.mark.parametrize("pooled", [False, True])
 @pytest.mark.parametrize("response_length", [0, 1, 15, 16, 17, 64])
 @pytest.mark.parametrize(
     ("model", "tokenizer_mode"),
@@ -48,13 +51,17 @@ assert chatml_jinja_path.exists()
     ],
 )
 def test_turn_prefix_hint_preserves_rendered_tokens(
-    response_length, model, tokenizer_mode
+    response_length, model, tokenizer_mode, pooled
 ):
     """Derive a real historical assistant boundary without rerendering history."""
     from vllm.entrypoints.openai.chat_completion.turn_prefix import ChatTurnBoundaries
     from vllm.inputs.engine import tokens_input
 
-    tokenizer = get_tokenizer(model, tokenizer_mode=tokenizer_mode)
+    tokenizer = copy.copy(get_tokenizer(model, tokenizer_mode=tokenizer_mode))
+    if pooled:
+        from vllm.tokenizers.hf import maybe_make_thread_pool
+
+        tokenizer = maybe_make_thread_pool(tokenizer, copies=1)
     messages = [
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello"},

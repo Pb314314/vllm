@@ -25,8 +25,19 @@ class ChatTurnBoundaries:
             if isinstance(template, str)
             else None
         )
+        # Renderer pooling wraps public methods but keeps the native encoder
+        # in the MRO. Ignore only vLLM's own transparent HF wrappers.
+        template_method = next(
+            (
+                cls.__dict__["apply_chat_template"]
+                for cls in type(tokenizer).__mro__
+                if "apply_chat_template" in cls.__dict__
+                and cls.__module__ != "vllm.tokenizers.hf"
+            ),
+            None,
+        )
         self.deepseek = (
-            getattr(tokenizer.apply_chat_template, "__module__", None)
+            getattr(template_method, "__module__", None)
             == "vllm.tokenizers.deepseek_v41"
         )
         self.supported = self.deepseek or digest in (
