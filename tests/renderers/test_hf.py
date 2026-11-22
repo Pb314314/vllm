@@ -41,7 +41,10 @@ assert chatml_jinja_path.exists()
 
 
 @pytest.mark.parametrize("pooled", [False, True])
-@pytest.mark.parametrize("response_length", [0, 1, 15, 16, 17, 64])
+@pytest.mark.parametrize(
+    ("response_length", "latest_input_length"),
+    [(0, 1), (1, 1), (15, 1), (16, 1), (17, 1), (64, 1), (64, 4097)],
+)
 @pytest.mark.parametrize(
     ("model", "tokenizer_mode"),
     [
@@ -51,7 +54,7 @@ assert chatml_jinja_path.exists()
     ],
 )
 def test_turn_prefix_hint_preserves_rendered_tokens(
-    response_length, model, tokenizer_mode, pooled
+    response_length, latest_input_length, model, tokenizer_mode, pooled
 ):
     """Derive a real historical assistant boundary without rerendering history."""
     from vllm.entrypoints.openai.chat_completion.turn_prefix import ChatTurnBoundaries
@@ -66,7 +69,7 @@ def test_turn_prefix_hint_preserves_rendered_tokens(
         {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hello"},
         {"role": "assistant", "content": " hello" * response_length},
-        {"role": "user", "content": "Continue"},
+        {"role": "user", "content": "Continue" * latest_input_length},
     ]
     tokens = tokenizer.apply_chat_template(
         messages, tokenize=True, add_generation_prompt=True, return_dict=False

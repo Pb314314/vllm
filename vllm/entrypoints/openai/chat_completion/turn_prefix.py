@@ -115,12 +115,20 @@ class ChatTurnBoundaries:
         ):
             return
         header_length = len(self.assistant_start)
-        for pos in range(len(tokens) - generation_length - 1, -1, -1):
-            if tokens[pos] != self.assistant_start[0]:
+        for stop in range(len(tokens) - generation_length, 0, -4096):
+            cursor = max(0, stop - 4096)
+            header = None
+            while cursor < stop:
+                try:
+                    pos = tokens.index(self.assistant_start[0], cursor, stop)
+                except ValueError:
+                    break
+                if tokens[pos : pos + header_length] == self.assistant_start:
+                    header = pos
+                cursor = pos + 1
+            if header is None:
                 continue
-            if tokens[pos : pos + header_length] != self.assistant_start:
-                continue
-            start = pos + header_length
+            start = header + header_length
             # The previous prompt is also useful when reasoning is rewritten
             # or a trace replays recorded rather than generated assistant text.
             if self.deepseek:
