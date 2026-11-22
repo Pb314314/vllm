@@ -68,6 +68,10 @@ class BlockHashToBlockMap:
         block_id = self._cache.get(key)
         return None if block_id is None else self._blocks[block_id]
 
+    @property
+    def has_duplicates(self) -> bool:
+        return bool(self._dup_ids)
+
     def contain(self, key: BlockHashWithGroupId, block_id: int) -> bool:
         """Checks whether the key maps to the given block ID."""
         dup_ids = self._dup_ids.get(key)

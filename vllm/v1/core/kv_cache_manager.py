@@ -886,12 +886,13 @@ class KVCacheManager:
             blocks = manager.req_to_blocks.get(request.request_id, ())
             # Preserve APC's physical sharing when duplicate KV copies exist.
             block_map = self.block_pool.cached_block_hash_to_block
-            blocks = [
-                (block_map.get_one_block(block.block_hash) or block)
-                if block.block_hash is not None
-                else block
-                for block in blocks
-            ]
+            if block_map.has_duplicates:
+                blocks = [
+                    (block_map.get_one_block(block.block_hash) or block)
+                    if block.block_hash is not None
+                    else block
+                    for block in blocks
+                ]
             for position in ((request.num_prompt_tokens,) if record_prefill else ()) + (
                 (committed,) if record_output else ()
             ):
