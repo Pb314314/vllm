@@ -232,3 +232,93 @@ def test_cached_hit_does_not_reset_newer_failures(
     finally:
         server.join(10)
     assert not server.is_alive()
+
+
+@pytest.mark.parametrize("mode", ["blocking", "prefetch"])
+@pytest.mark.parametrize("positions", [None, (), (64, 96)])
+def test_lookup_hints_preserve_the_remote_result(lookup_service, mode, positions):
+    """Optional hints survive IPC without changing the Store response."""
+    import struct
+
+    from vllm.v1.core.kv_cache_utils import BlockHash
+
+    client, peer = lookup_service
+    hashes = [BlockHash(b"a"), BlockHash(b"b")]
+    received = []
+
+    def serve():
+        received.extend(peer.recv_multipart())
+        peer.send(encode_lookup_response(MooncakeLookupResult(32)))
+
+    server = threading.Thread(target=serve)
+    server.start()
+    try:
+        if mode == "prefetch":
+            assert client.prefetch("hinted", 128, hashes, positions)
+        result = client.lookup("hinted", 128, hashes, prefix_match_positions=positions)
+        assert result == MooncakeLookupResult(32)
+        server.join(5)
+        assert not server.is_alive()
+        assert len(received) == (4 if positions is None else 5)
+        if positions is not None:
+            assert received[-1] == struct.pack(f">{len(positions)}I", *positions)
+    finally:
+        server.join(5)
+
+
+def test_lookup_plan_reuses_only_the_matching_group_prefix():
+    """An append can reuse keys; edited history and other groups cannot."""
+    from vllm.distributed.kv_transfer.kv_connector.v1.mooncake_store.lookup_plan_cache import (  # noqa: E501
+        LookupPlanCache,
+    )
+    from vllm.v1.core.kv_cache_utils import BlockHash
+
+    cache = LookupPlanCache(1 << 20)
+    hashes = [BlockHash(bytes([i]) * 32) for i in range(7)]
+    meta = [(0, bytes(h), (i + 1) * 16) for i, h in enumerate(hashes[:4])]
+    keys = [f"rank{rank}:{h.hex()}" for h in hashes[:4] for rank in range(2)]
+    cache.put(0, keys, meta, 2)
+    plan = cache.get(0, 16, 16, hashes, (64, 80), 7)
+    assert plan is not None
+    assert plan.keys == tuple(keys[:6])
+    assert plan.meta == tuple(meta[:3])
+    assert cache.reused_keys == 6
+    assert cache.get(1, 16, 16, hashes, (64,), 7) is None
+    changed = [BlockHash(b"changed" + bytes([i])) for i in range(7)]
+    assert cache.get(0, 16, 16, changed, (64,), 7) is None
+    assert cache.get(0, 16, 16, hashes, (64,), 2) is None
+
+
+def test_lookup_plan_bounds_metadata_and_reset():
+    """Old metadata can be evicted independently of physical KV storage."""
+    from vllm.distributed.kv_transfer.kv_connector.v1.mooncake_store.lookup_plan_cache import (  # noqa: E501
+        LookupPlanCache,
+    )
+    from vllm.v1.core.kv_cache_utils import BlockHash
+
+    cache = LookupPlanCache(1 << 20, max_entries=1)
+    for suffix in [b"first", b"second"]:
+        hashes = [suffix + bytes([i]) for i in range(3)]
+        cache.put(
+            0,
+            [h.hex() for h in hashes],
+            [(0, h, 16 * (i + 1)) for i, h in enumerate(hashes)],
+            1,
+        )
+        assert 0 < cache.metadata_bytes <= cache.max_bytes
+    old = [BlockHash(b"first" + bytes([i])) for i in range(3)]
+    new = [BlockHash(b"second" + bytes([i])) for i in range(3)]
+    assert cache.get(0, 16, 16, old, (48,), 3) is None
+    assert cache.get(0, 16, 16, new, (48,), 3) is not None
+    cache.clear()
+    assert cache.metadata_bytes == 0
+    assert cache.get(0, 16, 16, new, (48,), 3) is None
+    too_small = LookupPlanCache(1)
+    too_small.put(
+        0,
+        [h.hex() for h in new],
+        [(0, bytes(h), 16 * (i + 1)) for i, h in enumerate(new)],
+        1,
+    )
+    assert too_small.metadata_bytes == 0
+    assert too_small.get(0, 16, 16, new, (48,), 3) is None

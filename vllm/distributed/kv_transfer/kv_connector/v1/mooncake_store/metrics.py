@@ -5,7 +5,8 @@
 Records one row per Mooncake RPC (`save_exists`, `save_put`, `load_get`,
 `lookup_exists`, `lookup_lease`) with duration, key/byte counts, status, and
 failed-key count. Exposed to the logger via `KVConnectorLogging` and to Prometheus
-via `MooncakeStorePromMetrics`.
+via `MooncakeStorePromMetrics`. The optional `lookup_key_plan` row measures local
+key construction, with reused key count and zero transferred bytes.
 """
 
 from dataclasses import dataclass
@@ -114,7 +115,7 @@ class MooncakeStorePromMetrics(KVConnectorPromMetrics):
 
         self._histogram_operation_time = self._histogram_cls(
             name="vllm:mooncake_store_operation_time_seconds",
-            documentation="Histogram of Mooncake store communication time.",
+            documentation="Histogram of Mooncake store operation time.",
             buckets=[
                 1e-3,
                 5e-3,
@@ -136,7 +137,7 @@ class MooncakeStorePromMetrics(KVConnectorPromMetrics):
         )
         self._counter_operation_calls = self._counter_cls(
             name="vllm:mooncake_store_operation_total",
-            documentation="Number of Mooncake store communication operations.",
+            documentation="Number of Mooncake store operations.",
             labelnames=metric_labelnames,
         )
         self._counter_operation_keys = self._counter_cls(
