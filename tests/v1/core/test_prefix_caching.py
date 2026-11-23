@@ -159,6 +159,39 @@ def test_turn_hash_memo_respects_budget_eviction_and_clear():
     assert cache.lookup(requests[2]) is None
 
 
+@pytest.mark.parametrize("lookahead", [0, 3])
+def test_turn_hash_memo_selects_longest_unchanged_candidate(lookahead):
+    """A history edit may invalidate the newest turn but preserve an older one."""
+    init_none_hash(sha256)
+    cache = TurnPrefixHashCache(16, lookahead)
+    producer = make_request(
+        "producer",
+        list(range(193)),
+        16,
+        sha256,
+        num_hash_lookahead_tokens=lookahead,
+        prefix_match_positions=(),
+    )
+    for position in (80, 96, 144, 160):
+        cache.register(producer, position)
+    for edit, expected_blocks in ((None, 10), (150, 9), (120, 6), (90, 5), (42, 0)):
+        tokens = list(range(193))
+        if edit is not None:
+            tokens[edit] += 1000
+        incoming = make_request(
+            "incoming",
+            tokens,
+            16,
+            sha256,
+            num_hash_lookahead_tokens=lookahead,
+            prefix_match_positions=(96, 160),
+        )
+        cached = cache.lookup(incoming)
+        assert cached == (
+            incoming.block_hashes[:expected_blocks] if expected_blocks else None
+        )
+
+
 def test_turn_hash_memo_ignores_requests_without_internal_boundaries():
     init_none_hash(sha256)
     cache = TurnPrefixHashCache(16)

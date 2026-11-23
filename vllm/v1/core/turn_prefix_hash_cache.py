@@ -97,9 +97,15 @@ class TurnPrefixHashCache:
         if not counts:
             return None
         data = self._view(tokens)
-        for count in counts:
-            end = count * self.block_size + self.lookahead
-            digest = hashlib.sha256(data[: end * 4]).digest()
+        hasher = hashlib.sha256()
+        previous_end = 0
+        fingerprints = []
+        for count in reversed(counts):
+            end = (count * self.block_size + self.lookahead) * 4
+            hasher.update(data[previous_end:end])
+            fingerprints.append((count, hasher.copy().digest()))
+            previous_end = end
+        for count, digest in reversed(fingerprints):
             key = (request.cache_salt, count, digest)
             with self._lock:
                 entry = self._entries.get(key)

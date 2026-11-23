@@ -169,6 +169,8 @@ share a metadata lock; fingerprinting happens outside it. Cache reset clears the
 memo. `vllm:turn_prefix_cache_reused_hashes_total` records the avoided hashes, and
 `vllm:turn_prefix_cache_hash_metadata_bytes` reports its metadata estimate.
 The complete history still must be read: this is not constant-time validation.
+Candidate fingerprints share one scan of the token bytes, including when the
+newest candidate misses and an earlier turn must be checked.
 Measure fingerprinting, publication, misses and memory together with serving
 performance before enabling it.
 
@@ -202,11 +204,11 @@ When enabled, `/metrics` additionally exposes:
 Use normal prefix-cache token metrics alongside these counters: turn hit rate
 is not token reuse rate. Initial diagnostics show faster CPU lookup but no
 stable serving speedup. See the reproducible CPU and serving diagnostics in
-[the session-cache benchmark notes](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/README.md).
-The [large-model AgentX study](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/agentx_results.md)
+[the session-cache benchmark notes](https://github.com/Pb314314/vllm/blob/ed18d3e4cef5b03cc523367662db080fb390e004/benchmarks/session_cache/README.md).
+The [large-model AgentX study](https://github.com/Pb314314/vllm/blob/ed18d3e4cef5b03cc523367662db080fb390e004/benchmarks/session_cache/agentx_results.md)
 separates lookup savings from publication costs, ordinary frontend acceleration,
 memory pressure, and end-to-end serving results.
-The subsequent [overhead iteration](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/turn_overhead_results.md)
+The subsequent [overhead iteration](https://github.com/Pb314314/vllm/blob/ed18d3e4cef5b03cc523367662db080fb390e004/benchmarks/session_cache/turn_overhead_results.md)
 records lookup/maintenance CPU reductions, cold-request costs and
 deferred-publication results.
 
