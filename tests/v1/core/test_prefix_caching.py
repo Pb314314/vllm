@@ -705,6 +705,39 @@ def test_turn_snapshot_restores_unaligned_hybrid_state_and_isolates_forks(
         manager.free(consumer)
 
 
+@pytest.mark.parametrize("prompt_len,expected", [(166, 133), (401, 128)])
+def test_turn_snapshot_preserves_single_forward_prefill_checkpoint(
+    prompt_len, expected
+):
+    """Do not save five replay tokens by forcing an extra prefill boundary."""
+    config = _make_hybrid_kv_cache_config(256, 100, ["full", "mamba"])
+    _replace_group(
+        config, 1, num_prefill_checkpoint_blocks=1, prefill_checkpoint_alignment=16
+    )
+    manager = make_kv_cache_manager(
+        config,
+        max_model_len=512,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+        enable_turn_hybrid_snapshots=True,
+    )
+    producer = make_request(
+        "producer", list(range(133)), 16, sha256, prefix_match_positions=()
+    )
+    for end in (128, 133):
+        assert manager.allocate_slots(producer, end - producer.num_computed_tokens)
+        producer.num_computed_tokens = end
+        _, retained = manager.take_kv_cache_block_copies()
+        manager.block_pool.free_blocks(retained)
+    producer.status = RequestStatus.FINISHED_LENGTH_CAPPED
+    manager.record_turn_checkpoint(producer)
+    manager.free(producer)
+    consumer = make_request(
+        "consumer", list(range(prompt_len)), 16, sha256, prefix_match_positions=(133,)
+    )
+    assert manager.get_computed_blocks(consumer)[1] == expected
+
+
 @pytest.mark.parametrize("change", ["tail", "ssm", "attention", "reset"])
 def test_turn_snapshot_rejects_changed_content_or_incomplete_state(change):
     """A turn hint cannot reuse edited input or a snapshot missing any state."""

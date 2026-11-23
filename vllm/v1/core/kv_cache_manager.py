@@ -25,6 +25,8 @@ from vllm.v1.core.turn_prefix_cache import TurnPrefixCache, TurnPrefixLookup
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
+    get_reusable_prefix_length,
+    is_mamba_prefill_checkpoint_valid,
 )
 from vllm.v1.metrics.stats import PrefixCacheStats
 from vllm.v1.request import Request, RequestStatus
@@ -392,7 +394,13 @@ class KVCacheManager:
             snapshot = self.turn_prefix_cache.lookup_snapshot(
                 request, max_cache_hit_length
             )
-            if snapshot is not None and snapshot[1] > num_new_computed_tokens:
+            if (
+                snapshot is not None
+                and snapshot[1] > num_new_computed_tokens
+                and not self._snapshot_splits_prefill_checkpoint(
+                    request, num_new_computed_tokens, snapshot[1]
+                )
+            ):
                 self.turn_prefix_cache.stats.snapshot_hits += 1
                 self.turn_prefix_cache.stats.snapshot_saved_tokens += (
                     snapshot[1] - num_new_computed_tokens
@@ -426,6 +434,34 @@ class KVCacheManager:
 
         blocks = self.create_kv_cache_blocks(computed_blocks)
         return blocks, num_new_computed_tokens, shared_prefix_boundary
+
+    def _snapshot_splits_prefill_checkpoint(
+        self, request: Request, aligned_hit: int, snapshot_hit: int
+    ) -> bool:
+        """Keep an internal prefill checkpoint instead of saving a partial block."""
+        hash_size = self.block_pool.hash_block_size
+        if snapshot_hit % hash_size == 0 or snapshot_hit - aligned_hit >= hash_size:
+            return False
+        end = max(request.num_prompt_tokens, request.num_tokens - 1)
+        checkpoint = get_reusable_prefix_length(end, 0, hash_size)
+        for manager in self.coordinator.single_type_managers:
+            if (
+                type(manager) is not MambaManager
+                or not manager.has_prefill_checkpoint_blocks
+            ):
+                continue
+            if is_mamba_prefill_checkpoint_valid(
+                query_start=aligned_hit,
+                query_end=end,
+                checkpoint_position=checkpoint,
+                hash_block_size=hash_size,
+                mamba_block_size=manager.block_size,
+                checkpoint_alignment=manager.prefill_checkpoint_alignment,
+            ):
+                # An unaligned start cannot export this checkpoint inside the
+                # forward. Replaying less than one hash block avoids that split.
+                return True
+        return False
 
     def get_computed_blocks_for_connector(
         self, request: Request, max_cache_hit_length: int | None = None

@@ -144,6 +144,11 @@ same position, excluding in-flight or uncomputed tokens. Existing copy-on-write
 copies writable tails on continuation or fork. Entries share the existing index
 budget and hold no GPU usage references. A missing group invalidates the joint
 hit. This prototype does not yet export exact turn snapshots to a remote Store.
+An exact endpoint can require additional prefill chunks when it breaks the
+recurrent backend's internal checkpoint alignment. If it saves less than one
+hash block and the ordinary APC hit preserves that alignment, the prototype
+keeps the ordinary hit. This conservative rule trades a few replay tokens for
+avoiding additional full-model forwards; it is not a complete latency predictor.
 
 Without the additional hash-reuse switch, this version does not reduce
 historical block hashing. A pool generation
