@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import copy
+
 import jinja2
 import pytest
 import torch
@@ -36,6 +38,85 @@ EXAMPLES_DIR = VLLM_PATH / "examples"
 
 chatml_jinja_path = VLLM_PATH / "examples/template_chatml.jinja"
 assert chatml_jinja_path.exists()
+
+
+@pytest.mark.parametrize("pooled", [False, True])
+@pytest.mark.parametrize(
+    ("response_length", "latest_input_length"),
+    [(0, 1), (1, 1), (15, 1), (16, 1), (17, 1), (64, 1), (64, 4097)],
+)
+@pytest.mark.parametrize(
+    ("model", "tokenizer_mode"),
+    [
+        ("Qwen/Qwen2.5-1.5B-Instruct", "auto"),
+        ("MiniMaxAI/MiniMax-M3.1-Flash", "auto"),
+        ("deepseek-ai/DeepSeek-V4.1-Flash", "deepseek_v41"),
+        ("Qwen/Qwen3.8-27B", "auto"),
+        ("moonshotai/Kimi-K2.7-Code", "auto"),
+    ],
+)
+def test_turn_prefix_hint_preserves_rendered_tokens(
+    response_length, latest_input_length, model, tokenizer_mode, pooled
+):
+    """Derive a real historical assistant boundary without rerendering history."""
+    from vllm.entrypoints.openai.chat_completion.turn_prefix import ChatTurnBoundaries
+    from vllm.inputs.engine import tokens_input
+
+    tokenizer = copy.copy(
+        get_tokenizer(model, tokenizer_mode=tokenizer_mode, trust_remote_code=True)
+    )
+    if pooled:
+        from vllm.tokenizers.hf import maybe_make_thread_pool
+
+        tokenizer = maybe_make_thread_pool(tokenizer, copies=1)
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "content": " hello" * response_length,
+            "reasoning_content": "A brief thought.",
+        },
+        {"role": "user", "content": "Continue" * latest_input_length},
+    ]
+    tokens = tokenizer.apply_chat_template(
+        messages, tokenize=True, add_generation_prompt=True, return_dict=False
+    )
+    assert isinstance(tokens, list)
+    engine_input = tokens_input(tokens.copy())
+    request = ChatCompletionRequest(model=model, messages=messages)
+    boundaries = ChatTurnBoundaries(tokenizer, None)
+    boundaries.add_hint(request, engine_input)
+    assert engine_input["prompt_token_ids"] == tokens
+    prompt_position, position = engine_input["prefix_match_positions"]
+    assert tokens[position] == boundaries.end_token
+    previous_prompt = tokenizer.apply_chat_template(
+        messages[:2], tokenize=True, add_generation_prompt=True, return_dict=False
+    )
+    # DeepSeek changes the historical reasoning header when dropping thinking.
+    stable_length = len(previous_prompt) - int(boundaries.deepseek)
+    assert tokens[:stable_length] == previous_prompt[:stable_length]
+    assert prompt_position == len(previous_prompt)
+    assert position >= len(previous_prompt)
+
+    plain = tokens_input(tokens)
+    # A custom per-request template always falls back, including DeepSeek.
+    custom = ChatCompletionRequest(
+        model=model, messages=messages, chat_template="{{ messages }}"
+    )
+    boundaries.add_hint(custom, plain)
+    assert "prefix_match_positions" not in plain
+    messages[2]["content"] += boundaries.delimiters[0]
+    literal_tokens = tokenizer.apply_chat_template(
+        messages, tokenize=True, add_generation_prompt=True, return_dict=False
+    )
+    assert isinstance(literal_tokens, list)
+    literal_input = tokens_input(literal_tokens.copy())
+    boundaries.add_hint(
+        ChatCompletionRequest(model=model, messages=messages), literal_input
+    )
+    assert literal_input["prompt_token_ids"] == literal_tokens
+
 
 # Define models, templates, and their corresponding expected outputs
 MODEL_TEMPLATE_GENERATION_OUTPUT = [

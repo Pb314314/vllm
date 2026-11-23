@@ -17,9 +17,11 @@ from vllm.v1.core.kv_cache_metrics import KVCacheMetricsCollector
 from vllm.v1.core.kv_cache_utils import KVCacheBlock, KVCacheBlockCopy, trim_null_head
 from vllm.v1.core.single_type_kv_cache_manager import (
     CrossAttentionManager,
+    FullAttentionManager,
     MambaManager,
     get_kv_cache_kind,
 )
+from vllm.v1.core.turn_prefix_cache import TurnPrefixCache, TurnPrefixLookup
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
     KVCacheConfig,
@@ -144,6 +146,9 @@ class KVCacheManager:
         metrics_collector: KVCacheMetricsCollector | None = None,
         watermark: float = 0.0,
         enable_mamba_shared_prefix_checkpoint: bool = False,
+        enable_turn_prefix_cache: bool = False,
+        defer_turn_prefix_cache: bool = False,
+        enable_turn_hybrid_snapshots: bool = False,
     ) -> None:
         self.max_model_len = max_model_len
         # When unset, fall back to `max_model_len` so the recycling-aware cap
@@ -193,6 +198,41 @@ class KVCacheManager:
             if manager.retains_longer_hit
         )
         self.kv_cache_config = kv_cache_config
+        self.turn_prefix_cache: TurnPrefixCache | None = None
+        self.turn_prefix_managers = tuple(
+            manager
+            for manager in self.coordinator.single_type_managers
+            if type(manager) is FullAttentionManager
+            and manager.block_size % hash_block_size == 0
+        )
+        if (
+            enable_turn_prefix_cache
+            and enable_caching
+            and self.turn_prefix_managers
+            and dcp_world_size == pcp_world_size == 1
+        ):
+            self.turn_prefix_cache = TurnPrefixCache(
+                hash_block_size,
+                block_pool=self.block_pool,
+                defer_publication=defer_turn_prefix_cache,
+            )
+        managers = self.coordinator.single_type_managers
+        self.turn_hybrid_snapshots = (
+            enable_turn_hybrid_snapshots
+            and self.turn_prefix_cache is not None
+            and not num_hash_lookahead_tokens
+            and not enable_kv_cache_events
+            and any(type(m) is MambaManager for m in managers)
+            and all(
+                type(m) is FullAttentionManager
+                or (
+                    type(m) is MambaManager
+                    and m.prefix_caching
+                    and m.num_speculative_blocks == 0
+                )
+                for m in managers
+            )
+        )
 
         # Watermark: minimum number of KV cache blocks to keep free when
         # admitting waiting/preempted requests, to avoid frequent preemptions.
@@ -235,6 +275,9 @@ class KVCacheManager:
         if not self.log_stats:
             return None
         stats = self.prefix_cache_stats
+        if self.turn_prefix_cache is not None:
+            assert stats is not None
+            stats.turn_cache = self.turn_prefix_cache.take_stats()
         self.prefix_cache_stats = PrefixCacheStats()
         return stats
 
@@ -312,11 +355,65 @@ class KVCacheManager:
         # num_computed_tokens to be block-size aligned. Removing this limitation
         # could slightly improve performance in the future.
         max_cache_hit_length = request.get_max_cache_hit_length(max_cache_hit_length)
+        if self.turn_prefix_cache is not None:
+            self.turn_prefix_cache.stats.reused_hashes += (
+                request.turn_prefix_reused_hashes
+            )
+            request.turn_prefix_reused_hashes = 0
+            if request.turn_prefix_hash_cache is not None:
+                self.turn_prefix_cache.hash_cache = request.turn_prefix_hash_cache
+        known_blocks = None
+        if (
+            self.turn_prefix_cache is not None
+            and self.turn_prefix_cache.supports(request)
+            and request.prefix_match_positions
+        ):
+            known_blocks = TurnPrefixLookup({})
+            for manager in self.turn_prefix_managers:
+                checkpoint_blocks = self.turn_prefix_cache.lookup(
+                    request,
+                    max_cache_hit_length,
+                    group_id=manager.kv_cache_group_id,
+                    block_size=manager.block_size,
+                )
+                if checkpoint_blocks is not None:
+                    known_blocks.blocks[manager.kv_cache_group_id] = checkpoint_blocks
         computed_blocks, num_new_computed_tokens, num_uncached = (
             self.coordinator.find_longest_cache_hit(
-                request.block_hashes, max_cache_hit_length, request.num_tokens
+                request.block_hashes,
+                max_cache_hit_length,
+                request.num_tokens,
+                known_full_attention_blocks=known_blocks,
             )
         )
+        if self.turn_hybrid_snapshots:
+            assert self.turn_prefix_cache is not None
+            self.turn_prefix_cache.stats.snapshot_queries += 1
+            snapshot = self.turn_prefix_cache.lookup_snapshot(
+                request, max_cache_hit_length
+            )
+            if (
+                snapshot is not None
+                and snapshot[1] > num_new_computed_tokens
+                and not self.turn_prefix_cache.snapshot_splits_prefill_checkpoint(
+                    request,
+                    num_new_computed_tokens,
+                    snapshot[1],
+                    self.coordinator.single_type_managers,
+                )
+            ):
+                self.turn_prefix_cache.stats.snapshot_hits += 1
+                self.turn_prefix_cache.stats.snapshot_saved_tokens += (
+                    snapshot[1] - num_new_computed_tokens
+                )
+                groups, num_new_computed_tokens = snapshot
+                computed_blocks = tuple(list(group) for group in groups)
+                num_uncached = 0
+        if known_blocks is not None:
+            assert self.turn_prefix_cache is not None
+            self.turn_prefix_cache.stats.skipped_block_lookups += (
+                known_blocks.skipped_block_lookups
+            )
 
         # When kv_cache_report_mode is "full", emit BlockStored events
         # for the reused prefix cache blocks so that external consumers
@@ -704,6 +801,8 @@ class KVCacheManager:
         """
         if not self.coordinator.reset_prefix_cache():
             return False
+        if self.turn_prefix_cache is not None:
+            self.turn_prefix_cache.clear()
         if self.log_stats:
             assert self.prefix_cache_stats is not None
             self.prefix_cache_stats.reset = True
@@ -803,6 +902,89 @@ class KVCacheManager:
         """
         if self.enable_caching:
             self.coordinator.cache_blocks(request, num_computed_tokens)
+
+    def record_turn_checkpoint(self, request: Request) -> None:
+        cache = self.turn_prefix_cache
+        if cache is None or not cache.supports(request):
+            return
+        committed = min(
+            request.num_computed_tokens - request.num_in_flight_tokens,
+            request.num_tokens,
+        )
+        record_prefill = (
+            not request.turn_prefill_checkpoint_recorded
+            and committed >= request.num_prompt_tokens
+        )
+        record_output = request.status in (
+            RequestStatus.FINISHED_STOPPED,
+            RequestStatus.FINISHED_LENGTH_CAPPED,
+        )
+        if not (record_prefill or record_output):
+            return
+        if request.turn_prefix_hash_cache is not None:
+            for position in ((request.num_prompt_tokens,) if record_prefill else ()) + (
+                (committed,) if record_output else ()
+            ):
+                request.turn_prefix_hash_cache.register(request, position)
+        for manager in self.turn_prefix_managers:
+            blocks = manager.req_to_blocks.get(request.request_id, ())
+            for position in ((request.num_prompt_tokens,) if record_prefill else ()) + (
+                (committed,) if record_output else ()
+            ):
+                cache.register(
+                    request,
+                    blocks,
+                    position,
+                    group_id=manager.kv_cache_group_id,
+                    block_size=manager.block_size,
+                )
+        if record_prefill:
+            request.turn_prefill_checkpoint_recorded = True
+        if record_output and self.turn_hybrid_snapshots:
+            self._record_hybrid_turn_snapshot(request, committed)
+
+    def _record_hybrid_turn_snapshot(self, request: Request, position: int) -> None:
+        cache = self.turn_prefix_cache
+        assert cache is not None
+        if request.num_in_flight_tokens or position != request.num_computed_tokens:
+            return
+        key = cache.snapshot_key(request, position)
+        if key is None:
+            return
+        groups: list[tuple[KVCacheBlock, ...]] = []
+        tails: list[tuple[KVCacheBlock, int]] = []
+        for manager in self.coordinator.single_type_managers:
+            count = cdiv(position, manager.block_size)
+            blocks = manager.req_to_blocks.get(request.request_id, ())
+            if count == 0 or count > len(blocks):
+                return
+            tail = blocks[count - 1]
+            if tail.is_null:
+                return
+            if type(manager) is MambaManager:
+                if (
+                    tail.block_hash is not None
+                    and tail.block_hash_num_tokens != position
+                ):
+                    return
+                selected = (self.block_pool.null_block,) * (count - 1) + (tail,)
+            else:
+                # An attention page can retain an earlier partial-prefix key
+                # while its owner appends KV. At completion all positions up to
+                # `position` are valid; continuation copies the whole page.
+                selected = tuple(blocks[:count])
+                if any(b.is_null or b.block_hash is None for b in selected[:-1]):
+                    return
+            groups.append(selected)
+            if tail.block_hash is None:
+                if tail.ref_cnt != 1:
+                    return
+                tails.append((tail, manager.kv_cache_group_id))
+        # All groups were checked before publishing any tail. Finished sync
+        # requests cannot write these states again; continuation uses existing CoW.
+        for tail, group_id in tails:
+            self.block_pool.cache_turn_tail(tail, key[1], position, group_id)
+        cache.register_snapshot(key, tuple(groups))
 
     def create_kv_cache_blocks(
         self, blocks: tuple[list[KVCacheBlock], ...]

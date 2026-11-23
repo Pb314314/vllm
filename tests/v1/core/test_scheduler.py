@@ -2491,16 +2491,21 @@ def test_schedule_order(enable_chunked_prefill: bool):
         assert len(scheduler_output1.scheduled_new_reqs) == 1
 
 
-def test_preempt_during_execution():
+@pytest.mark.parametrize("turn_prefix_cache", [False, True])
+def test_preempt_during_execution(monkeypatch, turn_prefix_cache):
+    monkeypatch.setenv("VLLM_TURN_PREFIX_CACHE", str(int(turn_prefix_cache)))
     # NOTE(woosuk): The actual number of available blocks is 10 instead of 11
     # because block 0 is reserved as the null block.
     scheduler = create_scheduler(
         max_num_batched_tokens=100,
         block_size=16,
         num_blocks=11,
-        enable_prefix_caching=False,
+        enable_prefix_caching=turn_prefix_cache,
     )
     requests = create_requests(num_requests=2, num_tokens=80, block_size=16)
+    if turn_prefix_cache:
+        for request in requests:
+            request.prefix_match_positions = ()
 
     # Schedule the first request.
     scheduler.add_request(requests[0])
@@ -2546,6 +2551,31 @@ def test_preempt_during_execution():
     # sampled token id.
     assert len(requests[1].output_token_ids) == 1
     assert requests[1].output_token_ids[0] == 42
+
+    if turn_prefix_cache:
+        index = scheduler.kv_cache_manager.turn_prefix_cache
+        assert index is not None
+        # The stale output must not publish the preempted request's KV.
+        assert (5, requests[0].block_hashes[4], 0) in index.entries
+        assert (5, requests[1].block_hashes[4], 0) not in index.entries
+
+
+def test_turn_prefix_abort_does_not_publish_inflight_blocks(monkeypatch):
+    """An aborted prefill cannot become a reusable turn checkpoint."""
+    monkeypatch.setenv("VLLM_TURN_PREFIX_CACHE", "1")
+    scheduler = create_scheduler(enable_prefix_caching=True)
+    request = create_requests(num_requests=1, num_tokens=80)[0]
+    request.prefix_match_positions = ()
+    scheduler.add_request(request)
+    scheduled = scheduler.schedule()
+    scheduler.finish_requests([request.request_id], RequestStatus.FINISHED_ABORTED)
+    scheduler.update_from_output(
+        scheduled,
+        ModelRunnerOutput(req_ids=[request.request_id], sampled_token_ids=[[42]]),
+    )
+    index = scheduler.kv_cache_manager.turn_prefix_cache
+    assert index is not None and not index.entries
+    assert scheduler.kv_cache_manager.block_pool.get_num_free_blocks() == 9999
 
 
 def test_pending_hisparse_reclamation_defers_preemption(monkeypatch):

@@ -566,6 +566,11 @@ class InputProcessor:
             resumable=resumable,
             session_id=session_id,
             kv_hints=kv_hints,
+            prefix_match_positions=(
+                decoder_input.get("prefix_match_positions")
+                if decoder_input["type"] == "token"
+                else None
+            ),
         )
 
     def _validate_prompt_len(

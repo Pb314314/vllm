@@ -1,5 +1,9 @@
 # Features
 
+## Experimental turn-prefix lookup
+
+- [Automatic turn-prefix matching](automatic_prefix_caching.md#experimental-turn-prefix-matching-for-chat-completions)
+
 ## KV Cache Offloading
 
 - [UMBPStoreConnector](umbp_store_connector_usage.md)

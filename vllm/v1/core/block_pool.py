@@ -68,6 +68,10 @@ class BlockHashToBlockMap:
         block_id = self._cache.get(key)
         return None if block_id is None else self._blocks[block_id]
 
+    @property
+    def has_duplicates(self) -> bool:
+        return bool(self._dup_ids)
+
     def contain(self, key: BlockHashWithGroupId, block_id: int) -> bool:
         """Checks whether the key maps to the given block ID."""
         dup_ids = self._dup_ids.get(key)
@@ -157,6 +161,7 @@ class BlockPool:
             self.blocks
         )
         self.cached_block_hashes_by_block: dict[int, set[BlockHashWithGroupId]] = {}
+        self.cache_generation = 0
 
         # To represent a placeholder block with block_id=0.
         # The ref_cnt of null_block is not maintained, needs special care to
@@ -456,6 +461,27 @@ class BlockPool:
             )
         )
 
+    def cache_turn_tail(
+        self,
+        block: KVCacheBlock,
+        prefix_hash: BlockHash,
+        num_tokens: int,
+        kv_cache_group_id: int,
+    ) -> None:
+        """Key an immutable turn-end tail at its exact completed position.
+
+        These keys are separate from ordinary APC block hashes. The caller
+        must ensure no pending or future execution can write to this block.
+        """
+        assert not self.enable_kv_cache_events
+        assert not block.is_null and block.ref_cnt > 0
+        assert block.block_hash is None
+        self._insert_block_hash(
+            make_block_hash_with_group_id(prefix_hash, kv_cache_group_id),
+            block,
+            num_tokens=num_tokens,
+        )
+
     def cache_partial_block(
         self,
         request: Request,
@@ -610,6 +636,7 @@ class BlockPool:
         if block.block_hash is None:
             return []
 
+        self.cache_generation += 1
         block_hashes = [block.block_hash]
         block_hashes.extend(self.cached_block_hashes_by_block.pop(block.block_id, ()))
 
@@ -880,6 +907,7 @@ class BlockPool:
         # Remove all hashes so that no new blocks will hit. Clear in place: a
         # new map created after the startup gc.freeze() would not be frozen.
         self.cached_block_hash_to_block.clear()
+        self.cache_generation += 1
         self.cached_block_hashes_by_block.clear()
         if self._reuse_watchers:
             self._notify_reuse(

@@ -3,10 +3,11 @@
 import itertools
 import time
 from collections import defaultdict, deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import replace
 from typing import Any
 
+from vllm import envs
 from vllm.compilation.cuda_graph import CUDAGraphStat
 from vllm.config import KVEventsConfig, VllmConfig
 from vllm.distributed.aux_output_connector.connector import (
@@ -94,6 +95,13 @@ logger = init_logger(__name__)
 
 
 class Scheduler(SchedulerInterface):
+    def publish_pending_turn_checkpoints(
+        self, limit: int, should_stop: Callable[[], bool] | None = None
+    ) -> None:
+        cache = self.kv_cache_manager.turn_prefix_cache
+        if cache is not None and cache.defer_publication:
+            cache.publish_pending(limit=limit, should_stop=should_stop)
+
     def __init__(
         self,
         vllm_config: VllmConfig,
@@ -380,6 +388,21 @@ class Scheduler(SchedulerInterface):
             watermark=self.scheduler_config.watermark,
             enable_mamba_shared_prefix_checkpoint=(
                 self.cache_config.enable_mamba_shared_prefix_checkpoint
+            ),
+            enable_turn_prefix_cache=(
+                envs.VLLM_TURN_PREFIX_CACHE
+                and self.parallel_config.pipeline_parallel_size == 1
+            ),
+            defer_turn_prefix_cache=envs.VLLM_DEFER_TURN_PREFIX_CACHE,
+            enable_turn_hybrid_snapshots=(
+                envs.VLLM_TURN_HYBRID_SNAPSHOTS
+                and vllm_config.max_concurrent_batches == 1
+                and speculative_config is None
+                and (
+                    self.connector is None
+                    or self.connector.supports_local_turn_snapshots
+                )
+                and not self.cache_config.use_replayssm
             ),
         )
         # Mamba managers already account for their speculative state blocks.
@@ -2543,6 +2566,15 @@ class Scheduler(SchedulerInterface):
                 request.status = RequestStatus.FINISHED_ERROR
                 request.resumable = False
                 stopped = True
+
+            if (
+                self.kv_cache_manager.turn_prefix_cache is not None
+                and not output_is_stale
+                and status_before_stop == RequestStatus.RUNNING
+                and request.prefix_match_positions is not None
+                and (not request.turn_prefill_checkpoint_recorded or stopped)
+            ):
+                self.kv_cache_manager.record_turn_checkpoint(request)
 
             routed_experts = None
             should_emit_output = bool(

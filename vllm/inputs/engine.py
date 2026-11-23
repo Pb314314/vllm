@@ -36,6 +36,9 @@ class TokensInput(_InputOptions):
     prompt_token_ids: list[int]
     """The token IDs of the prompt."""
 
+    prefix_match_positions: NotRequired[tuple[int, ...]]
+    """Internal, template-derived prefix lookup positions; not an HTTP field."""
+
     prompt: NotRequired[str]
     """The prompt text corresponding to the token IDs, if available."""
 
