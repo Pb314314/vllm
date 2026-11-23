@@ -11,11 +11,17 @@ from typing import TYPE_CHECKING, cast
 
 from vllm.utils.gc_utils import gc_untrack
 from vllm.v1.core.kv_cache_utils import BlockHash, BlockHashWithGroupId, KVCacheBlock
+from vllm.v1.core.single_type_kv_cache_manager import MambaManager
+from vllm.v1.kv_cache_interface import (
+    get_reusable_prefix_length,
+    is_mamba_prefill_checkpoint_valid,
+)
 from vllm.v1.metrics.stats import TurnPrefixCacheStats
 from vllm.v1.request import Request
 
 if TYPE_CHECKING:
     from vllm.v1.core.block_pool import BlockPool
+    from vllm.v1.core.single_type_kv_cache_manager import SingleTypeKVCacheManager
     from vllm.v1.core.turn_prefix_hash_cache import TurnPrefixHashCache
 
 CheckpointKey = tuple[int, BlockHash, int]
@@ -351,6 +357,38 @@ class TurnPrefixCache:
             self.entries.move_to_end(key)
             return entry.groups, position
         return None
+
+    def snapshot_splits_prefill_checkpoint(
+        self,
+        request: Request,
+        aligned_hit: int,
+        snapshot_hit: int,
+        managers: Sequence["SingleTypeKVCacheManager"],
+    ) -> bool:
+        """Keep an internal prefill checkpoint instead of saving a partial block."""
+        hash_size = self.block_size
+        if snapshot_hit % hash_size == 0 or snapshot_hit - aligned_hit >= hash_size:
+            return False
+        end = max(request.num_prompt_tokens, request.num_tokens - 1)
+        checkpoint = get_reusable_prefix_length(end, 0, hash_size)
+        for manager in managers:
+            if (
+                type(manager) is not MambaManager
+                or not manager.has_prefill_checkpoint_blocks
+            ):
+                continue
+            if is_mamba_prefill_checkpoint_valid(
+                query_start=aligned_hit,
+                query_end=end,
+                checkpoint_position=checkpoint,
+                hash_block_size=hash_size,
+                mamba_block_size=manager.block_size,
+                checkpoint_alignment=manager.prefill_checkpoint_alignment,
+            ):
+                # An unaligned start cannot export this checkpoint inside the
+                # forward. Replaying less than one hash block avoids that split.
+                return True
+        return False
 
     def publish_pending(
         self, limit: int = 1, *, should_stop: Callable[[], bool] | None = None
