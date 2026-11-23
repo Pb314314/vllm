@@ -67,6 +67,8 @@ from vllm.v1.core.single_type_kv_cache_manager import (
     HiSparseResidentManager,
     HiSparseSourceManager,
 )
+from vllm.v1.core.turn_prefix_hash_cache import TurnPrefixHashCache
+from vllm.v1.engine import EngineCoreRequest
 from vllm.v1.hisparse.coordinator import get_hisparse_coordinator
 from vllm.v1.kv_cache_interface import (
     AttentionSpec,
@@ -84,6 +86,86 @@ from vllm.v1.request import RequestStatus
 from .utils import mamba_layer, new_kv_cache_group, sliding_window_layer
 
 pytestmark = pytest.mark.cpu_test
+
+
+@pytest.mark.parametrize("lookahead", [0, 1, 3])
+@pytest.mark.parametrize("hash_fn", [sha256, sha256_cbor])
+def test_turn_hash_memo_preserves_hashes_after_history_and_lookahead_changes(
+    lookahead, hash_fn
+):
+    """Only identical prefix bytes, lookahead and isolation may reuse a chain."""
+    init_none_hash(hash_fn)
+    cache = TurnPrefixHashCache(16, lookahead)
+    producer = make_request(
+        "producer",
+        list(range(193)),
+        16,
+        hash_fn,
+        num_hash_lookahead_tokens=lookahead,
+        prefix_match_positions=(),
+    )
+    cache.register(producer, 128)
+    hasher = get_request_block_hasher(16, hash_fn, lookahead)
+    for change in ("append", "fork", "history", "lookahead", "salt", "compact"):
+        tokens = list(range(181))
+        if change in ("fork", "history", "lookahead"):
+            tokens[{"fork": 145, "history": 42, "lookahead": 128}[change]] += 1000
+        if change == "compact":
+            tokens = tokens[:80]
+        incoming = EngineCoreRequest(
+            request_id=change,
+            prompt_token_ids=tokens,
+            mm_features=None,
+            sampling_params=SamplingParams(max_tokens=1),
+            pooling_params=None,
+            arrival_time=0,
+            lora_request=None,
+            cache_salt="isolated" if change == "salt" else None,
+            data_parallel_rank=None,
+            prefix_match_positions=(128,),
+        )
+        cached = cache.lookup(incoming)
+        expect_hit = change in ("append", "fork") or (
+            change == "lookahead" and lookahead == 0
+        )
+        assert (cached is not None) == expect_hit
+        if cached is not None:
+            assert cached == producer.block_hashes[:8]
+        restored = Request.from_engine_core_request(incoming, hasher, cached)
+        fresh = Request.from_engine_core_request(incoming, hasher)
+        assert restored.block_hashes == fresh.block_hashes
+        # Request initialization may append to its private copy of the chain.
+        if expect_hit:
+            assert cache.lookup(incoming) == producer.block_hashes[:8]
+
+
+def test_turn_hash_memo_respects_budget_eviction_and_clear():
+    init_none_hash(sha256)
+    cache = TurnPrefixHashCache(16, max_entries=2, max_bytes=4096)
+    requests = [
+        make_request(
+            str(i), list(range(i, i + 144)), 16, sha256, prefix_match_positions=(128,)
+        )
+        for i in range(3)
+    ]
+    for request in requests:
+        cache.register(request, 128)
+    assert cache.lookup(requests[0]) is None
+    assert cache.lookup(requests[1]) == requests[1].block_hashes[:8]
+    assert cache.lookup(requests[2]) == requests[2].block_hashes[:8]
+    assert 0 < cache.metadata_bytes <= 4096
+    cache.clear()
+    assert cache.metadata_bytes == 0
+    assert cache.lookup(requests[2]) is None
+
+
+def test_turn_hash_memo_ignores_requests_without_internal_boundaries():
+    init_none_hash(sha256)
+    cache = TurnPrefixHashCache(16)
+    request = make_request("plain", list(range(144)), 16, sha256)
+    cache.register(request, 128)
+    assert cache.metadata_bytes == 0
+    assert cache.lookup(request) is None
 
 
 def _swa_layer(sliding_window: int, **spec_kwargs) -> KVCacheLayerConfig:

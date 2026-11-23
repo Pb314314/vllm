@@ -355,6 +355,13 @@ class KVCacheManager:
         # num_computed_tokens to be block-size aligned. Removing this limitation
         # could slightly improve performance in the future.
         max_cache_hit_length = request.get_max_cache_hit_length(max_cache_hit_length)
+        if self.turn_prefix_cache is not None:
+            self.turn_prefix_cache.stats.reused_hashes += (
+                request.turn_prefix_reused_hashes
+            )
+            request.turn_prefix_reused_hashes = 0
+            if request.turn_prefix_hash_cache is not None:
+                self.turn_prefix_cache.hash_cache = request.turn_prefix_hash_cache
         known_blocks = None
         if (
             self.turn_prefix_cache is not None
@@ -905,6 +912,11 @@ class KVCacheManager:
         )
         if not (record_prefill or record_output):
             return
+        if request.turn_prefix_hash_cache is not None:
+            for position in ((request.num_prompt_tokens,) if record_prefill else ()) + (
+                (committed,) if record_output else ()
+            ):
+                request.turn_prefix_hash_cache.register(request, position)
         for manager in self.turn_prefix_managers:
             blocks = manager.req_to_blocks.get(request.request_id, ())
             for position in ((request.num_prompt_tokens,) if record_prefill else ()) + (

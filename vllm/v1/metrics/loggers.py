@@ -704,10 +704,12 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
                 ("invalidations", "Stale turn-prefix entries removed on lookup."),
                 ("entries", "Current turn-prefix index entries."),
                 ("metadata_bytes", "Conservative turn-prefix metadata byte estimate."),
+                ("reused_hashes", "Block hashes reused after prefix fingerprinting."),
+                ("hash_metadata_bytes", "Conservative hash-prefix metadata bytes."),
             ):
                 metric_cls = (
                     self._gauge_cls
-                    if field in ("entries", "metadata_bytes")
+                    if field in ("entries", "metadata_bytes", "hash_metadata_bytes")
                     else self._counter_cls
                 )
                 self.turn_prefix_metrics[field] = create_metric_per_engine(
@@ -1220,7 +1222,7 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
             ) is not None:
                 for field, metrics in self.turn_prefix_metrics.items():
                     value = getattr(turn_stats, field)
-                    if field in ("entries", "metadata_bytes"):
+                    if field in ("entries", "metadata_bytes", "hash_metadata_bytes"):
                         metrics[engine_idx].set(value)
                     else:
                         metrics[engine_idx].inc(value)

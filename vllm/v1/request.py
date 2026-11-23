@@ -31,6 +31,7 @@ from vllm.v1.utils import ConstantList
 if TYPE_CHECKING:
     from vllm.lora.request import LoRARequest
     from vllm.v1.core.kv_cache_utils import BlockHash
+    from vllm.v1.core.turn_prefix_hash_cache import TurnPrefixHashCache
 
 
 @dataclass(slots=True)
@@ -248,6 +249,8 @@ class Request:
         # reference cycle (Request -> partial -> Request) that prevents
         # immediate garbage collection via reference counting.
         self._block_hasher: Callable[[Request], list[BlockHash]] | None = block_hasher
+        self.turn_prefix_hash_cache: TurnPrefixHashCache | None = None
+        self.turn_prefix_reused_hashes = 0
         self.update_block_hashes()
 
         self.prefix_cache_hit_limit = self.get_prefix_cache_hit_limit()

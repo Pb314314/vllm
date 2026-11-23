@@ -47,8 +47,10 @@ def test_turn_boundaries_across_reverse_search_windows(recent_tokens):
     assert engine_input["prompt_token_ids"] == tokens
 
 
-@pytest.mark.parametrize("defer_publication", [False, True])
-def test_turn_prefix_cache_real_chat_round_trip(defer_publication):
+@pytest.mark.parametrize(
+    "defer_publication, reuse_hashes", [(False, False), (True, False), (False, True)]
+)
+def test_turn_prefix_cache_real_chat_round_trip(defer_publication, reuse_hashes):
     """Ordinary Chat API requests take the shortcut without changing APC hits."""
     import copy
     import time
@@ -87,6 +89,7 @@ def test_turn_prefix_cache_real_chat_round_trip(defer_publication):
                 args,
                 env_dict={
                     "VLLM_TURN_PREFIX_CACHE": str(int(enabled)),
+                    "VLLM_TURN_PREFIX_HASH_REUSE": str(int(enabled and reuse_hashes)),
                     "VLLM_DEFER_TURN_PREFIX_CACHE": str(int(defer_publication)),
                     "VLLM_USE_RUST_FRONTEND": "0",
                     "VLLM_SERVER_DEV_MODE": "1",
@@ -199,7 +202,14 @@ def test_turn_prefix_cache_real_chat_round_trip(defer_publication):
                         for line in metrics.splitlines()
                         if line.startswith("vllm:turn_prefix_cache_hits_total{")
                     )
-                    if hits >= 3:
+                    hashes = sum(
+                        float(line.rsplit(" ", 1)[-1])
+                        for line in metrics.splitlines()
+                        if line.startswith(
+                            "vllm:turn_prefix_cache_reused_hashes_total{"
+                        )
+                    )
+                    if hits >= 3 and (not reuse_hashes or hashes > 0):
                         break
                     assert time.monotonic() < deadline, metrics
                     time.sleep(0.05)

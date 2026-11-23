@@ -145,12 +145,32 @@ copies writable tails on continuation or fork. Entries share the existing index
 budget and hold no GPU usage references. A missing group invalidates the joint
 hit. This prototype does not yet export exact turn snapshots to a remote Store.
 
-This version **does not reduce historical block hashing**. A pool generation
+Without the additional hash-reuse switch, this version does not reduce
+historical block hashing. A pool generation
 avoids repeating block-validity checks while cached contents have not been
 invalidated; after an invalidation, lookup checks all recorded block identities.
 Block-list materialization and checkpoint bookkeeping remain. Its
 benefit depends on history length, hit rate, and registration cost; fewer hash
 table queries alone do not establish an end-to-end speedup.
+
+`VLLM_TURN_PREFIX_HASH_REUSE=1`, together with `VLLM_TURN_PREFIX_CACHE=1`,
+experiments with reusing the historical block-hash chain. Before initializing a
+request, the engine fingerprints the complete candidate prefix's int32 token
+buffer with SHA-256, including speculative hash lookahead tokens, and checks the
+cache salt. A match supplies the existing hashes; the ordinary hasher computes
+the remaining suffix. A miss uses the original hasher. Frontend-supplied hashes
+retain priority. Clients need no new fields, and modified histories cannot reuse
+an inconsistent hash chain.
+
+This CPU-only memo stores no KV blocks or token buffers. Its separate budget is
+1,024 entries and a conservative 64 MiB. Publication after prefill and generation
+completion still scans the retained prefix. Input processing and the scheduler
+share a metadata lock; fingerprinting happens outside it. Cache reset clears the
+memo. `vllm:turn_prefix_cache_reused_hashes_total` records the avoided hashes, and
+`vllm:turn_prefix_cache_hash_metadata_bytes` reports its metadata estimate.
+The complete history still must be read: this is not constant-time validation.
+Measure fingerprinting, publication, misses and memory together with serving
+performance before enabling it.
 
 `VLLM_DEFER_TURN_PREFIX_CACHE=1`, together with `VLLM_TURN_PREFIX_CACHE=1`,
 experimentally defers checkpoint publication. The scheduler captures an immutable

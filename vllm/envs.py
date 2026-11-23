@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     VLLM_LOGGING_LEVEL: str = "INFO"
     VLLM_LOGGING_PREFIX: str = ""
     VLLM_TURN_PREFIX_CACHE: bool = False
+    VLLM_TURN_PREFIX_HASH_REUSE: bool = False
     VLLM_DEFER_TURN_PREFIX_CACHE: bool = False
     VLLM_TURN_HYBRID_SNAPSHOTS: bool = False
     VLLM_LOGGING_STREAM: str = "ext://sys.stdout"
@@ -666,6 +667,9 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # docs/features/automatic_prefix_caching.md for supported configurations.
     "VLLM_TURN_PREFIX_CACHE": lambda: bool(
         int(os.getenv("VLLM_TURN_PREFIX_CACHE", "0"))
+    ),
+    "VLLM_TURN_PREFIX_HASH_REUSE": lambda: bool(
+        int(os.getenv("VLLM_TURN_PREFIX_HASH_REUSE", "0"))
     ),
     "VLLM_TURN_HYBRID_SNAPSHOTS": lambda: bool(
         int(os.getenv("VLLM_TURN_HYBRID_SNAPSHOTS", "0"))

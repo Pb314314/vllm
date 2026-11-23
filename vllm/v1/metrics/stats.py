@@ -128,6 +128,8 @@ class TurnPrefixCacheStats:
     invalidations: int = 0
     entries: int = 0
     metadata_bytes: int = 0
+    reused_hashes: int = 0
+    hash_metadata_bytes: int = 0
 
 
 @dataclass(slots=True)

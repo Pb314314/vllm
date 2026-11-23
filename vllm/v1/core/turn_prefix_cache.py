@@ -15,6 +15,7 @@ from vllm.v1.request import Request
 
 if TYPE_CHECKING:
     from vllm.v1.core.block_pool import BlockPool
+    from vllm.v1.core.turn_prefix_hash_cache import TurnPrefixHashCache
 
 CheckpointKey = tuple[int, BlockHash, int]
 
@@ -72,6 +73,7 @@ class TurnPrefixCache:
         self.max_pending_bytes = min(max_bytes, 8 << 20)
         self.pending_dropped = 0
         self.pending_published = 0
+        self.hash_cache: TurnPrefixHashCache | None = None
 
     def _valid(self, entry: _Checkpoint) -> bool:
         generation = self.block_pool.cache_generation if self.block_pool else -1
@@ -372,5 +374,7 @@ class TurnPrefixCache:
         stats = self.stats
         stats.entries = len(self.entries)
         stats.metadata_bytes = self.metadata_bytes
+        if self.hash_cache is not None:
+            stats.hash_metadata_bytes = self.hash_cache.metadata_bytes
         self.stats = TurnPrefixCacheStats()
         return stats

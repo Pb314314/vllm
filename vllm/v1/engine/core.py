@@ -80,6 +80,7 @@ from vllm.v1.core.single_type_kv_cache_manager import (
     FullAttentionManager,
     get_kv_cache_kind,
 )
+from vllm.v1.core.turn_prefix_hash_cache import TurnPrefixHashCache
 from vllm.v1.engine import (
     EEP_NOTIFICATION_CALL_ID,
     CheckpointState,
@@ -243,6 +244,7 @@ class EngineCore:
         self.is_pooling_model = vllm_config.model_config.runner_type == "pooling"
 
         self.request_block_hasher: Callable[[Request], list[BlockHash]] | None = None
+        self.turn_prefix_hash_cache: TurnPrefixHashCache | None = None
         # Lets frontends hash prompt blocks; see EngineCoreRequest.block_hashes.
         self.prefix_hash_config: PrefixHashConfig | None = None
         if vllm_config.cache_config.enable_prefix_caching or kv_connector is not None:
@@ -262,6 +264,10 @@ class EngineCore:
                 none_hash=kv_cache_utils.NONE_HASH,
                 num_lookahead_tokens=vllm_config.num_hash_lookahead_tokens,
             )
+            if envs.VLLM_TURN_PREFIX_CACHE and envs.VLLM_TURN_PREFIX_HASH_REUSE:
+                self.turn_prefix_hash_cache = TurnPrefixHashCache(
+                    hash_block_size, vllm_config.num_hash_lookahead_tokens
+                )
 
         self.step_fn = (
             self.step if self.batch_queue is None else self.step_with_batch_queue
@@ -938,9 +944,12 @@ class EngineCore:
     def reset_prefix_cache(
         self, reset_running_requests: bool = False, reset_connector: bool = False
     ) -> bool:
-        return self.scheduler.reset_prefix_cache(
+        success = self.scheduler.reset_prefix_cache(
             reset_running_requests, reset_connector
         )
+        if success and self.turn_prefix_hash_cache is not None:
+            self.turn_prefix_hash_cache.clear()
+        return success
 
     def reset_encoder_cache(self) -> None:
         """Reset the encoder cache to invalidate all cached encoder outputs.
@@ -1291,9 +1300,17 @@ class EngineCore:
             params.watermarking = True
 
         frontend_hashes = frontend_block_hashes(request, self.prefix_hash_config)
+        initial_hashes = frontend_hashes
+        hash_cache = self.turn_prefix_hash_cache
+        if initial_hashes is None and hash_cache is not None:
+            initial_hashes = hash_cache.lookup(request)
+        reused_hash_count = len(initial_hashes or ()) if frontend_hashes is None else 0
         req = Request.from_engine_core_request(
-            request, self.request_block_hasher, frontend_hashes
+            request, self.request_block_hasher, initial_hashes
         )
+        if frontend_hashes is None and hash_cache is not None:
+            req.turn_prefix_hash_cache = hash_cache
+            req.turn_prefix_reused_hashes = reused_hash_count
         if req.use_structured_output:
             # Note on thread safety: no race condition.
             # `grammar_init` is only invoked in input processing thread. For
