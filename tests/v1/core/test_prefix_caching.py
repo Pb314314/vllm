@@ -439,7 +439,7 @@ def test_turn_prefix_keeps_apc_physical_sharing_after_duplicate_prefill(
     assert manager.block_pool.get_num_free_blocks() == 63
 
 
-@pytest.mark.parametrize("change", ["middle", "reuse", "reset", "edit", "salt"])
+@pytest.mark.parametrize("change", ["middle", "tail", "reuse", "reset", "edit", "salt"])
 def test_turn_prefix_invalid_checkpoint_falls_back_to_apc(change):
     """A surviving tail must never hide an evicted or overwritten middle block."""
     manager = make_kv_cache_manager(
@@ -457,6 +457,8 @@ def test_turn_prefix_invalid_checkpoint_falls_back_to_apc(change):
     manager.free(producer)
     if change == "middle":
         manager.evict_blocks({blocks.blocks[0][3].block_id})
+    elif change == "tail":
+        manager.evict_blocks({blocks.blocks[0][-1].block_id})
     elif change == "reuse":
         # Recycle every block and register identical content under fresh keys.
         replacement = make_request("replacement", tokens, 16, sha256)
@@ -480,7 +482,7 @@ def test_turn_prefix_invalid_checkpoint_falls_back_to_apc(change):
     assert hit == manager.get_computed_blocks(ordinary)[1]
     cache = manager.turn_prefix_cache
     assert cache is not None and cache.stats.hits == 0
-    if change in ("middle", "reuse"):
+    if change in ("middle", "tail", "reuse"):
         assert cache.stats.invalidations == 1
 
 

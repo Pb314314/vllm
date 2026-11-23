@@ -79,6 +79,9 @@ class TurnPrefixCache:
         generation = self.block_pool.cache_generation if self.block_pool else -1
         if self.block_pool is not None and entry.generation == generation:
             return True
+        # Freeing a request makes its tail the first candidate for eviction.
+        if entry.blocks[-1].block_hash is not entry.keys[-1]:
+            return False
         if any(b.block_hash is not k for b, k in zip(entry.blocks, entry.keys)):
             return False
         entry.generation = generation
