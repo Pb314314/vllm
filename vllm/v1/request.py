@@ -84,6 +84,7 @@ class Request:
         abort_immediately: bool = False,
         kv_hints: KvHintsEnvelope | None = None,
         block_hashes: list["BlockHash"] | None = None,
+        prefix_match_positions: tuple[int, ...] | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -210,6 +211,8 @@ class Request:
         # trace_headers
         self.trace_headers = trace_headers
         self.session_id = session_id
+        self.prefix_match_positions = prefix_match_positions
+        self.turn_prefill_checkpoint_recorded = False
         self.kv_hints = kv_hints
 
         # True if this request is scheduled as a non-final prefill chunk.
@@ -287,6 +290,7 @@ class Request:
             reasoning_parser_kwargs=request.reasoning_parser_kwargs,
             abort_immediately=request.abort_immediately,
             block_hashes=block_hashes,
+            prefix_match_positions=request.prefix_match_positions,
         )
 
     def append_output_token_ids(

@@ -36,6 +36,7 @@ from vllm.v1.request import Request
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
+    from vllm.v1.core.turn_prefix_cache import TurnPrefixLookup
     from vllm.v1.hisparse.coordinator import HiSparseCoordinator
 
 
@@ -887,6 +888,7 @@ class FullAttentionManager(SingleTypeKVCacheManager):
         dcp_world_size: int = 1,
         pcp_world_size: int = 1,
         num_request_tokens: int | None = None,
+        known_prefix: "TurnPrefixLookup | None" = None,
     ) -> tuple[tuple[list[KVCacheBlock], ...], int]:
         if dcp_world_size > 1:
             # DCP shards each block's KV across ranks; hashes must be viewed at
@@ -918,9 +920,26 @@ class FullAttentionManager(SingleTypeKVCacheManager):
         computed_blocks: tuple[list[KVCacheBlock], ...] = tuple(
             [] for _ in range(len(kv_cache_group_ids))
         )
+        known_count = 0
+        if known_prefix is not None and known_prefix.blocks:
+            known_count = min(
+                max_length // block_size,
+                *(
+                    len(known_prefix.blocks.get(group_id, ()))
+                    for group_id in kv_cache_group_ids
+                ),
+            )
+            for group_id, computed in zip(kv_cache_group_ids, computed_blocks):
+                prefix = known_prefix.blocks.get(group_id, ())
+                computed.extend(
+                    prefix if len(prefix) == known_count else prefix[:known_count]
+                )
+            known_prefix.skipped_block_lookups += known_count * len(kv_cache_group_ids)
         # Phase 1: longest run of cached full blocks from the start. A missing
         # block implies every later block misses too (chained hashes).
-        for block_hash in itertools.islice(full_block_hashes, max_length // block_size):
+        for block_hash in itertools.islice(
+            full_block_hashes, known_count, max_length // block_size
+        ):
             cached_block = block_pool.get_cached_block(block_hash, kv_cache_group_ids)
             if not cached_block:
                 break

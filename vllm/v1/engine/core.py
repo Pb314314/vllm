@@ -732,6 +732,9 @@ class EngineCore:
 
     def _wait_for_output(self, future: Future[Any]) -> Any:
         """Block until a step's model output is ready."""
+        self.scheduler.publish_pending_turn_checkpoints(
+            limit=8, should_stop=future.done
+        )
         return future.result()
 
     def post_step(self, model_executed: bool) -> None:
@@ -742,6 +745,9 @@ class EngineCore:
             draft_token_ids = self.model_executor.take_draft_token_ids()
             if draft_token_ids is not None:
                 self.scheduler.update_draft_token_ids(draft_token_ids)
+
+        if not self.scheduler.has_requests() and not self.batch_queue:
+            self.scheduler.publish_pending_turn_checkpoints(limit=32)
 
     def step_with_batch_queue(
         self,
@@ -1945,6 +1951,9 @@ class EngineCoreProc(EngineCore):
         poll: Callable[[], bool] | None = getattr(future, "poll", None)
         wait_briefly: Callable[[Sized, float], None] | None = getattr(
             future, "wait_briefly", None
+        )
+        self.scheduler.publish_pending_turn_checkpoints(
+            limit=8, should_stop=poll or future.done
         )
         if poll is not None and wait_briefly is not None:
             pending_inputs = self.input_queue.queue

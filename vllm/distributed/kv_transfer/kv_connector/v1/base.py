@@ -187,6 +187,16 @@ class KVConnectorBase_V1(ABC):
     _cache_hit_source = CacheHitSource.EXTERNAL_UNSPECIFIED
 
     @property
+    def supports_local_turn_snapshots(self) -> bool:
+        """Whether completed, exact-position local states may be indexed.
+
+        A capable connector preserves source lifetimes and accepts private
+        copy-on-write destinations when continuing an unaligned local hit.
+        This does not imply discovery or export of snapshots to another engine.
+        """
+        return False
+
+    @property
     def supports_divergent_local_hybrid_hits(self) -> bool:
         """Whether external hits can complete divergent local hybrid hits.
 

@@ -692,6 +692,33 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
             counter_prefix_cache_hits, per_engine_labelvalues
         )
 
+        self.turn_prefix_metrics = {}
+        if envs.VLLM_TURN_PREFIX_CACHE:
+            for field, description in (
+                ("queries", "Requests probing the turn-prefix index."),
+                ("hits", "Requests with a valid turn-prefix checkpoint."),
+                ("snapshot_queries", "Requests probing joint turn state."),
+                ("snapshot_hits", "Joint turn states extending the APC hit."),
+                ("snapshot_saved_tokens", "Replay tokens avoided by joint turn state."),
+                ("skipped_block_lookups", "Block hash lookups skipped by checkpoints."),
+                ("invalidations", "Stale turn-prefix entries removed on lookup."),
+                ("entries", "Current turn-prefix index entries."),
+                ("metadata_bytes", "Conservative turn-prefix metadata byte estimate."),
+            ):
+                metric_cls = (
+                    self._gauge_cls
+                    if field in ("entries", "metadata_bytes")
+                    else self._counter_cls
+                )
+                self.turn_prefix_metrics[field] = create_metric_per_engine(
+                    metric_cls(
+                        name=f"vllm:turn_prefix_cache_{field}",
+                        documentation=description,
+                        labelnames=labelnames,
+                    ),
+                    per_engine_labelvalues,
+                )
+
         #
         # External - KV connector prefix cache
         #
@@ -1187,6 +1214,16 @@ class PrometheusStatLogger(AggregateStatLoggerBase):
             self.counter_prefix_cache_hits[engine_idx].inc(
                 scheduler_stats.prefix_cache_stats.hits
             )
+
+            if (
+                turn_stats := scheduler_stats.prefix_cache_stats.turn_cache
+            ) is not None:
+                for field, metrics in self.turn_prefix_metrics.items():
+                    value = getattr(turn_stats, field)
+                    if field in ("entries", "metadata_bytes"):
+                        metrics[engine_idx].set(value)
+                    else:
+                        metrics[engine_idx].inc(value)
 
             labelvalues = self.per_engine_labelvalues[engine_idx]
             self.counter_prompt_tokens_cached_by_source.labels(

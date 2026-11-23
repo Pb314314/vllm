@@ -40,6 +40,9 @@ if TYPE_CHECKING:
     VLLM_CONFIGURE_LOGGING: bool = True
     VLLM_LOGGING_LEVEL: str = "INFO"
     VLLM_LOGGING_PREFIX: str = ""
+    VLLM_TURN_PREFIX_CACHE: bool = False
+    VLLM_DEFER_TURN_PREFIX_CACHE: bool = False
+    VLLM_TURN_HYBRID_SNAPSHOTS: bool = False
     VLLM_LOGGING_STREAM: str = "ext://sys.stdout"
     VLLM_LOGGING_CONFIG_PATH: str | None = None
     VLLM_LOGGING_COLOR: str = "auto"
@@ -658,6 +661,18 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Enable batch-invariant mode: deterministic results regardless of
     # batch composition. Requires NVIDIA GPU with compute capability >= 9.0.
     "VLLM_BATCH_INVARIANT": lambda: bool(int(os.getenv("VLLM_BATCH_INVARIANT", "0"))),
+    # Experimental turn-prefix lookup for structured Chat Completions.
+    # Default off. Requires APC; clients need no session IDs. See
+    # docs/features/automatic_prefix_caching.md for supported configurations.
+    "VLLM_TURN_PREFIX_CACHE": lambda: bool(
+        int(os.getenv("VLLM_TURN_PREFIX_CACHE", "0"))
+    ),
+    "VLLM_TURN_HYBRID_SNAPSHOTS": lambda: bool(
+        int(os.getenv("VLLM_TURN_HYBRID_SNAPSHOTS", "0"))
+    ),
+    "VLLM_DEFER_TURN_PREFIX_CACHE": lambda: bool(
+        int(os.getenv("VLLM_DEFER_TURN_PREFIX_CACHE", "0"))
+    ),
     "VLLM_REPLICATE_EMBED": lambda: (
         os.getenv("VLLM_REPLICATE_EMBED", "0").strip().lower() in ("1", "true")
     ),

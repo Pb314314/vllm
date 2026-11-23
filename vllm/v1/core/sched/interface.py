@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 import enum
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING
 
 from vllm.multimodal import MULTIMODAL_REGISTRY, MultiModalRegistry
@@ -36,6 +36,12 @@ class PauseState(enum.IntEnum):
 
 
 class SchedulerInterface(ABC):
+    def publish_pending_turn_checkpoints(
+        self, limit: int, should_stop: Callable[[], bool] | None = None
+    ) -> None:
+        """Run optional cache maintenance after dispatch or while idle."""
+        return None
+
     @abstractmethod
     def __init__(
         self,

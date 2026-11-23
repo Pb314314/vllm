@@ -72,6 +72,124 @@ We describe two example workloads, where APC can provide huge performance benefi
 - Long document query, where the user repeatedly queries the same long document (e.g. software manual or annual report) with different queries. In this case, instead of processing the long document again and again, APC allows vLLM to process this long document *only once*, and all future requests can avoid recomputing this long document by reusing its KV cache. This allows vLLM to serve future requests with much higher throughput and much lower latency.
 - Multi-round conversation, where the user may chat with the application multiple times in the same chatting session. In this case, instead of processing the whole chatting history again and again, APC allows vLLM to reuse the processing results of the chat history across all future rounds of conversation, allowing vLLM to serve future requests with much higher throughput and much lower latency.
 
+## Experimental turn-prefix matching for Chat Completions
+
+`VLLM_TURN_PREFIX_CACHE=1` enables an experimental lookup shortcut for ordinary
+`POST /v1/chat/completions` requests containing full conversation history. It is
+**disabled by default**. Clients do not supply session IDs, checkpoint IDs, or
+cache hints, and the HTTP request and response schemas are unchanged.
+
+```bash
+VLLM_TURN_PREFIX_CACHE=1 vllm serve Qwen/Qwen2.5-1.5B-Instruct \
+    --enable-prefix-caching
+```
+
+The experimental Python frontend recognizes assistant markers from ChatML,
+role-specific `<|im_assistant|>`, `]~b]` and `<｜Assistant｜>` tokenizer formats,
+without checking model names or template hashes. Markers only propose positions;
+they never authorize reuse. It supports streaming and non-streaming responses,
+including text tool continuations whose rendered generation header is recognized.
+Requests with multimodal content, custom templates, template overrides, or prompt
+truncation use the original path. Raw text and token-ID
+requests continue to use ordinary APC.
+
+The shortcut seeds standard full-attention cache groups within the normal cache
+coordinator. Other groups retain their original matching and alignment rules;
+speculative decoding retains its normal proof, lookahead and replay rules.
+Tensor/data parallel execution and connectors can use these local shortcuts.
+Pipeline and context parallel execution remain on the ordinary path. A local
+checkpoint does not bypass remote-cache validation or KV transfer. These are
+experimental paths; target-model serving and performance validation are required
+before using a newly supported combination in production.
+
+The server derives the previous assistant turn's position from the final
+rendered tokens without changing the prompt or retokenizing each historical
+turn. It considers the previous assistant's input and output boundaries, with at
+most two neighboring complete-block positions per boundary and cache group.
+The input boundary is useful when reasoning is rewritten between turns. A match must
+have the same chained prefix hash, including the cache salt, and all recorded
+blocks must still have their original cache-registration identities. Each group's
+lookup continues after its checkpoint, followed by the original cross-group
+reconciliation, preserving ordinary APC's hit length. A missing, invalid, or
+inapplicable checkpoint falls back to ordinary APC.
+Compaction and edited histories therefore require no new client protocol.
+
+Checkpoints are recorded after prefill and at successful generation completion,
+using only completed full blocks. The index neither copies KV tensors nor holds
+GPU usage references, so allocation and eviction retain their existing rules.
+When duplicate physical blocks exist for the same content, publication selects
+the copy ordinary APC would return, preserving its physical sharing. The existing
+duplicate registry bypasses this extra resolution when no duplicates exist.
+When a shorter checkpoint is still valid, registration reuses its canonical
+blocks and hash identities, resolving only the added suffix. This preserves
+both prefill and output checkpoints without repeating per-block Python work
+over the shared history. The flat metadata tuples still require copying their
+references; registration is not constant-time in history length.
+It is bounded to 1,024 entries and a conservative 64 MiB metadata estimate;
+eviction and cache reset can invalidate entries. Partial tails are recomputed.
+
+An additional prototype, `VLLM_TURN_HYBRID_SNAPSHOTS=1`, preserves the exact
+completed turn endpoint for full-attention plus prefix-cached Mamba groups. It requires
+`VLLM_TURN_PREFIX_CACHE=1`, synchronous execution, no speculative decoding,
+no KV events and no ReplaySSM. `MooncakeConnector` can preserve local snapshots
+while holding producer blocks until transfer completion. Other connectors,
+including `MooncakeStoreConnector`, currently retain ordinary turn lookup/APC.
+The transport does not make a decoder's completed snapshot discoverable on the
+prefiller; each engine's index describes its own resident state. Other configurations retain
+ordinary turn lookup/APC. Validate each deployment before enabling this prototype.
+The content key combines the existing hash chain with the remaining token tail
+and exact position; a full hash block is required before that tail. Successful
+request completion publishes the attention tail and recurrent/conv state at that
+same position, excluding in-flight or uncomputed tokens. Existing copy-on-write
+copies writable tails on continuation or fork. Entries share the existing index
+budget and hold no GPU usage references. A missing group invalidates the joint
+hit. This prototype does not yet export exact turn snapshots to a remote Store.
+
+This version **does not reduce historical block hashing**. A pool generation
+avoids repeating block-validity checks while cached contents have not been
+invalidated; after an invalidation, lookup checks all recorded block identities.
+Block-list materialization and checkpoint bookkeeping remain. Its
+benefit depends on history length, hit rate, and registration cost; fewer hash
+table queries alone do not establish an end-to-end speedup.
+
+`VLLM_DEFER_TURN_PREFIX_CACHE=1`, together with `VLLM_TURN_PREFIX_CACHE=1`,
+experimentally defers checkpoint publication. The scheduler captures an immutable
+block-reference tuple without pinning GPU memory. Pending work is published while
+waiting for an already dispatched model execution, or after the engine becomes
+idle. Processing stops between entries when the model output is ready, with at
+most eight entries per wait. One entry cannot be interrupted mid-publication.
+The queue holds at most 32 entries and an additional conservative 8 MiB metadata
+budget. Overflow drops optional publications. Cache invalidation between
+capture and publication requires checking the captured block identities;
+invalid entries are discarded. Pending or discarded checkpoints fall back to
+ordinary APC.
+This mode may reduce work on the scheduling critical path, but adds queueing
+cost and can miss immediate continuations. It does not guarantee lower total
+CPU time or better throughput, and remains disabled by default.
+
+When enabled, `/metrics` additionally exposes:
+
+- `vllm:turn_prefix_cache_queries_total` and `vllm:turn_prefix_cache_hits_total`:
+  cache-group probes and valid checkpoint hits. One request can probe several
+  groups, and scheduler retries may probe again.
+- `vllm:turn_prefix_cache_skipped_block_lookups_total`: group/block lookups actually
+  bypassed in the coordinator, excluding the suffix still queried through APC.
+  A valid checkpoint can save no queries if another group prevents its use.
+- `vllm:turn_prefix_cache_invalidations_total`: stale entries rejected on lookup.
+- `vllm:turn_prefix_cache_entries` and `vllm:turn_prefix_cache_metadata_bytes`:
+  current index size and conservatively accounted metadata, not GPU usage.
+
+Use normal prefix-cache token metrics alongside these counters: turn hit rate
+is not token reuse rate. Initial diagnostics show faster CPU lookup but no
+stable serving speedup. See the reproducible CPU and serving diagnostics in
+[the session-cache benchmark notes](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/README.md).
+The [large-model AgentX study](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/agentx_results.md)
+separates lookup savings from publication costs, ordinary frontend acceleration,
+memory pressure, and end-to-end serving results.
+The subsequent [overhead iteration](https://github.com/Pb314314/vllm/blob/codex/session-only-cache/benchmarks/session_cache/turn_overhead_results.md)
+records lookup/maintenance CPU reductions, cold-request costs and
+deferred-publication results.
+
 ## Limits
 
 APC in general does not reduce the performance of vLLM. With that being said, APC only reduces the time of processing the queries (the prefilling phase) and does not reduce the time of generating new tokens (the decoding phase). So APC does not bring performance gain when vLLM spends most of the time generating answers to the queries (e.g. when the length of the answer is long), or new queries do not share the same prefix with any of existing queries (so that the computation cannot be reused).

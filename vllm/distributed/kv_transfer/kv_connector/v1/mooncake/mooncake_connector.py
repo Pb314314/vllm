@@ -798,6 +798,12 @@ class MooncakeConnectorMetadata(KVConnectorMetadata):
 class MooncakeConnector(KVConnectorBase_V1, SupportsHMA):
     _cache_hit_source = CacheHitSource.P2P
 
+    @property
+    def supports_local_turn_snapshots(self) -> bool:
+        # Finished producer blocks remain referenced until the decoder's pull
+        # completes; transfers address physical blocks, not their cache hashes.
+        return True
+
     @classmethod
     def kv_cache_access(cls, kv_transfer_config: KVTransferConfig) -> KVCacheAccess:
         # Registers the device KV cache with an RDMA engine.
