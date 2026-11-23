@@ -825,6 +825,42 @@ def test_turn_shortcut_handles_different_physical_block_sizes(evict_group):
     assert manager.turn_prefix_cache.stats.hits > 0
 
 
+@pytest.mark.parametrize("defer", [False, True])
+def test_turn_checkpoint_metadata_avoids_gc_scans_without_retaining_pool(defer):
+    """Long-lived shortcuts skip cyclic scans but still release their allocator."""
+    manager = make_kv_cache_manager(
+        make_kv_cache_config(16, 20),
+        max_model_len=256,
+        hash_block_size=16,
+        enable_turn_prefix_cache=True,
+        defer_turn_prefix_cache=defer,
+    )
+    tokens = list(range(128))
+    producer = make_request("producer", tokens, 16, sha256, prefix_match_positions=())
+    assert manager.allocate_slots(producer, 128) is not None
+    producer.num_computed_tokens = 128
+    manager.record_turn_checkpoint(producer)
+    manager.free(producer)
+    cache = manager.turn_prefix_cache
+    assert cache is not None
+    if defer:
+        pending = next(iter(cache.pending.values()))
+        assert not gc.is_tracked(pending.blocks)
+        cache.publish_pending()
+        del pending
+    entry = next(iter(cache.entries.values()))
+    assert not gc.is_tracked(entry.blocks)
+    consumer = make_request(
+        "consumer", tokens + [300], 16, sha256, prefix_match_positions=(128,)
+    )
+    assert manager.get_computed_blocks(consumer)[1] == 128
+    assert cache.stats.hits == 1
+    refs = [weakref.ref(obj) for obj in (manager, manager.block_pool)]
+    del entry, cache, manager
+    gc.collect()
+    assert [ref() for ref in refs] == [None, None]
+
+
 def test_turn_checkpoint_metadata_budget_does_not_change_gpu_ownership():
     from vllm.v1.core.turn_prefix_cache import TurnPrefixCache
 

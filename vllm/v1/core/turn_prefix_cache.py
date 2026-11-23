@@ -9,6 +9,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from vllm.utils.gc_utils import gc_untrack
 from vllm.v1.core.kv_cache_utils import BlockHash, BlockHashWithGroupId, KVCacheBlock
 from vllm.v1.metrics.stats import TurnPrefixCacheStats
 from vllm.v1.request import Request
@@ -193,7 +194,11 @@ class TurnPrefixCache:
         valid_keys = cast(tuple[BlockHashWithGroupId, ...], keys)
         if self.defer_publication:
             self.pending[key] = _PendingCheckpoint(
-                selected, valid_keys, generation, size, prefix_length
+                gc_untrack(selected),
+                gc_untrack(valid_keys),
+                generation,
+                size,
+                prefix_length,
             )
             self.pending_bytes += size
             return
@@ -270,6 +275,14 @@ class TurnPrefixCache:
             self.metadata_bytes -= old.metadata_bytes
         if self.max_entries <= 0:
             return
+        # Blocks only weakly reference their pool and cannot refer to these
+        # immutable tuples. Reference counting still releases all metadata.
+        gc_untrack(selected)
+        gc_untrack(keys)
+        if groups is not None:
+            for group in groups:
+                gc_untrack(group)
+            gc_untrack(groups)
         # None was excluded above; keep the original bytes objects, not copies.
         self.entries[key] = _Checkpoint(
             selected,
