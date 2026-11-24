@@ -137,3 +137,34 @@ def test_hybrid_conversations_share_a_system_prompt():
         for t, g, w in zip(want.token_ids[:8], got.logprobs, want.logprobs)
     ]
     assert max(diffs) < 0.1
+
+
+def test_eagle_reuse_matches_recompute():
+    """Speculative decoding with an EAGLE3 drafter: a continuation reuses the
+    previous turn and generates what a cold prefill generates."""
+    llm = LLM(
+        "meta-llama/Llama-3.1-8B-Instruct",
+        speculative_config={
+            "method": "eagle3",
+            "model": "RedHatAI/Llama-3.1-8B-Instruct-speculator.eagle3",
+            "num_speculative_tokens": 3,
+        },
+        session_cache=True,
+        max_model_len=4096,
+        gpu_memory_utilization=0.4,
+        enforce_eager=True,
+        seed=0,
+        attention_backend="TRITON_ATTN",
+    )
+    tokenizer = llm.get_tokenizer()
+    first = tokenizer.encode("Tell me about the rivers of Europe. " * 40)
+    (turn1,) = _generate(llm, [first], 24)
+    history = first + list(turn1.outputs[0].token_ids)
+    prompt = history + tokenizer.encode(" Now name the longest one.")
+    (reused,) = _generate(llm, [prompt], 16)
+    # At least one token short of the shared content, then block aligned.
+    assert reused.num_cached_tokens >= _block_floor(llm, len(history) - 2)
+    assert llm.reset_prefix_cache()
+    (cold,) = _generate(llm, [prompt], 16)
+    assert cold.num_cached_tokens == 0
+    assert reused.outputs[0].token_ids[:8] == cold.outputs[0].token_ids[:8]
