@@ -110,3 +110,30 @@ def test_hybrid_reuse_matches_recompute():
         for t, g, w in zip(want.token_ids[:8], got.logprobs, want.logprobs)
     ]
     assert max(diffs) < 0.1
+
+
+def test_hybrid_conversations_share_a_system_prompt():
+    """Hybrid: a request that diverges from an earlier one inside its prompt
+    saves its state there, so a third conversation with the same system
+    prompt resumes from that state and matches a cold prefill."""
+    llm = _llm("Qwen/Qwen3.5-0.8B")
+    tokenizer = llm.get_tokenizer()
+    system = tokenizer.encode("You are a careful assistant. Tell me about rivers. " * 90)
+    questions = [
+        tokenizer.encode(f" Question {i}: name a river in country number {i}.")
+        for i in range(3)
+    ]
+    _generate(llm, [system + questions[0]], 8)
+    (second,) = _generate(llm, [system + questions[1]], 8)
+    assert second.num_cached_tokens == 0
+    (reused,) = _generate(llm, [system + questions[2]], 16)
+    assert reused.num_cached_tokens >= len(system)
+    assert llm.reset_prefix_cache()
+    (cold,) = _generate(llm, [system + questions[2]], 16)
+    got, want = reused.outputs[0], cold.outputs[0]
+    assert got.token_ids[:8] == want.token_ids[:8]
+    diffs = [
+        abs(g[t].logprob - w[t].logprob)
+        for t, g, w in zip(want.token_ids[:8], got.logprobs, want.logprobs)
+    ]
+    assert max(diffs) < 0.1
