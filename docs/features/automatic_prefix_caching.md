@@ -77,3 +77,21 @@ We describe two example workloads, where APC can provide huge performance benefi
 ## Limits
 
 APC in general does not reduce the performance of vLLM. With that being said, APC only reduces the time of processing the queries (the prefilling phase) and does not reduce the time of generating new tokens (the decoding phase). So APC does not bring performance gain when vLLM spends most of the time generating answers to the queries (e.g. when the length of the answer is long), or new queries do not share the same prefix with any of existing queries (so that the computation cannot be reused).
+
+## Session KV cache (experimental)
+
+`--session-cache` (`LLM(..., session_cache=True)`) replaces APC with session-owned KV
+states: an upper-layer resolver matches each request's content against what earlier
+requests published, and the engine resumes from those states without hashing blocks.
+Clients send ordinary full prompts or chat histories; a `session_id` is not required.
+It cannot be combined with `--enable-prefix-caching`, and APC remains the default.
+
+```bash
+vllm serve Qwen/Qwen3.5-9B --session-cache
+```
+
+Hybrid models reuse prefixes across conversations at the positions where conversations
+diverge, without `align` mode. Speculative decoding (EAGLE, MTP) is supported. Sliding-window
+and sparse attention, KV connectors, LoRA, multimodal inputs, prompt embeddings, streaming
+input, and pipeline parallelism are not supported yet. See the
+[design document](../design/session_kv_cache.md).
