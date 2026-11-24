@@ -523,7 +523,7 @@ def test_preempted_request_chunks_are_reclaimable():
     h.step()  # [0, 64) published in its own node
     h.sched.running.remove(writer)
     h.sched._preempt_request(writer, timestamp=0.0)
-    assert h.store._num_reclaimable_blocks() == 64 // BLOCK
+    assert h.store._num_reclaimable_blocks(100) == 64 // BLOCK
     h.run(writer)
     assert writer.num_computed_tokens == 101
 

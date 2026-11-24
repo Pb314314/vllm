@@ -520,7 +520,7 @@ class SessionKVCacheManager(KVCacheManager):
         deficit = num_blocks - self.block_pool.get_num_free_blocks()
         if deficit <= 0:
             return True
-        if self._num_reclaimable_blocks() < deficit:
+        if self._num_reclaimable_blocks(deficit) < deficit:
             return False
         while (
             deficit := num_blocks - self.block_pool.get_num_free_blocks()
@@ -537,10 +537,10 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return protected
 
-    def _num_reclaimable_blocks(self) -> int:
-        """Count blocks repeated eviction can free: every block whose
-        references all come from idle states, except below where a running
-        or attaching request reads through an ancestor."""
+    def _num_reclaimable_blocks(self, limit: int) -> int:
+        """Count blocks repeated eviction can free, stopping at `limit`:
+        every block whose references all come from idle states, except below
+        where a running or attaching request reads through an ancestor."""
         protected = self._protected()
         # Per ancestor of a protected node: the highest start it must keep.
         floors: dict[int, int] = {}
@@ -554,7 +554,7 @@ class SessionKVCacheManager(KVCacheManager):
                     break
                 child, parent = parent, parent.parent
         held: Counter[int] = Counter()
-        blocks: dict[int, KVCacheBlock] = {}
+        count = 0
         for node in self.nodes.values():
             if node.node_id in protected:
                 continue
@@ -568,8 +568,11 @@ class SessionKVCacheManager(KVCacheManager):
                 continue
             for block in candidates:
                 held[block.block_id] += 1
-                blocks[block.block_id] = block
-        return sum(blocks[i].ref_cnt == refs for i, refs in held.items())
+                if held[block.block_id] == block.ref_cnt:
+                    count += 1
+                    if count >= limit:
+                        return count
+        return count
 
     def _evict(self, num_blocks: int) -> bool:
         """Free up to `num_blocks` from the tail of the least recently used
