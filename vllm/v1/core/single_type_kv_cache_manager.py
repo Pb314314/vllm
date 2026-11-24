@@ -452,6 +452,15 @@ class SingleTypeKVCacheManager(ABC):
         """Finalize a producer partial tail when its request finishes."""
         return None
 
+    def copy_block(self, source_block: KVCacheBlock) -> KVCacheBlock:
+        """Return a new block that receives a copy of `source_block` before
+        the next forward pass. Both endpoints are retained until the copy has
+        run; the caller takes its own reference to the new block."""
+        block = self.block_pool.get_new_blocks(1)[0]
+        source_block.ref_cnt += 1
+        self._pending_cow_copies.append((source_block, block))
+        return block
+
     def _apply_cow(
         self,
         request_id: str,

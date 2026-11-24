@@ -513,6 +513,22 @@ def test_preempted_request_chunks_are_reclaimable():
     assert writer.num_computed_tokens == 101
 
 
+def test_hybrid_saves_state_where_conversations_diverge():
+    """A hybrid request that shares a prompt prefix with another stops a
+    chunk at the divergence and saves its recurrent state there, so later
+    conversations with the same system prompt resume from it."""
+    h = Harness(hybrid=True)
+    system = list(range(1000, 1100))
+    first = h.add(system + list(range(2000, 2040)))
+    h.run(first)
+    second = h.add(system + list(range(3000, 3040)))
+    h.run(second)
+    assert h.cached[second.request_id] == 0
+    third = h.add(system + list(range(4000, 4040)))
+    h.step()
+    assert h.cached[third.request_id] == len(system)
+    h.run(third)
+
 
 def test_admission_counts_a_whole_idle_conversation_as_reclaimable():
     """Like prefix caching, a request that fits only by evicting an entire

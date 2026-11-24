@@ -28,6 +28,8 @@ class SessionBinding:
     candidates: tuple[Candidate, ...]
     # Last store event the resolver had applied when it produced this binding.
     seq: int
+    # Longest prefix this request shares with any state, resumable or not.
+    match_length: int = 0
 
 
 @dataclass(frozen=True)

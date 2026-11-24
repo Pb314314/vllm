@@ -435,6 +435,11 @@ class Scheduler(SchedulerInterface):
             or group.kv_cache_spec.num_prefill_checkpoint_blocks > 0
             for group in kv_cache_config.kv_cache_groups
         )
+        # Session states update recurrent state in place, so a hybrid prefill
+        # chunk must end where the manager wants to save it.
+        self.stop_at_shared_prefix_boundary = (
+            self.cache_config.session_cache and self.has_mamba_layers
+        )
         # Fine-grained hits reuse the prompt's hash-aligned Mamba checkpoint.
         # Split there only if the backend cannot save it within the final chunk.
         self.mamba_partial_cache_hit = (
@@ -656,6 +661,15 @@ class Scheduler(SchedulerInterface):
         end = min((s for s in stops if start < s < end), default=end)
         return max(end - start, 0)
 
+    @staticmethod
+    def _stop_at_shared_prefix_boundary(
+        request: Request, start: int, num_new_tokens: int
+    ) -> int:
+        boundary = request.shared_prefix_boundary
+        if start < boundary < start + num_new_tokens:
+            return boundary - start
+        return num_new_tokens
+
     def _get_local_prefix_cache_hit(
         self, request: Request, max_cache_hit_length: int | None = None
     ) -> tuple[KVCacheBlocks, int, int, bool]:
@@ -837,6 +851,10 @@ class Scheduler(SchedulerInterface):
             if self.need_mamba_block_aligned_split:
                 num_new_tokens = self._mamba_block_aligned_split(
                     request, num_new_tokens
+                )
+            elif self.stop_at_shared_prefix_boundary:
+                num_new_tokens = self._stop_at_shared_prefix_boundary(
+                    request, request.num_computed_tokens, num_new_tokens
                 )
 
             # Schedule encoder inputs.
@@ -1396,6 +1414,12 @@ class Scheduler(SchedulerInterface):
                             # so drop the padding instead of shortening it.
                             num_new_tokens = 1
                             pad_spec_decode = False
+                    elif self.stop_at_shared_prefix_boundary:
+                        num_new_tokens = self._stop_at_shared_prefix_boundary(
+                            request,
+                            num_computed_tokens,
+                            num_new_tokens,
+                        )
 
                     # Schedule encoder inputs.
                     if request.has_encoder_inputs:

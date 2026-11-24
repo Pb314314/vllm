@@ -194,6 +194,7 @@ class SessionKVCacheManager(KVCacheManager):
             return self.empty_kv_cache_blocks, 0, 0
 
         limit = request.get_max_cache_hit_length(max_cache_hit_length)
+        found = None
         for candidate in binding.candidates:
             found = self._resume_point(
                 self.nodes.get(candidate.node_id), min(candidate.length, limit)
@@ -203,7 +204,11 @@ class SessionKVCacheManager(KVCacheManager):
         else:
             if binding.candidates:
                 self.num_stale_bindings += 1
-            return self.empty_kv_cache_blocks, 0, 0
+        checkpoint = self._checkpoint_position(
+            min(binding.match_length, limit), found[1] if found else 0
+        )
+        if found is None:
+            return self.empty_kv_cache_blocks, 0, checkpoint
 
         node, length = found
         path = self._path(node)
@@ -212,7 +217,16 @@ class SessionKVCacheManager(KVCacheManager):
             self._assemble(path, length, group)
             for group in range(len(self.block_sizes))
         )
-        return self.create_kv_cache_blocks(blocks), length, 0
+        return self.create_kv_cache_blocks(blocks), length, checkpoint
+
+    def _checkpoint_position(self, shared: int, resume: int) -> int:
+        """Where a hybrid request should stop a prefill chunk and save its
+        recurrent state: the end of the prefix it shares with other requests,
+        when that is at least a block past where it resumes. Attention-only
+        models publish every chunk and need no stop."""
+        if self.commit_points_only and shared - resume >= min(self.block_sizes):
+            return shared
+        return 0
 
     def _resume_point(
         self, node: _Node | None, length: int
@@ -270,6 +284,16 @@ class SessionKVCacheManager(KVCacheManager):
                 self.nodes.move_to_end(node.node_id)
             self.num_attached_requests += 1
             self.num_attached_tokens += length
+        checkpoint = request.shared_prefix_boundary
+        if (
+            self.commit_points_only
+            and checkpoint
+            and checkpoint == request.num_computed_tokens
+            and self._tip.get(request.request_id, (None, 0))[1] < checkpoint
+        ):
+            # The previous chunk stopped where this request diverges from
+            # others; copy its state before this chunk advances it.
+            self._publish(request, checkpoint, checkpoint=True)
         if not self.commit_points_only:
             # Like prefix caching, share each prompt chunk from the step that
             # computes it: every attention layer writes all tokens' KV before
@@ -281,9 +305,13 @@ class SessionKVCacheManager(KVCacheManager):
                 self._publish(request, end)
         return new_blocks
 
-    def _publish(self, request: Request, end: int) -> _Node | None:
+    def _publish(
+        self, request: Request, end: int, checkpoint: bool = False
+    ) -> _Node | None:
+        """Publish the request's KV up to `end`. A checkpoint is a node the
+        request does not write after `end`: its recurrent state is a copy."""
         own = self._own.get(request.request_id)
-        if own is not None and self._can_extend(request, own):
+        if not checkpoint and own is not None and self._can_extend(request, own):
             return self._extend(request, own, end)
         parent, start = self._tip.get(request.request_id, (None, 0))
         if parent is not None and (
@@ -304,6 +332,17 @@ class SessionKVCacheManager(KVCacheManager):
         )
         if any(block.is_null for group in blocks for block in group):
             return None
+        if checkpoint:
+            recurrent = [
+                group
+                for m, group in zip(managers, blocks)
+                if isinstance(m, MambaManager)
+            ]
+            if not self._ensure_free_blocks(sum(map(len, recurrent))):
+                return None
+            for m, group in zip(managers, blocks):
+                if isinstance(m, MambaManager):
+                    group[:] = [m.copy_block(block) for block in group]
         self.block_pool.touch([b for group in blocks for b in group])
         commit_points = (end,) if self.commit_points_only else None
         node = _Node(self._next_node_id, parent, start, end, blocks, commit_points)
@@ -312,7 +351,8 @@ class SessionKVCacheManager(KVCacheManager):
         if parent is not None:
             parent.children.append(node)
         self._tip[request.request_id] = (node, end)
-        self._own[request.request_id] = node
+        if not checkpoint:
+            self._own[request.request_id] = node
         self._publish_seq = self.seq + 1
         tokens = pack_tokens(request.all_token_ids[start:end])
         self._emit(

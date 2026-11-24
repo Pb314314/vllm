@@ -141,7 +141,7 @@ class SessionResolver:
             session_id = self._assign_session(request, namespace, candidates)
         self.resolve_seconds += time.perf_counter() - start_time
         self.num_resolves += 1
-        return SessionBinding(self.epoch, session_id, candidates, self.seq)
+        return SessionBinding(self.epoch, session_id, candidates, self.seq, matched)
 
     def _packed_tokens(self, request: Request) -> bytes:
         """Pack a request's tokens once; re-resolves only pack new tokens."""
