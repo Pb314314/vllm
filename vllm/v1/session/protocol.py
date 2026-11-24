@@ -48,6 +48,18 @@ class NodePublished:
 
 
 @dataclass(frozen=True)
+class NodeExtended:
+    """The publishing request computed more tokens: `[start, end)` now follow
+    the node's previous end `start`. Earlier content is unchanged."""
+
+    seq: int
+    node_id: int
+    start: int
+    end: int
+    tokens: bytes
+
+
+@dataclass(frozen=True)
 class NodeTruncated:
     seq: int
     node_id: int
@@ -71,4 +83,4 @@ class StoreReset:
     epoch: int
 
 
-StoreEvent = NodePublished | NodeTruncated | RequestFinished | StoreReset
+StoreEvent = NodePublished | NodeExtended | NodeTruncated | RequestFinished | StoreReset

@@ -342,11 +342,12 @@ def test_hybrid_resumes_only_at_commit_points():
     h.run(third)
 
 
+@pytest.mark.parametrize("budget", [8192, 24])
 @pytest.mark.parametrize("hybrid", [False, True])
 @pytest.mark.parametrize("seed", range(8))
-def test_fuzz_invariants(seed: int, hybrid: bool):
+def test_fuzz_invariants(seed: int, hybrid: bool, budget: int):
     rng = random.Random(seed)
-    h = Harness(num_blocks=60, hybrid=hybrid)
+    h = Harness(num_blocks=60, hybrid=hybrid, max_num_batched_tokens=budget)
     done: list[Request] = []
     live: list[Request] = []
     for _ in range(400):
@@ -439,3 +440,13 @@ def test_same_step_arrivals_share_the_prompt_being_computed():
     assert h.cached[first.request_id] == 0
     assert h.cached[second.request_id] == 48
     h.run(first, second)
+
+
+def test_prompt_is_shared_while_it_is_still_prefilling():
+    h = Harness(max_num_batched_tokens=32)
+    first = h.add(list(range(500, 600)), max_tokens=2)
+    h.step()
+    h.step()
+    second = h.add(list(range(500, 564)) + [1, 2, 3], max_tokens=2)
+    h.run(first, second)
+    assert h.cached[second.request_id] == 64

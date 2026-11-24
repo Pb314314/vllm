@@ -33,6 +33,7 @@ from vllm.v1.core.single_type_kv_cache_manager import (
 )
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.session.protocol import (
+    NodeExtended,
     NodePublished,
     NodeTruncated,
     RequestFinished,
@@ -148,9 +149,8 @@ class SessionKVCacheManager(KVCacheManager):
         self._pending: dict[str, tuple[list[_Node], int]] = {}
         # Deepest position on each running request's path held by a node.
         self._tip: dict[str, tuple[_Node | None, int]] = {}
-        # Prompt node published by each running request; replaced by the
-        # request's final node when nothing else hangs off it.
-        self._prompt_node: dict[str, _Node] = {}
+        # The node each running request publishes and extends as it computes.
+        self._own: dict[str, _Node] = {}
 
         self.num_attached_requests = 0
         self.num_attached_tokens = 0
@@ -267,21 +267,21 @@ class SessionKVCacheManager(KVCacheManager):
                 self.nodes.move_to_end(node.node_id)
             self.num_attached_requests += 1
             self.num_attached_tokens += length
-        if (
-            not self.commit_points_only
-            and request.request_id not in self._prompt_node
-            and num_scheduled_end >= request.num_prompt_tokens
-        ):
-            # Like prefix caching, share the prompt from the step that computes
-            # it: each attention layer writes every token's KV before any
-            # request in the batch reads it. Recurrent state has no such
-            # ordering, so hybrid models only publish finished requests.
-            node = self._publish(request, request.num_prompt_tokens)
-            if node is not None:
-                self._prompt_node[request.request_id] = node
+        if not self.commit_points_only:
+            # Like prefix caching, share each prompt chunk from the step that
+            # computes it: every attention layer writes all tokens' KV before
+            # any request in the batch reads it, and a preempted request can
+            # resume from its own chunks. Recurrent state is updated in place,
+            # so hybrid models publish only where a request stops.
+            end = min(num_scheduled_end, request.num_prompt_tokens)
+            if end > self._tip.get(request.request_id, (None, 0))[1]:
+                self._publish(request, end)
         return new_blocks
 
     def _publish(self, request: Request, end: int) -> _Node | None:
+        own = self._own.get(request.request_id)
+        if own is not None and self._can_extend(request, own):
+            return self._extend(request, own, end)
         parent, start = self._tip.get(request.request_id, (None, 0))
         if parent is not None and (
             parent.node_id not in self.nodes or parent.end < start
@@ -309,6 +309,7 @@ class SessionKVCacheManager(KVCacheManager):
         if parent is not None:
             parent.num_children += 1
         self._tip[request.request_id] = (node, end)
+        self._own[request.request_id] = node
         self._publish_seq = self.seq + 1
         tokens = pack_tokens(request.all_token_ids[start:end])
         self._emit(
@@ -325,29 +326,54 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return node
 
+    def _can_extend(self, request: Request, node: _Node) -> bool:
+        """A request may append to its own node only while it is still the
+        node's tail writer: same position, and still writing the node's last
+        (partial) block rather than a copy made after preemption."""
+        if (
+            node.commit_points is not None
+            or node.node_id not in self.nodes
+            or self._tip.get(request.request_id, (None, 0)) != (node, node.end)
+        ):
+            return False
+        for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
+            last = (node.end - 1) // manager.block_size
+            req_blocks = manager.req_to_blocks[request.request_id]
+            if node.end % manager.block_size and (
+                last >= len(req_blocks) or req_blocks[last] is not blocks[-1]
+            ):
+                return False
+        return True
+
+    def _extend(self, request: Request, node: _Node, end: int) -> _Node:
+        if end <= node.end:
+            return node
+        new_blocks = [
+            manager.req_to_blocks[request.request_id][
+                cdiv(node.end, manager.block_size) : cdiv(end, manager.block_size)
+            ]
+            for manager in self.coordinator.single_type_managers
+        ]
+        self.block_pool.touch([b for group in new_blocks for b in group])
+        for blocks, added in zip(node.blocks, new_blocks):
+            blocks.extend(added)
+        start, node.end = node.end, end
+        self._tip[request.request_id] = (node, end)
+        self._publish_seq = self.seq + 1
+        tokens = pack_tokens(request.all_token_ids[start:end])
+        self._emit(lambda seq: NodeExtended(seq, node.node_id, start, end, tokens))
+        return node
+
     def free(self, request: Request) -> None:
         request_id = request.request_id
         self._pending.pop(request_id, None)
         if request.is_finished():
             committed = None
             end = request.num_computed_tokens
-            prompt_node = self._prompt_node.pop(request_id, None)
             if request.status in _PUBLISHED and 0 < end <= request.num_tokens:
-                if (
-                    prompt_node is not None
-                    and prompt_node.node_id in self.nodes
-                    and not prompt_node.num_children
-                    and self._tip.get(request_id, (None, 0))[0] is prompt_node
-                ):
-                    # One node per turn: republish the whole turn, then drop
-                    # the prompt-only node it supersedes.
-                    parent = prompt_node.parent
-                    self._tip[request_id] = (parent, prompt_node.start)
-                    committed = self._publish(request, end)
-                    self._remove(prompt_node)
-                else:
-                    committed = self._publish(request, end)
+                committed = self._publish(request, end)
             self._tip.pop(request_id, None)
+            self._own.pop(request_id, None)
             node_id = (
                 committed.node_id
                 if committed is not None and request.status in _COMMITTED
@@ -458,7 +484,7 @@ class SessionKVCacheManager(KVCacheManager):
         self.nodes.clear()
         self._pending.clear()
         self._tip.clear()
-        self._prompt_node.clear()
+        self._own.clear()
         self.epoch += 1
         self._emit(lambda seq: StoreReset(seq, self.epoch))
         return super().reset_prefix_cache()

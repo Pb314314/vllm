@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from vllm.v1.request import Request
 from vllm.v1.session.protocol import (
     Candidate,
+    NodeExtended,
     NodePublished,
     NodeTruncated,
     RequestFinished,
@@ -81,6 +82,7 @@ class _Node:
     end: int
     tokens: bytes
     commit_points: tuple[int, ...] | None
+    namespace: Hashable
     vertices: list[_Vertex] = field(default_factory=list)
 
 
@@ -225,6 +227,8 @@ class SessionResolver:
         self.seq = event.seq
         if isinstance(event, NodePublished):
             self._insert(event)
+        elif isinstance(event, NodeExtended):
+            self._extend(event)
         elif isinstance(event, NodeTruncated):
             self._truncate(event.node_id, event.end, event.commit_points)
         elif isinstance(event, RequestFinished):
@@ -242,34 +246,53 @@ class SessionResolver:
         return b"".join(reversed(parts))
 
     def _insert(self, event: NodePublished) -> None:
-        node = _Node(
-            event.parent_id, event.start, event.end, event.tokens, event.commit_points
-        )
-        self.nodes[event.node_id] = node
         request_session = self.request_session.get(event.request_id)
         namespace = (
             self.sessions[request_session].namespace
             if request_session is not None
             else None
         )
-        root = self.roots.setdefault(namespace, _Vertex(b"", 0, None))
-        tokens = self._path_tokens(event.parent_id, event.start) + event.tokens
-        vertex, depth = root, 0
-        while depth < event.end:
-            first = _token_at(tokens, depth)
+        node = _Node(
+            event.parent_id,
+            event.start,
+            event.end,
+            event.tokens,
+            event.commit_points,
+            namespace,
+        )
+        self.nodes[event.node_id] = node
+        path = self._path_tokens(event.parent_id, event.start) + event.tokens
+        self._add_span(event.node_id, path, event.start)
+
+    def _extend(self, event: NodeExtended) -> None:
+        node = self.nodes[event.node_id]
+        assert node.end == event.start
+        node.tokens += event.tokens
+        node.end = event.end
+        path = self._path_tokens(node.parent, node.start) + node.tokens
+        self._add_span(event.node_id, path, event.start)
+
+    def _add_span(self, node_id: int, path: bytes, own_from: int) -> None:
+        """Insert `path` and mark `node_id` as holding `[own_from, end)`."""
+        node = self.nodes[node_id]
+        end = len(path) // _ITEMSIZE
+        vertex = self.roots.setdefault(node.namespace, _Vertex(b"", 0, None))
+        depth = 0
+        while depth < end:
+            first = _token_at(path, depth)
             child = vertex.children.get(first)
             if child is None:
-                assert depth >= event.start, "ancestor content is missing"
-                child = _Vertex(tokens[depth * _ITEMSIZE :], event.end, vertex)
+                assert depth >= own_from, "ancestor content is missing"
+                child = _Vertex(path[depth * _ITEMSIZE :], end, vertex)
                 vertex.children[first] = child
             else:
-                cut = _common_prefix(child.label, tokens[depth * _ITEMSIZE :])
-                if depth < event.start < depth + cut:
-                    cut = event.start - depth
+                cut = _common_prefix(child.label, path[depth * _ITEMSIZE :])
+                if depth < own_from < depth + cut:
+                    cut = own_from - depth
                 if cut < len(child.label) // _ITEMSIZE:
                     child = self._split(child, cut)
-            if child.start >= event.start:
-                child.owners.add(event.node_id)
+            if child.start >= own_from:
+                child.owners.add(node_id)
                 node.vertices.append(child)
             vertex, depth = child, child.depth
 
