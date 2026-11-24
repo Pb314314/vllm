@@ -87,7 +87,6 @@ class _Node:
 class SessionState(enum.Enum):
     IDLE = "idle"
     ACTIVE = "active"
-    DORMANT = "dormant"
 
 
 @dataclass
@@ -193,9 +192,11 @@ class SessionResolver:
         preferred = (
             self.aliases.get((namespace, client_id)) if client_id is not None else None
         )
+        # Continue the session whose whole cursor state this request extends;
+        # candidates are longest first.
         chosen: Session | None = None
         for cand in candidates:
-            if cand.length != candidates[0].length:
+            if chosen is not None and cand.length < self.nodes[chosen.cursor].end:
                 break
             owner = self.cursor_owner.get(cand.node_id)
             if owner is None or cand.length != self.nodes[cand.node_id].end:
@@ -323,7 +324,8 @@ class SessionResolver:
     def _retire_cursor(self, session: Session) -> None:
         session.cursor = None
         if session.state == SessionState.IDLE:
-            session.state = SessionState.DORMANT
+            # Nothing left to continue; a new request starts a new session.
+            self._drop_session(session)
 
     def _finish(self, request_id: str, node_id: int | None) -> None:
         session_id = self.request_session.pop(request_id, None)

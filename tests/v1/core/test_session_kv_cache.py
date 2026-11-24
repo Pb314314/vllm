@@ -188,7 +188,7 @@ def history(request: Request) -> list[int]:
     return list(request.all_token_ids)
 
 
-def test_anonymous_continuation_reuses_partial_tail():
+def test_anonymous_continuation_resumes_at_block_boundary():
     h = Harness()
     first = h.add(list(range(100, 140)))
     h.run(first)
@@ -196,10 +196,10 @@ def test_anonymous_continuation_reuses_partial_tail():
 
     second = h.add(history(first) + list(range(200, 210)))
     output = h.step()
-    # Resumes mid-block at the committed position via a private tail copy.
-    assert output.num_scheduled_tokens[second.request_id] == 43 + 10 - 42
-    assert h.cached[second.request_id] == 42
-    assert output.kv_cache_block_copies
+    # Attention-only: recompute the partial block rather than copy it.
+    assert h.cached[second.request_id] == 32
+    assert output.num_scheduled_tokens[second.request_id] == 43 + 10 - 32
+    assert not output.kv_cache_block_copies
     assert h.session(second) is h.session(first)
     h.run(second)
     assert h.session(first).turns == 2
@@ -227,7 +227,7 @@ def test_fork_of_active_session_gets_its_own_session():
     child = h.add(base + [1, 1], max_tokens=10)
     sibling = h.add(base + [2, 2], max_tokens=2)
     h.step()
-    assert h.cached[child.request_id] == h.cached[sibling.request_id] == 42
+    assert h.cached[child.request_id] == h.cached[sibling.request_id] == 32
     assert h.session(child) is h.session(root)
     assert h.session(sibling) is not h.session(root)
     h.run(child, sibling)
@@ -240,7 +240,7 @@ def test_edited_history_does_not_reuse_stale_kv():
     edited = list(range(20)) + [999] * 50
     second = h.add(edited)
     h.step()
-    assert h.cached[second.request_id] == 20
+    assert h.cached[second.request_id] == 16
     assert h.session(second) is not h.session(first)
     assert h.session(first).cursor is not None
     h.run(second)
@@ -271,7 +271,7 @@ def test_evicted_candidate_falls_back_to_surviving_ancestor():
     leaf_node = h.store.nodes[h.session(leaf).cursor]
     h.store._remove(leaf_node)
     h.step()
-    assert h.cached[late.request_id] == leaf_node.start
+    assert h.cached[late.request_id] == leaf_node.start // BLOCK * BLOCK
     h.run(late)
 
 
@@ -301,7 +301,7 @@ def test_abort_returns_session_to_idle_and_frees_nothing_shared():
     assert h.session(first).state == SessionState.IDLE
     third = h.add(history(first) + [4])
     h.step()
-    assert h.cached[third.request_id] == 42
+    assert h.cached[third.request_id] == 32
     assert h.session(third) is h.session(first)
     h.run(third)
 
@@ -386,3 +386,36 @@ def test_store_rejects_non_commit_point_candidates():
     h.step()
     assert h.cached[second.request_id] == 0
     h.run(second)
+
+
+def test_failed_admission_keeps_idle_states():
+    """A request that cannot fit even after eviction must not destroy the
+    cache on the way to failing."""
+    h = Harness(num_blocks=24)
+    first = h.add(list(range(60)), max_tokens=2)
+    h.run(first)
+    nodes = dict(h.store.nodes)
+    blocker = h.add(list(range(1000, 1000 + 16 * 15)), max_tokens=40)
+    h.step()
+    too_big = h.add(list(range(2000, 2000 + 16 * 12)), max_tokens=2)
+    h.step()
+    assert too_big.status == RequestStatus.WAITING
+    assert nodes.keys() <= h.store.nodes.keys()
+    h.run(blocker, too_big)
+
+
+def test_aborted_request_publishes_without_moving_session():
+    h = Harness()
+    first = h.add(list(range(40)))
+    h.run(first)
+    cursor = h.session(first).cursor
+    second = h.add(history(first) + list(range(300, 340)), max_tokens=50)
+    h.step()
+    h.step()
+    h.sched.finish_requests([second.request_id], RequestStatus.FINISHED_ABORTED)
+    check_invariants(h)
+    assert h.session(first).cursor == cursor
+    third = h.add(history(second) + [1])
+    h.step()
+    assert h.cached[third.request_id] >= len(history(first)) + 32
+    h.run(third)

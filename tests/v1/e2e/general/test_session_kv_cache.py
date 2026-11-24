@@ -23,6 +23,11 @@ def _assert_same(reused, cold, tolerance: float) -> None:
         assert abs(got[token].logprob - want[token].logprob) <= tolerance
 
 
+def _block_floor(llm: LLM, num_tokens: int) -> int:
+    block_size = llm.llm_engine.vllm_config.cache_config.block_size
+    return num_tokens - num_tokens % block_size
+
+
 def _llm(model: str) -> LLM:
     return LLM(
         model,
@@ -57,14 +62,15 @@ def test_attention_reuse_matches_recompute(monkeypatch: pytest.MonkeyPatch):
         system + tokenizer.encode("Name a color."),
     ]
     reused = _generate(llm, prompts, 24)
-    assert reused[0].num_cached_tokens == len(history) - 1
-    assert reused[1].num_cached_tokens == len(first) + 10
-    assert reused[2].num_cached_tokens >= len(system) - 1
+    # Attention-only models resume at the last block boundary.
+    assert _block_floor(llm, len(history) - 1) == reused[0].num_cached_tokens
+    assert _block_floor(llm, len(first) + 10) == reused[1].num_cached_tokens
+    assert _block_floor(llm, len(system)) == reused[2].num_cached_tokens
 
     # Third turn on the same session after a concurrent fork.
     third = prompts[0] + list(reused[0].outputs[0].token_ids)
     (reused_third,) = _generate(llm, [third + tokenizer.encode(" Thanks.")], 16)
-    assert reused_third.num_cached_tokens == len(third) - 1
+    assert _block_floor(llm, len(third) - 1) == reused_third.num_cached_tokens
 
     for prompt, got in zip(prompts, reused):
         assert llm.reset_prefix_cache()

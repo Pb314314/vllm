@@ -18,6 +18,7 @@ Invariants:
      holds one reference on each of its blocks.
 """
 
+import math
 from collections import OrderedDict
 from collections.abc import Callable
 from typing import Any
@@ -42,6 +43,9 @@ from vllm.v1.session.protocol import (
 from vllm.v1.session.resolver import pack_tokens
 
 _COMMITTED = (RequestStatus.FINISHED_STOPPED, RequestStatus.FINISHED_LENGTH_CAPPED)
+# Aborted requests (including stop strings, which the frontend aborts) still
+# computed valid KV; they publish it without advancing their session.
+_PUBLISHED = (*_COMMITTED, RequestStatus.FINISHED_ABORTED)
 
 
 def validate_session_cache_config(vllm_config: VllmConfig) -> None:
@@ -95,10 +99,11 @@ class _Node:
         self.num_children = 0
         self.commit_points = commit_points
 
-    def resume_length(self, length: int) -> int:
+    def resume_length(self, length: int, alignment: int) -> int:
         """Longest position <= `length` a request can resume this node at."""
         if self.commit_points is None:
             length = min(length, self.end)
+            length -= length % alignment
             return length if length > self.start else 0
         return max(
             (c for c in self.commit_points if self.start < c <= length), default=0
@@ -123,9 +128,14 @@ class SessionKVCacheManager(KVCacheManager):
         # resume at commit points; attention-only models at any position.
         self.commit_points_only = any(isinstance(m, MambaManager) for m in managers)
         self.block_sizes = [m.block_size for m in managers]
+        # Attention-only models resume at block boundaries and recompute the
+        # rest of the block, which is cheaper than copying it. Hybrid models
+        # must resume exactly at a commit point, copying the boundary blocks.
+        self.resume_alignment = math.lcm(*self.block_sizes)
 
         self.epoch = 0
         self.seq = 0
+        self._publish_seq = 0
         self._next_node_id = 1
         # Least recently used first.
         self.nodes: OrderedDict[int, _Node] = OrderedDict()
@@ -173,7 +183,8 @@ class SessionKVCacheManager(KVCacheManager):
         binding = request.session_binding
         if not self.prefix_cache_lookup_enabled(request) or binding is None:
             return self.empty_kv_cache_blocks, 0, 0
-        if binding.seq != self.seq and self._rebind is not None:
+        if binding.seq < self._publish_seq and self._rebind is not None:
+            # Only a new node can offer a longer match.
             binding = request.session_binding = self._rebind(request)
         if binding.epoch != self.epoch:
             self.num_stale_bindings += 1
@@ -202,7 +213,7 @@ class SessionKVCacheManager(KVCacheManager):
     def _resume_point(self, node: _Node | None, length: int) -> tuple[_Node, int] | None:
         # A truncated or partially matching node falls back to its ancestors.
         while node is not None and length > 0:
-            resume = node.resume_length(length)
+            resume = node.resume_length(length, self.resume_alignment)
             if resume:
                 return node, resume
             length = min(length, node.start)
@@ -236,12 +247,7 @@ class SessionKVCacheManager(KVCacheManager):
     def allocate_slots(
         self, request: Request, num_new_tokens: int, *args: Any, **kwargs: Any
     ) -> KVCacheBlocks | None:
-        while True:
-            new_blocks = super().allocate_slots(
-                request, num_new_tokens, *args, **kwargs
-            )
-            if new_blocks is not None or not self._evict():
-                break
+        new_blocks = super().allocate_slots(request, num_new_tokens, *args, **kwargs)
         if new_blocks is None:
             return None
         pending = self._pending.pop(request.request_id, None)
@@ -292,6 +298,7 @@ class SessionKVCacheManager(KVCacheManager):
         if parent is not None:
             parent.num_children += 1
         self._tip[request.request_id] = (node, end)
+        self._publish_seq = self.seq + 1
         tokens = pack_tokens(request.all_token_ids[start:end])
         self._emit(
             lambda seq: NodePublished(
@@ -314,7 +321,7 @@ class SessionKVCacheManager(KVCacheManager):
             committed = None
             end = request.num_computed_tokens
             prompt_node = self._prompt_node.pop(request_id, None)
-            if request.status in _COMMITTED and 0 < end <= request.num_tokens:
+            if request.status in _PUBLISHED and 0 < end <= request.num_tokens:
                 if (
                     prompt_node is not None
                     and prompt_node.node_id in self.nodes
@@ -330,19 +337,53 @@ class SessionKVCacheManager(KVCacheManager):
                 else:
                     committed = self._publish(request, end)
             self._tip.pop(request_id, None)
-            node_id = committed.node_id if committed is not None else None
+            node_id = (
+                committed.node_id
+                if committed is not None and request.status in _COMMITTED
+                else None
+            )
             self._emit(lambda seq: RequestFinished(seq, request_id, node_id))
         super().free(request)
 
     # ---------------------------------------------------------------- eviction
-    def _evict(self) -> bool:
-        """Free the least recently used leaf that has blocks of its own."""
+    def _ensure_free_blocks(self, num_blocks: int) -> bool:
+        """Evict idle states only if that makes room for `num_blocks`."""
+        deficit = num_blocks - self.block_pool.get_num_free_blocks()
+        if deficit <= 0:
+            return True
+        if self._num_reclaimable_blocks() < deficit:
+            return False
+        while self.block_pool.get_num_free_blocks() < num_blocks and self._evict():
+            pass
+        return self.block_pool.get_num_free_blocks() >= num_blocks
+
+    def _protected(self) -> set[int]:
         protected = {
             node.node_id for path, _ in self._pending.values() for node in path
         }
         protected.update(
             node.node_id for node, _ in self._tip.values() if node is not None
         )
+        return protected
+
+    def _num_reclaimable_blocks(self) -> int:
+        """Blocks only idle states hold (a lower bound: blocks two idle states
+        share are not counted)."""
+        protected = self._protected()
+        return len(
+            {
+                block.block_id
+                for node in self.nodes.values()
+                if node.node_id not in protected
+                for group in node.blocks
+                for block in group
+                if block.ref_cnt == 1
+            }
+        )
+
+    def _evict(self) -> bool:
+        """Free the least recently used leaf that has blocks of its own."""
+        protected = self._protected()
         idle_leaves = [
             node
             for node in self.nodes.values()
