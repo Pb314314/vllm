@@ -17,7 +17,11 @@ from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.session_kv_cache_manager import validate_session_request
 from vllm.v1.core.single_type_kv_cache_manager import MambaManager
-from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
+from vllm.v1.kv_cache_interface import (
+    CircularBufferSpec,
+    FullAttentionSpec,
+    SlidingWindowSpec,
+)
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.session.protocol import Candidate, SessionBinding
@@ -36,6 +40,7 @@ class Harness:
         hybrid: bool = False,
         num_speculative_blocks: int = 0,
         sliding_window: int | None = None,
+        ring: bool = False,
         **kwargs,
     ):
         groups = None
@@ -50,6 +55,16 @@ class Harness:
                     head_size=1,
                     dtype=torch.float32,
                     sliding_window=sliding_window,
+                ),
+            ]
+        if ring:
+            # A per-request scratch ring (DeepSeek V4.1 compressor state).
+            groups = [
+                FullAttentionSpec(
+                    block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
+                ),
+                CircularBufferSpec(
+                    block_size=8, num_kv_heads=1, head_size=1, dtype=torch.float32
                 ),
             ]
         if hybrid:
@@ -145,7 +160,8 @@ class Harness:
 
     def _groups(self, request: Request):
         for manager in self.store.coordinator.single_type_managers:
-            yield manager, manager.req_to_blocks[request.request_id]
+            if manager.kv_cache_spec.prefix_cacheable:
+                yield manager, manager.req_to_blocks[request.request_id]
 
     def _verify(self, request: Request, end: int, recurrent: bool) -> None:
         """The KV the request reads must come from its own token prefix."""
@@ -375,17 +391,24 @@ def test_hybrid_resumes_only_at_commit_points():
 
 @pytest.mark.parametrize("budget", [8192, 24])
 @pytest.mark.parametrize(
-    "hybrid,sliding_window", [(False, None), (True, None), (False, 32)]
+    "hybrid,sliding_window,ring",
+    [
+        (False, None, False),
+        (True, None, False),
+        (False, 32, False),
+        (False, None, True),
+    ],
 )
 @pytest.mark.parametrize("seed", range(8))
 def test_fuzz_invariants(
-    seed: int, hybrid: bool, sliding_window: int | None, budget: int
+    seed: int, hybrid: bool, sliding_window: int | None, ring: bool, budget: int
 ):
     rng = random.Random(seed)
     h = Harness(
         num_blocks=60,
         hybrid=hybrid,
         sliding_window=sliding_window,
+        ring=ring,
         max_num_batched_tokens=budget,
     )
     done: list[Request] = []
@@ -696,3 +719,19 @@ def test_reset_with_running_requests_keeps_states():
     assert not h.store.reset_prefix_cache()
     assert nodes.keys() <= h.store.nodes.keys()
     h.run(running)
+
+
+def test_ring_buffer_is_scratch_and_resume_stays_aligned():
+    """A ring buffer (DeepSeek V4.1 compressor state) belongs to its request:
+    states never hold it, and a continuation resumes at a block boundary with
+    a fresh ring, as with prefix caching."""
+    h = Harness(ring=True)
+    first = h.add(list(range(100, 146)), max_tokens=3)
+    h.run(first)
+    ring = h.store.coordinator.single_type_managers[1]
+    assert all(not node.blocks[1] for node in h.store.nodes.values())
+    second = h.add(history(first) + list(range(200, 210)))
+    h.step()
+    assert h.cached[second.request_id] == 48
+    assert len(ring.req_to_blocks[second.request_id]) == 1
+    h.run(second)

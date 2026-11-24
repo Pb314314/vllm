@@ -28,6 +28,7 @@ from vllm.utils.math_utils import cdiv
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
 from vllm.v1.core.kv_cache_utils import KVCacheBlock, KVCacheBlockCopy
 from vllm.v1.core.single_type_kv_cache_manager import (
+    CircularBufferManager,
     FullAttentionManager,
     MambaManager,
     SlidingWindowManager,
@@ -124,12 +125,20 @@ class SessionKVCacheManager(KVCacheManager):
         managers = self.coordinator.single_type_managers
         # A node keeps every sliding-window block it covers, as prefix
         # caching keeps freed out-of-window blocks cached, so any position a
-        # node covers keeps the window before it.
-        supported = (FullAttentionManager, SlidingWindowManager, MambaManager)
+        # node covers keeps the window before it. Groups that opt out of
+        # prefix caching (ring buffers, windows rebuilt by bounded replay) are
+        # per-request scratch that nodes never hold, as with prefix caching.
+        supported = (
+            FullAttentionManager,
+            SlidingWindowManager,
+            MambaManager,
+            CircularBufferManager,
+        )
         if any(type(m) not in supported for m in managers):
             raise ValueError(
-                "Session KV cache supports full, sliding-window and Mamba layers "
-                f"only; got {sorted({type(m).__name__ for m in managers})}"
+                "Session KV cache supports full, sliding-window, ring-buffer and "
+                "Mamba layers only; got "
+                f"{sorted({type(m).__name__ for m in managers})}"
             )
         # Mamba state is valid only where a request stopped, so hybrid models
         # resume at commit points; attention-only models at any position.
@@ -152,16 +161,17 @@ class SessionKVCacheManager(KVCacheManager):
             else 0
         )
         self.block_sizes = [m.block_size for m in managers]
+        positional = [m.block_size for m in managers if self._positional(m)]
         # A divergence checkpoint costs one recurrent state block. Require the
         # shared span to cover an attention block (the same memory), capped at
         # _MAX_CHECKPOINT_GAP so hybrid models with very large blocks still
         # share common system prompts; shorter spans (such as a chat
         # template's header) are recomputed.
-        self.min_checkpoint_gap = min(*self.block_sizes, _MAX_CHECKPOINT_GAP)
+        self.min_checkpoint_gap = min(*positional, _MAX_CHECKPOINT_GAP)
         # Attention-only models resume at block boundaries and recompute the
         # rest of the block, which is cheaper than copying it. Hybrid models
         # must resume exactly at a commit point, copying the boundary blocks.
-        self.resume_alignment = math.lcm(*self.block_sizes)
+        self.resume_alignment = math.lcm(*positional)
 
         self.epoch = 0
         self.seq = 0
@@ -293,11 +303,20 @@ class SessionKVCacheManager(KVCacheManager):
             current = current.parent
         return path
 
+    @staticmethod
+    def _positional(manager: Any) -> bool:
+        """Whether nodes hold this group's blocks by token position: not
+        per-request scratch. Mamba groups are positional for one block that
+        holds the state at a node's commit point."""
+        return manager.kv_cache_spec.prefix_cacheable
+
     def _assemble(
         self, path: list[_Node], length: int, group: int
     ) -> list[KVCacheBlock]:
         """Block table for positions `[0, length)`; deeper nodes win where a
         child's first block re-covers its parent's last one."""
+        if not self._positional(self.coordinator.single_type_managers[group]):
+            return []
         block_size = self.block_sizes[group]
         upper = cdiv(length, block_size)
         segments = []
@@ -381,7 +400,7 @@ class SessionKVCacheManager(KVCacheManager):
         managers = self.coordinator.single_type_managers
         blocks = tuple(
             []
-            if isinstance(m, MambaManager)
+            if isinstance(m, MambaManager) or not self._positional(m)
             else list(
                 m.req_to_blocks[request.request_id][
                     start // m.block_size : cdiv(end, m.block_size)
@@ -462,7 +481,7 @@ class SessionKVCacheManager(KVCacheManager):
         ):
             return False
         for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
-            if isinstance(manager, MambaManager):
+            if isinstance(manager, MambaManager) or not self._positional(manager):
                 continue
             last = (node.end - 1) // manager.block_size
             req_blocks = manager.req_to_blocks[request.request_id]
@@ -477,7 +496,7 @@ class SessionKVCacheManager(KVCacheManager):
             return node
         new_blocks = [
             []
-            if isinstance(manager, MambaManager)
+            if isinstance(manager, MambaManager) or not self._positional(manager)
             else manager.req_to_blocks[request.request_id][
                 cdiv(node.end, manager.block_size) : cdiv(end, manager.block_size)
             ]
@@ -652,7 +671,7 @@ class SessionKVCacheManager(KVCacheManager):
         floor = max((child.start for child in node.children), default=node.start)
         end = max(floor, min(node.end, end))
         for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
-            if isinstance(manager, MambaManager):
+            if isinstance(manager, MambaManager) or not self._positional(manager):
                 continue
             keep = cdiv(end, manager.block_size) - node.start // manager.block_size
             self.block_pool.free_blocks(reversed(blocks[keep:]))
