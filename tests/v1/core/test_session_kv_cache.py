@@ -83,11 +83,18 @@ class Harness:
             self.slots[copy.dst_block_id] = dict(self.slots.get(copy.src_block_id, {}))
             if copy.src_block_id in self.states:
                 self.states[copy.dst_block_id] = self.states[copy.src_block_id]
+        # Within a step every attention layer writes all tokens' KV before any
+        # request reads it; a recurrent state is read before it is updated.
+        spans = []
         for req_id, num_tokens in output.num_scheduled_tokens.items():
             request = self.sched.requests[req_id]
             start = request.num_computed_tokens - num_tokens
-            self._verify(request, start)
-            self._write(request, start, start + num_tokens)
+            spans.append((request, start, start + num_tokens))
+            self._verify(request, start, recurrent=True)
+        for request, start, end in spans:
+            self._write(request, start, end)
+        for request, start, _ in spans:
+            self._verify(request, start, recurrent=False)
         req_ids = list(output.num_scheduled_tokens)
         sampled = []
         for req_id in req_ids:
@@ -111,11 +118,13 @@ class Harness:
         for manager in self.store.coordinator.single_type_managers:
             yield manager, manager.req_to_blocks[request.request_id]
 
-    def _verify(self, request: Request, end: int) -> None:
+    def _verify(self, request: Request, end: int, recurrent: bool) -> None:
         """The KV the request reads must come from its own token prefix."""
         keys = prefix_keys(request.all_token_ids, end)
         for manager, blocks in self._groups(request):
-            if isinstance(manager, MambaManager):
+            if isinstance(manager, MambaManager) != recurrent:
+                continue
+            if recurrent:
                 if end:
                     assert self.states.get(blocks[0].block_id) == keys[end]
                 continue
@@ -419,3 +428,14 @@ def test_aborted_request_publishes_without_moving_session():
     h.step()
     assert h.cached[third.request_id] >= len(history(first)) + 32
     h.run(third)
+
+
+def test_same_step_arrivals_share_the_prompt_being_computed():
+    h = Harness()
+    system = list(range(400, 448))
+    first = h.add(system + [1, 2], max_tokens=4)
+    second = h.add(system + [3, 4], max_tokens=4)
+    h.step()
+    assert h.cached[first.request_id] == 0
+    assert h.cached[second.request_id] == 48
+    h.run(first, second)

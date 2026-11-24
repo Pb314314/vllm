@@ -250,9 +250,11 @@ class SessionKVCacheManager(KVCacheManager):
         new_blocks = super().allocate_slots(request, num_new_tokens, *args, **kwargs)
         if new_blocks is None:
             return None
+        num_scheduled_end = request.num_computed_tokens + num_new_tokens
         pending = self._pending.pop(request.request_id, None)
         if pending is not None:
             path, length = pending
+            num_scheduled_end += length
             self._tip[request.request_id] = (path[0], length)
             for node in path:
                 self.nodes.move_to_end(node.node_id)
@@ -261,10 +263,12 @@ class SessionKVCacheManager(KVCacheManager):
         if (
             not self.commit_points_only
             and request.request_id not in self._prompt_node
-            and request.num_computed_tokens >= request.num_prompt_tokens
+            and num_scheduled_end >= request.num_prompt_tokens
         ):
-            # The prompt is computed (or in flight ahead of any reader on the
-            # same stream): let concurrent requests share it now.
+            # Like prefix caching, share the prompt from the step that computes
+            # it: each attention layer writes every token's KV before any
+            # request in the batch reads it. Recurrent state has no such
+            # ordering, so hybrid models only publish finished requests.
             node = self._publish(request, request.num_prompt_tokens)
             if node is not None:
                 self._prompt_node[request.request_id] = node
