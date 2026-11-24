@@ -468,3 +468,46 @@ def test_preempted_writer_does_not_extend_a_node_it_no_longer_writes():
     reader = h.add(prompt[:40] + [1, 2], max_tokens=2)
     h.run(writer, reader)
     assert h.cached[reader.request_id] >= 32
+
+
+def test_waiting_request_match_does_not_preempt_running_requests():
+    """As with prefix caching, a waiting request that cannot be admitted must
+    not keep the idle state it matched from a running request that grows."""
+    h = Harness(num_blocks=24)
+    done = h.add(list(range(3000, 3160)), max_tokens=2)
+    h.run(done)
+    running = h.add(list(range(4000, 4128)), max_tokens=100)
+    h.step()
+    waiting = h.add(history(done) + list(range(5000, 5200)), max_tokens=2)
+    h.run(running, waiting, max_steps=300)
+    assert running.num_preemptions == 0
+
+
+def test_eviction_reclaims_the_unread_tail_of_an_interior_node():
+    """A child re-covers its parent's partial last block, and attention
+    resumes are block aligned, so that block is reclaimable before any
+    session's history."""
+    h = Harness()
+    first = h.add(list(range(40)))
+    h.run(first)
+    second = h.add(history(first) + list(range(300, 340)))
+    h.run(second)
+    # Asked for two blocks, eviction takes the parent's unread block first.
+    assert h.store._evict(2)
+    third = h.add(history(second) + [1])
+    h.step()
+    assert h.cached[third.request_id] == len(history(second)) // BLOCK * BLOCK
+
+
+def test_preempted_request_chunks_are_reclaimable():
+    """Like prefix caching, a preempted request's computed chunks stay
+    reusable but no longer pin memory while it waits."""
+    h = Harness(max_num_batched_tokens=32)
+    writer = h.add(list(range(800, 900)), max_tokens=2)
+    h.step()
+    h.step()  # [0, 64) published in its own node
+    h.sched.running.remove(writer)
+    h.sched._preempt_request(writer, timestamp=0.0)
+    assert h.store._num_reclaimable_blocks(100) == 64 // BLOCK
+    h.run(writer)
+    assert writer.num_computed_tokens == 101
