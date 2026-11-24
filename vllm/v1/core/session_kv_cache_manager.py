@@ -51,7 +51,6 @@ _PUBLISHED = (*_COMMITTED, RequestStatus.FINISHED_ABORTED)
 
 def validate_session_cache_config(vllm_config: VllmConfig) -> None:
     unsupported = {
-        "speculative decoding": vllm_config.speculative_config is not None,
         "KV connectors": vllm_config.kv_transfer_config is not None,
         "EC connectors": vllm_config.ec_transfer_config is not None,
         "LoRA": vllm_config.lora_config is not None,
@@ -126,7 +125,16 @@ class SessionKVCacheManager(KVCacheManager):
         if any(
             isinstance(m, MambaManager) and m.num_speculative_blocks for m in managers
         ):
-            raise ValueError("Session KV cache does not support speculative decoding")
+            raise ValueError(
+                "Session KV cache does not support speculative decoding with "
+                "Mamba layers yet"
+            )
+        # EAGLE-style draft KV at a position also depends on the next
+        # `draft_lookahead` tokens, so a resumed prefix must stop that many
+        # tokens before the content it is known to share.
+        self.draft_lookahead = (
+            max(1, kwargs.get("num_prefill_lookahead", 0)) if self.use_eagle else 0
+        )
         # Mamba state is valid only where a request stopped, so hybrid models
         # resume at commit points; attention-only models at any position.
         self.commit_points_only = any(isinstance(m, MambaManager) for m in managers)
@@ -197,7 +205,8 @@ class SessionKVCacheManager(KVCacheManager):
         found = None
         for candidate in binding.candidates:
             found = self._resume_point(
-                self.nodes.get(candidate.node_id), min(candidate.length, limit)
+                self.nodes.get(candidate.node_id),
+                min(candidate.length - self.draft_lookahead, limit),
             )
             if found is not None:
                 break
@@ -413,8 +422,9 @@ class SessionKVCacheManager(KVCacheManager):
             self._pending = None
         if request.is_finished():
             committed = None
-            end = request.num_computed_tokens
-            if request.status in _PUBLISHED and 0 < end <= request.num_tokens:
+            # Speculative tokens still in flight may be rejected.
+            end = min(request.num_computed_tokens, request.num_tokens)
+            if request.status in _PUBLISHED and end > 0:
                 committed = self._publish(request, end)
             node_id = (
                 committed.node_id

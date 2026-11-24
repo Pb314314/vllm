@@ -543,3 +543,18 @@ def test_admission_counts_a_whole_idle_conversation_as_reclaimable():
     h.step()
     assert big.status == RequestStatus.RUNNING
     h.run(big)
+
+
+def test_eagle_resume_stops_before_the_unshared_next_token():
+    """EAGLE draft KV at a position also reflects the next token, which a
+    stored state does not record past its end: resume at least one token
+    before the shared content ends."""
+    h = Harness()
+    h.store.draft_lookahead = 1
+    first = h.add(list(range(100, 146)), max_tokens=3)
+    h.run(first)
+    assert first.num_computed_tokens == 48
+    second = h.add(history(first) + list(range(200, 210)))
+    h.step()
+    assert h.cached[second.request_id] == 32
+    h.run(second)
