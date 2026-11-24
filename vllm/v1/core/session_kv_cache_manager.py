@@ -412,15 +412,33 @@ class SessionKVCacheManager(KVCacheManager):
         return protected
 
     def _num_reclaimable_blocks(self, limit: int) -> int:
-        """Count blocks eviction can free now, stopping at `limit` (a lower
-        bound: freeing a leaf can expose more of its parent)."""
+        """Count blocks repeated eviction can free, stopping at `limit`: every
+        block only idle states hold, except below where a running or attaching
+        request reads through an ancestor."""
         protected = self._protected()
+        # Per ancestor of a protected node: the highest start it must keep.
+        floors: dict[int, int] = {}
+        for node_id in protected:
+            child = self.nodes.get(node_id)
+            parent = child.parent if child is not None else None
+            while child is not None and parent is not None:
+                seen = parent.node_id in floors
+                floors[parent.node_id] = max(floors.get(parent.node_id, 0), child.start)
+                if seen:
+                    break
+                child, parent = parent, parent.parent
         count = 0
         for node in self.nodes.values():
-            if node.node_id not in protected:
-                count += self._num_trimmable_blocks(node)
-                if count >= limit:
-                    break
+            if node.node_id in protected:
+                continue
+            floor = floors.get(node.node_id)
+            if floor is None:
+                count += sum(b.ref_cnt == 1 for group in node.blocks for b in group)
+            elif not self._trims_whole_nodes():
+                first = floor // self.block_sizes[0] - node.start // self.block_sizes[0]
+                count += sum(b.ref_cnt == 1 for b in node.blocks[0][first:])
+            if count >= limit:
+                break
         return count
 
     def _evict(self, num_blocks: int) -> bool:
