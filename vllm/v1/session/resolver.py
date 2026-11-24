@@ -275,7 +275,7 @@ class SessionResolver:
 
     def _split(self, vertex: _Vertex, cut: int) -> _Vertex:
         """Split `vertex` after `cut` tokens; return the upper half."""
-        assert vertex.parent is not None and 0 < cut
+        assert vertex.parent is not None and cut > 0
         upper = _Vertex(vertex.label[: cut * _ITEMSIZE], vertex.start + cut, None)
         upper.parent = vertex.parent
         upper.owners = set(vertex.owners)
@@ -314,9 +314,7 @@ class SessionResolver:
                 self._retire_cursor(self.sessions[session_id])
 
     def _prune(self, vertex: _Vertex) -> None:
-        while (
-            vertex.parent is not None and not vertex.owners and not vertex.children
-        ):
+        while vertex.parent is not None and not vertex.owners and not vertex.children:
             parent = vertex.parent
             del parent.children[_token_at(vertex.label, 0)]
             vertex = parent

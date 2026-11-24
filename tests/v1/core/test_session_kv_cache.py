@@ -173,9 +173,7 @@ def check_invariants(h: Harness) -> None:
         if not block.is_null:
             assert block.ref_cnt == expected[block.block_id], block.block_id
             assert block.block_hash is None
-    num_free = sum(
-        b.ref_cnt == 0 for b in store.block_pool.blocks if not b.is_null
-    )
+    num_free = sum(b.ref_cnt == 0 for b in store.block_pool.blocks if not b.is_null)
     assert store.block_pool.get_num_free_blocks() == num_free
     # Same process, no lag: the resolver mirrors the store exactly.
     assert h.resolver.seq == store.seq
@@ -357,7 +355,9 @@ def test_fuzz_invariants(seed: int, hybrid: bool):
             if done and rng.random() < 0.7:
                 base = history(rng.choice(done))
                 cut = rng.choice([len(base), len(base), rng.randrange(len(base))])
-                tokens = base[:cut] + [rng.randrange(50) for _ in range(rng.randrange(1, 20))]
+                tokens = base[:cut] + [
+                    rng.randrange(50) for _ in range(rng.randrange(1, 20))
+                ]
             else:
                 tokens = [rng.randrange(50) for _ in range(rng.randrange(1, 80))]
             live.append(h.add(tokens[:300], max_tokens=rng.randrange(1, 8)))

@@ -122,7 +122,9 @@ class SessionKVCacheManager(KVCacheManager):
                 "Session KV cache supports full attention and Mamba layers only; "
                 f"got {sorted({type(m).__name__ for m in managers})}"
             )
-        if any(isinstance(m, MambaManager) and m.num_speculative_blocks for m in managers):
+        if any(
+            isinstance(m, MambaManager) and m.num_speculative_blocks for m in managers
+        ):
             raise ValueError("Session KV cache does not support speculative decoding")
         # Mamba state is valid only where a request stopped, so hybrid models
         # resume at commit points; attention-only models at any position.
@@ -206,11 +208,14 @@ class SessionKVCacheManager(KVCacheManager):
         path = self._path(node)
         self._pending[request.request_id] = (path, length)
         blocks = tuple(
-            self._assemble(path, length, group) for group in range(len(self.block_sizes))
+            self._assemble(path, length, group)
+            for group in range(len(self.block_sizes))
         )
         return self.create_kv_cache_blocks(blocks), length, 0
 
-    def _resume_point(self, node: _Node | None, length: int) -> tuple[_Node, int] | None:
+    def _resume_point(
+        self, node: _Node | None, length: int
+    ) -> tuple[_Node, int] | None:
         # A truncated or partially matching node falls back to its ancestors.
         while node is not None and length > 0:
             resume = node.resume_length(length, self.resume_alignment)
@@ -229,7 +234,9 @@ class SessionKVCacheManager(KVCacheManager):
             current = current.parent
         return path
 
-    def _assemble(self, path: list[_Node], length: int, group: int) -> list[KVCacheBlock]:
+    def _assemble(
+        self, path: list[_Node], length: int, group: int
+    ) -> list[KVCacheBlock]:
         """Block table for positions `[0, length)`; deeper nodes win where a
         child's first block re-covers its parent's last one."""
         block_size = self.block_sizes[group]
@@ -357,9 +364,11 @@ class SessionKVCacheManager(KVCacheManager):
             return True
         if self._num_reclaimable_blocks() < deficit:
             return False
-        while self.block_pool.get_num_free_blocks() < num_blocks and self._evict():
+        while (
+            deficit := num_blocks - self.block_pool.get_num_free_blocks()
+        ) > 0 and self._evict(deficit):
             pass
-        return self.block_pool.get_num_free_blocks() >= num_blocks
+        return deficit <= 0
 
     def _protected(self) -> set[int]:
         protected = {
@@ -385,8 +394,9 @@ class SessionKVCacheManager(KVCacheManager):
             }
         )
 
-    def _evict(self) -> bool:
-        """Free the least recently used leaf that has blocks of its own."""
+    def _evict(self, num_blocks: int) -> bool:
+        """Free up to `num_blocks` from the tail of the least recently used
+        leaf that has blocks of its own, like prefix caching's block LRU."""
         protected = self._protected()
         idle_leaves = [
             node
@@ -394,7 +404,7 @@ class SessionKVCacheManager(KVCacheManager):
             if not node.num_children and node.node_id not in protected
         ]
         for node in idle_leaves:
-            if self._trim(node):
+            if self._trim(node, num_blocks):
                 return True
         if idle_leaves:
             # Every idle leaf only shares blocks; dropping one exposes its
@@ -403,7 +413,7 @@ class SessionKVCacheManager(KVCacheManager):
             return True
         return False
 
-    def _trim(self, node: _Node) -> int:
+    def _trim(self, node: _Node, num_blocks: int) -> int:
         if self.commit_points_only or len(self.block_sizes) > 1:
             if not any(b.ref_cnt == 1 for group in node.blocks for b in group):
                 return 0
@@ -412,7 +422,9 @@ class SessionKVCacheManager(KVCacheManager):
             return freed
         blocks = node.blocks[0]
         keep = len(blocks)
-        while keep and blocks[keep - 1].ref_cnt == 1:
+        while (
+            keep and blocks[keep - 1].ref_cnt == 1 and len(blocks) - keep < num_blocks
+        ):
             keep -= 1
         freed = len(blocks) - keep
         if not freed:
@@ -452,9 +464,7 @@ class SessionKVCacheManager(KVCacheManager):
         return super().reset_prefix_cache()
 
     def session_stats(self) -> dict[str, int]:
-        held = {
-            b.block_id for n in self.nodes.values() for g in n.blocks for b in g
-        }
+        held = {b.block_id for n in self.nodes.values() for g in n.blocks for b in g}
         return {
             "nodes": len(self.nodes),
             "node_blocks": len(held),
