@@ -388,7 +388,7 @@ class SessionKVCacheManager(KVCacheManager):
         deficit = num_blocks - self.block_pool.get_num_free_blocks()
         if deficit <= 0:
             return True
-        if self._num_reclaimable_blocks() < deficit:
+        if self._num_reclaimable_blocks(deficit) < deficit:
             return False
         while (
             deficit := num_blocks - self.block_pool.get_num_free_blocks()
@@ -405,20 +405,21 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return protected
 
-    def _num_reclaimable_blocks(self) -> int:
-        """Blocks only idle states hold (a lower bound: blocks two idle states
-        share are not counted)."""
+    def _num_reclaimable_blocks(self, limit: int) -> int:
+        """Count blocks only idle states hold, stopping at `limit` (a lower
+        bound: blocks two idle states share are not counted)."""
         protected = self._protected()
-        return len(
-            {
-                block.block_id
-                for node in self.nodes.values()
-                if node.node_id not in protected
-                for group in node.blocks
-                for block in group
-                if block.ref_cnt == 1
-            }
-        )
+        seen: set[int] = set()
+        for node in self.nodes.values():
+            if node.node_id in protected:
+                continue
+            for group in node.blocks:
+                for block in group:
+                    if block.ref_cnt == 1:
+                        seen.add(block.block_id)
+                        if len(seen) >= limit:
+                            return len(seen)
+        return len(seen)
 
     def _evict(self, num_blocks: int) -> bool:
         """Free up to `num_blocks` from the tail of the least recently used

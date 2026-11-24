@@ -116,6 +116,7 @@ class SessionResolver:
         self.cursor_owner: dict[int, int] = {}
         self.aliases: dict[tuple[Hashable, str], int] = {}
         self.request_session: dict[str, int] = {}
+        self._packed: dict[str, bytes] = {}
         self._next_session_id = 1
         self.num_resolves = 0
         self.num_continued = 0
@@ -130,7 +131,7 @@ class SessionResolver:
     def resolve(self, request: Request) -> SessionBinding:
         start_time = time.perf_counter()
         namespace = self.namespace(request)
-        tokens = pack_tokens(request.all_token_ids)
+        tokens = self._packed_tokens(request)
         limit = request.get_max_cache_hit_length()
         path, matched = self._match(namespace, tokens, limit)
         candidates = self._candidates(path, matched)
@@ -141,6 +142,18 @@ class SessionResolver:
         self.resolve_seconds += time.perf_counter() - start_time
         self.num_resolves += 1
         return SessionBinding(self.epoch, session_id, candidates, self.seq)
+
+    def _packed_tokens(self, request: Request) -> bytes:
+        """Pack a request's tokens once; re-resolves only pack new tokens."""
+        tokens = request.all_token_ids
+        packed = self._packed.get(request.request_id, b"")
+        num_packed = len(packed) // _ITEMSIZE
+        if num_packed > len(tokens):
+            packed, num_packed = b"", 0
+        if num_packed < len(tokens):
+            packed += pack_tokens(tokens[num_packed:])
+            self._packed[request.request_id] = packed
+        return packed
 
     def _match(
         self, namespace: Hashable, tokens: bytes, limit: int
@@ -349,6 +362,7 @@ class SessionResolver:
             self._drop_session(session)
 
     def _finish(self, request_id: str, node_id: int | None) -> None:
+        self._packed.pop(request_id, None)
         session_id = self.request_session.pop(request_id, None)
         if session_id is None:
             return
