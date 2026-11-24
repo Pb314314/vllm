@@ -511,3 +511,19 @@ def test_preempted_request_chunks_are_reclaimable():
     assert h.store._num_reclaimable_blocks(100) == 64 // BLOCK
     h.run(writer)
     assert writer.num_computed_tokens == 101
+
+
+
+def test_admission_counts_a_whole_idle_conversation_as_reclaimable():
+    """Like prefix caching, a request that fits only by evicting an entire
+    idle conversation, not just its newest turn, is admitted."""
+    h = Harness(num_blocks=24)
+    turn = h.add(list(range(6000, 6060)), max_tokens=2)
+    h.run(turn)
+    for i in range(2):
+        turn = h.add(history(turn) + list(range(7000 + 100 * i, 7060 + 100 * i)))
+        h.run(turn)
+    big = h.add(list(range(9000, 9000 + 16 * 20)), max_tokens=2)
+    h.step()
+    assert big.status == RequestStatus.RUNNING
+    h.run(big)
