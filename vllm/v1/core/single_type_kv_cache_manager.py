@@ -305,13 +305,8 @@ class SingleTypeKVCacheManager(ABC):
             # num_skipped_blocks > len(new_computed_blocks).
             new_computed_blocks = new_computed_blocks[num_skipped_blocks:]
 
-        # Touch the computed blocks to make sure they won't be evicted.
-        if self.enable_caching:
-            self.block_pool.touch(new_computed_blocks)
-        else:
-            assert not any(new_computed_blocks), (
-                "Computed blocks should be empty when prefix caching is disabled"
-            )
+        # Take a reference on reused blocks so their owner cannot free them.
+        self.block_pool.touch(new_computed_blocks)
 
         # Skip blocks are padded with null blocks.
         req_blocks.extend([self._null_block] * num_skipped_blocks)

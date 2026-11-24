@@ -91,6 +91,9 @@ def create_scheduler(
     scheduler_cls: type[Scheduler] | None = None,
     lora_config: LoRAConfig | None = None,
     speculative_config: SpeculativeConfig | None = None,
+    session_cache: bool = False,
+    kv_cache_groups: list[KVCacheSpec] | None = None,
+    scheduler_block_size: int | None = None,
 ) -> Scheduler | AsyncScheduler:
     """Create scheduler under test.
 
@@ -149,6 +152,7 @@ def create_scheduler(
         gpu_memory_utilization=0.9,
         cache_dtype="auto",
         enable_prefix_caching=enable_prefix_caching,
+        session_cache=session_cache,
     )
     kv_transfer_config = None
     if isinstance(use_kv_connector, MockKVConfig):
@@ -233,7 +237,12 @@ def create_scheduler(
     kv_cache_config = KVCacheConfig(
         num_blocks=num_blocks,  # A large number of blocks to hold all requests
         kv_cache_tensors=[],
-        kv_cache_groups=[KVCacheGroupSpec(["layer"], kv_cache_spec)],
+        kv_cache_groups=[KVCacheGroupSpec(["layer"], kv_cache_spec)]
+        if kv_cache_groups is None
+        else [
+            KVCacheGroupSpec([f"layer{i}"], spec)
+            for i, spec in enumerate(kv_cache_groups)
+        ],
     )
     cache_config.num_gpu_blocks = num_blocks
     register_all_kvcache_specs(vllm_config)
@@ -242,7 +251,7 @@ def create_scheduler(
     scheduler = scheduler_cls(
         vllm_config=vllm_config,
         kv_cache_config=kv_cache_config,
-        block_size=block_size,
+        block_size=scheduler_block_size or block_size,
         log_stats=True,
         structured_output_manager=StructuredOutputManager(vllm_config),
     )

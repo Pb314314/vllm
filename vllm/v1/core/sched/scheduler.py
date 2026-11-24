@@ -347,7 +347,16 @@ class Scheduler(SchedulerInterface):
         if hash_block_size is None:
             hash_block_size = block_size
         self.hash_block_size = hash_block_size
-        self.kv_cache_manager = KVCacheManager(
+        kv_cache_manager_cls = KVCacheManager
+        if self.cache_config.session_cache:
+            from vllm.v1.core.session_kv_cache_manager import (
+                SessionKVCacheManager,
+                validate_session_cache_config,
+            )
+
+            validate_session_cache_config(vllm_config)
+            kv_cache_manager_cls = SessionKVCacheManager
+        self.kv_cache_manager = kv_cache_manager_cls(
             kv_cache_config=kv_cache_config,
             max_model_len=self.max_model_len,
             max_in_flight_tokens=vllm_config.max_in_flight_tokens,
