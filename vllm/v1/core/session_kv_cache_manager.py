@@ -30,6 +30,7 @@ from vllm.v1.core.kv_cache_utils import KVCacheBlock, KVCacheBlockCopy
 from vllm.v1.core.single_type_kv_cache_manager import (
     FullAttentionManager,
     MambaManager,
+    SlidingWindowManager,
 )
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.session.protocol import (
@@ -121,11 +122,14 @@ class SessionKVCacheManager(KVCacheManager):
             raise ValueError("Session KV cache replaces prefix caching")
         super().__init__(*args, **kwargs)
         managers = self.coordinator.single_type_managers
-        supported = (FullAttentionManager, MambaManager)
+        # A node keeps every sliding-window block it covers, as prefix
+        # caching keeps freed out-of-window blocks cached, so any position a
+        # node covers keeps the window before it.
+        supported = (FullAttentionManager, SlidingWindowManager, MambaManager)
         if any(type(m) not in supported for m in managers):
             raise ValueError(
-                "Session KV cache supports full attention and Mamba layers only; "
-                f"got {sorted({type(m).__name__ for m in managers})}"
+                "Session KV cache supports full, sliding-window and Mamba layers "
+                f"only; got {sorted({type(m).__name__ for m in managers})}"
             )
         # Mamba state is valid only where a request stopped, so hybrid models
         # resume at commit points; attention-only models at any position.

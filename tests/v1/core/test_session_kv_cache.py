@@ -17,7 +17,7 @@ from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.session_kv_cache_manager import validate_session_request
 from vllm.v1.core.single_type_kv_cache_manager import MambaManager
-from vllm.v1.kv_cache_interface import FullAttentionSpec
+from vllm.v1.kv_cache_interface import FullAttentionSpec, SlidingWindowSpec
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.session.protocol import Candidate, SessionBinding
@@ -35,9 +35,23 @@ class Harness:
         num_blocks: int = 1000,
         hybrid: bool = False,
         num_speculative_blocks: int = 0,
+        sliding_window: int | None = None,
         **kwargs,
     ):
         groups = None
+        if sliding_window is not None:
+            groups = [
+                FullAttentionSpec(
+                    block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
+                ),
+                SlidingWindowSpec(
+                    block_size=BLOCK,
+                    num_kv_heads=1,
+                    head_size=1,
+                    dtype=torch.float32,
+                    sliding_window=sliding_window,
+                ),
+            ]
         if hybrid:
             groups = [
                 FullAttentionSpec(
@@ -144,7 +158,9 @@ class Harness:
                     assert self.states.get(blocks[0].block_id) == keys[end]
                 continue
             size = manager.block_size
-            for pos in range(end):
+            window = getattr(manager, "sliding_window", None)
+            # A query at `end` attends keys `(end - window, end]`.
+            for pos in range(max(0, end - window + 1) if window else 0, end):
                 slot = self.slots.get(blocks[pos // size].block_id, {})
                 assert slot.get(pos % size) == keys[pos + 1], (request, pos)
 
@@ -358,11 +374,20 @@ def test_hybrid_resumes_only_at_commit_points():
 
 
 @pytest.mark.parametrize("budget", [8192, 24])
-@pytest.mark.parametrize("hybrid", [False, True])
+@pytest.mark.parametrize(
+    "hybrid,sliding_window", [(False, None), (True, None), (False, 32)]
+)
 @pytest.mark.parametrize("seed", range(8))
-def test_fuzz_invariants(seed: int, hybrid: bool, budget: int):
+def test_fuzz_invariants(
+    seed: int, hybrid: bool, sliding_window: int | None, budget: int
+):
     rng = random.Random(seed)
-    h = Harness(num_blocks=60, hybrid=hybrid, max_num_batched_tokens=budget)
+    h = Harness(
+        num_blocks=60,
+        hybrid=hybrid,
+        sliding_window=sliding_window,
+        max_num_batched_tokens=budget,
+    )
     done: list[Request] = []
     live: list[Request] = []
     for _ in range(400):
