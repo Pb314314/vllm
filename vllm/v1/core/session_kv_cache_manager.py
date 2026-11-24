@@ -77,7 +77,7 @@ class _Node:
         "start",
         "end",
         "blocks",
-        "num_children",
+        "children",
         "commit_points",
     )
 
@@ -97,7 +97,7 @@ class _Node:
         # Per KV cache group: blocks for block indices
         # `[start // block_size, cdiv(end, block_size))`.
         self.blocks = blocks
-        self.num_children = 0
+        self.children: list[_Node] = []
         self.commit_points = commit_points
 
     def resume_length(self, length: int, alignment: int) -> int:
@@ -144,9 +144,10 @@ class SessionKVCacheManager(KVCacheManager):
         self.nodes: OrderedDict[int, _Node] = OrderedDict()
         self._listeners: list[Callable[[StoreEvent], None]] = []
         self._rebind: Callable[[Request], SessionBinding] | None = None
-        # Attaches handed to the scheduler but not yet allocated: protected
-        # from eviction until the request holds its own references.
-        self._pending: dict[str, tuple[list[_Node], int]] = {}
+        # The attach just handed to the scheduler, protected from eviction
+        # only while that request allocates. Like prefix caching, a waiting
+        # request's match never keeps running requests from growing.
+        self._pending: tuple[str, list[_Node], int] | None = None
         # Deepest position on each running request's path held by a node.
         self._tip: dict[str, tuple[_Node | None, int]] = {}
         # The node each running request publishes and extends as it computes.
@@ -181,7 +182,7 @@ class SessionKVCacheManager(KVCacheManager):
     def get_computed_blocks(
         self, request: Request, max_cache_hit_length: int | None = None
     ) -> tuple[KVCacheBlocks, int, int]:
-        self._pending.pop(request.request_id, None)
+        self._pending = None
         binding = request.session_binding
         if not self.prefix_cache_lookup_enabled(request) or binding is None:
             return self.empty_kv_cache_blocks, 0, 0
@@ -206,7 +207,7 @@ class SessionKVCacheManager(KVCacheManager):
 
         node, length = found
         path = self._path(node)
-        self._pending[request.request_id] = (path, length)
+        self._pending = (request.request_id, path, length)
         blocks = tuple(
             self._assemble(path, length, group)
             for group in range(len(self.block_sizes))
@@ -254,13 +255,15 @@ class SessionKVCacheManager(KVCacheManager):
     def allocate_slots(
         self, request: Request, num_new_tokens: int, *args: Any, **kwargs: Any
     ) -> KVCacheBlocks | None:
+        if self._pending is not None and self._pending[0] != request.request_id:
+            self._pending = None
         new_blocks = super().allocate_slots(request, num_new_tokens, *args, **kwargs)
+        pending, self._pending = self._pending, None
         if new_blocks is None:
             return None
         num_scheduled_end = request.num_computed_tokens + num_new_tokens
-        pending = self._pending.pop(request.request_id, None)
         if pending is not None:
-            path, length = pending
+            _, path, length = pending
             num_scheduled_end += length
             self._tip[request.request_id] = (path[0], length)
             for node in path:
@@ -307,7 +310,7 @@ class SessionKVCacheManager(KVCacheManager):
         self._next_node_id += 1
         self.nodes[node.node_id] = node
         if parent is not None:
-            parent.num_children += 1
+            parent.children.append(node)
         self._tip[request.request_id] = (node, end)
         self._own[request.request_id] = node
         self._publish_seq = self.seq + 1
@@ -366,20 +369,23 @@ class SessionKVCacheManager(KVCacheManager):
 
     def free(self, request: Request) -> None:
         request_id = request.request_id
-        self._pending.pop(request_id, None)
+        if self._pending is not None and self._pending[0] == request_id:
+            self._pending = None
         if request.is_finished():
             committed = None
             end = request.num_computed_tokens
             if request.status in _PUBLISHED and 0 < end <= request.num_tokens:
                 committed = self._publish(request, end)
-            self._tip.pop(request_id, None)
-            self._own.pop(request_id, None)
             node_id = (
                 committed.node_id
                 if committed is not None and request.status in _COMMITTED
                 else None
             )
             self._emit(lambda seq: RequestFinished(seq, request_id, node_id))
+        # A preempted request's chunks stay published but unprotected, as
+        # with prefix caching; it re-attaches to them like any new request.
+        self._tip.pop(request_id, None)
+        self._own.pop(request_id, None)
         super().free(request)
 
     # ---------------------------------------------------------------- eviction
@@ -397,70 +403,81 @@ class SessionKVCacheManager(KVCacheManager):
         return deficit <= 0
 
     def _protected(self) -> set[int]:
-        protected = {
-            node.node_id for path, _ in self._pending.values() for node in path
-        }
+        protected = (
+            {node.node_id for node in self._pending[1]} if self._pending else set()
+        )
         protected.update(
             node.node_id for node, _ in self._tip.values() if node is not None
         )
         return protected
 
     def _num_reclaimable_blocks(self, limit: int) -> int:
-        """Count blocks only idle states hold, stopping at `limit` (a lower
-        bound: blocks two idle states share are not counted)."""
+        """Count blocks eviction can free now, stopping at `limit` (a lower
+        bound: freeing a leaf can expose more of its parent)."""
         protected = self._protected()
-        seen: set[int] = set()
+        count = 0
         for node in self.nodes.values():
-            if node.node_id in protected:
-                continue
-            for group in node.blocks:
-                for block in group:
-                    if block.ref_cnt == 1:
-                        seen.add(block.block_id)
-                        if len(seen) >= limit:
-                            return len(seen)
-        return len(seen)
+            if node.node_id not in protected:
+                count += self._num_trimmable_blocks(node)
+                if count >= limit:
+                    break
+        return count
 
     def _evict(self, num_blocks: int) -> bool:
         """Free up to `num_blocks` from the tail of the least recently used
-        leaf that has blocks of its own, like prefix caching's block LRU."""
+        idle state that has blocks of its own, like prefix caching's LRU."""
         protected = self._protected()
-        idle_leaves = [
-            node
-            for node in self.nodes.values()
-            if not node.num_children and node.node_id not in protected
-        ]
-        for node in idle_leaves:
+        idle = [node for node in self.nodes.values() if node.node_id not in protected]
+        for node in idle:
             if self._trim(node, num_blocks):
                 return True
+        idle_leaves = [node for node in idle if not node.children]
         if idle_leaves:
             # Every idle leaf only shares blocks; dropping one exposes its
-            # parent as the next leaf.
+            # parent's tail.
             self._remove(idle_leaves[0])
             return True
         return False
 
-    def _trim(self, node: _Node, num_blocks: int) -> int:
-        if self.commit_points_only or len(self.block_sizes) > 1:
-            if not any(b.ref_cnt == 1 for group in node.blocks for b in group):
+    def _trims_whole_nodes(self) -> bool:
+        return self.commit_points_only or len(self.block_sizes) > 1
+
+    def _num_kept_blocks(self, node: _Node) -> int:
+        """Blocks of `node` that its children's block tables read. Attention
+        resumes are block aligned, so nothing reads a partial last block
+        that a child re-covers."""
+        block_size = self.block_sizes[0]
+        floor = max((child.start for child in node.children), default=node.start)
+        return floor // block_size - node.start // block_size
+
+    def _num_trimmable_blocks(self, node: _Node) -> int:
+        if self._trims_whole_nodes():
+            if node.children:
                 return 0
-            freed = sum(b.ref_cnt == 1 for group in node.blocks for b in group)
-            self._remove(node)
-            return freed
+            return sum(b.ref_cnt == 1 for group in node.blocks for b in group)
         blocks = node.blocks[0]
         keep = len(blocks)
-        while (
-            keep and blocks[keep - 1].ref_cnt == 1 and len(blocks) - keep < num_blocks
-        ):
+        kept = self._num_kept_blocks(node)
+        while keep > kept and blocks[keep - 1].ref_cnt == 1:
             keep -= 1
-        freed = len(blocks) - keep
+        return len(blocks) - keep
+
+    def _trim(self, node: _Node, num_blocks: int) -> int:
+        freed = self._num_trimmable_blocks(node)
         if not freed:
             return 0
-        block_size = self.block_sizes[0]
-        end = min(node.end, (node.start // block_size + keep) * block_size)
-        if end <= node.start:
+        if self._trims_whole_nodes():
             self._remove(node)
             return freed
+        freed = min(freed, num_blocks)
+        blocks = node.blocks[0]
+        keep = len(blocks) - freed
+        if not keep and not node.children:
+            self._remove(node)
+            return freed
+        block_size = self.block_sizes[0]
+        floor = max((child.start for child in node.children), default=node.start)
+        end = max(floor, min(node.end, (node.start // block_size + keep) * block_size))
         self.block_pool.free_blocks(reversed(blocks[keep:]))
         del blocks[keep:]
         node.end = end
@@ -471,7 +488,7 @@ class SessionKVCacheManager(KVCacheManager):
     def _remove(self, node: _Node) -> None:
         del self.nodes[node.node_id]
         if node.parent is not None:
-            node.parent.num_children -= 1
+            node.parent.children.remove(node)
         freed = sum(b.ref_cnt == 1 for group in node.blocks for b in group)
         self.num_evicted_blocks += freed
         for group in node.blocks:
@@ -483,7 +500,7 @@ class SessionKVCacheManager(KVCacheManager):
             for group in node.blocks:
                 self.block_pool.free_blocks(reversed(group))
         self.nodes.clear()
-        self._pending.clear()
+        self._pending = None
         self._tip.clear()
         self._own.clear()
         self.epoch += 1
