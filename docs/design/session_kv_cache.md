@@ -87,8 +87,17 @@ the deficit it trims the least recently used idle nodes from their tails, block 
 like prefix caching's block LRU (hybrid nodes are removed whole). A waiting request's match
 and a preempted request's chunks are not protected, again matching prefix caching.
 
+## Group kinds
+
+| Group | What a node holds |
+|---|---|
+| Full attention, MLA, indexer caches | Blocks by token position. Compressed caches (`tokens_per_state > 1`) complete a state only at multiples of the ratio, so hybrid commit points are multiples of every ratio. |
+| Sliding window | Every window block the node covers, as prefix caching keeps freed out-of-window blocks cached. |
+| Mamba / GDN / KDA | One state block per commit point. |
+| Ring buffers, windows rebuilt by bounded replay (`prefix_cacheable = False`) | Nothing: per-request scratch; a resumed request starts them fresh, as with prefix caching. |
+
 ## Not supported yet
 
-Sliding-window and sparse attention, KV connectors (P/D, offloading), KV cache events,
+KV connectors (P/D, offloading, HiSparse), KV cache events,
 LoRA, multimodal inputs, prompt embeddings, streaming input, pipeline parallelism, and
 encoder-decoder models. Unsupported configurations fail at startup; unsupported requests are rejected.

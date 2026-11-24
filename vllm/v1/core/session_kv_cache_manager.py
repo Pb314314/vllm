@@ -172,6 +172,31 @@ class SessionKVCacheManager(KVCacheManager):
         # rest of the block, which is cheaper than copying it. Hybrid models
         # must resume exactly at a commit point, copying the boundary blocks.
         self.resume_alignment = math.lcm(*positional)
+        # Compressed caches (`tokens_per_state > 1`, e.g. DeepSeek V4.1 and
+        # GLM-5.3 indexers) finish a state only at a multiple of the ratio;
+        # the open group lives in per-request scratch. A hybrid state saved
+        # elsewhere could not be resumed, so commit points are multiples of
+        # every ratio. Attention-only resumes are block aligned, which blocks
+        # (whole numbers of states) already satisfy.
+        ratios = [
+            m.kv_cache_spec.tokens_per_state
+            for m in managers
+            if self._positional(m) and not isinstance(m, MambaManager)
+        ]
+        if any(not isinstance(r, int) for r in ratios):
+            raise ValueError("Session KV cache needs whole-token compression ratios")
+        self.commit_alignment = math.lcm(1, *ratios)
+        assert all(
+            m.block_size % self.commit_alignment == 0
+            for m in managers
+            if self._positional(m) and not isinstance(m, MambaManager)
+        )
+        # A hybrid request's own final state is unusable when it sits in a
+        # speculative block or off the commit alignment, so it also saves a
+        # state where its prefill ends (rounded down to the alignment).
+        self.save_at_prefill_end = self.commit_points_only and (
+            self.speculative_state or self.commit_alignment > 1
+        )
 
         self.epoch = 0
         self.seq = 0
@@ -249,7 +274,7 @@ class SessionKVCacheManager(KVCacheManager):
             if binding.candidates:
                 self.num_stale_bindings += 1
         checkpoint = self._checkpoint_position(
-            min(binding.match_length, limit), found[1] if found else 0
+            request, min(binding.match_length, limit), found[1] if found else 0
         )
         if found is None:
             return self.empty_kv_cache_blocks, 0, checkpoint
@@ -271,14 +296,27 @@ class SessionKVCacheManager(KVCacheManager):
         self._scheduled_from.clear()
         return super().take_kv_cache_block_copies()
 
-    def _checkpoint_position(self, shared: int, resume: int) -> int:
-        """Where a hybrid request should stop a prefill chunk and save its
-        recurrent state: the end of the prefix it shares with other requests,
-        when that is far enough past where it resumes to be worth a state.
-        Attention-only models publish every chunk and need no stop."""
-        if self.commit_points_only and shared - resume >= self.min_checkpoint_gap:
+    def _checkpoint_position(self, request: Request, shared: int, resume: int) -> int:
+        """Where a hybrid request should first stop a prefill chunk and save
+        its recurrent state: the end of the prefix it shares with other
+        requests, when that is far enough past where it resumes to be worth a
+        state, else where its prefill state must be saved. Attention-only
+        models publish every chunk and need no stop."""
+        if not self.commit_points_only:
+            return 0
+        shared -= shared % self.commit_alignment
+        if shared - resume >= self.min_checkpoint_gap:
             return shared
-        return 0
+        prefill_end = self._prefill_save_point(request)
+        return prefill_end if prefill_end > resume else 0
+
+    def _prefill_save_point(self, request: Request) -> int:
+        """Where a hybrid request saves its state at the end of its prefill,
+        when its final state will not be usable; 0 otherwise."""
+        if not self.save_at_prefill_end:
+            return 0
+        end = request.num_prompt_tokens
+        return end - end % self.commit_alignment
 
     def _resume_point(
         self, node: _Node | None, length: int
@@ -350,21 +388,23 @@ class SessionKVCacheManager(KVCacheManager):
             self.num_attached_requests += 1
             self.num_attached_tokens += length
         boundary = request.num_computed_tokens
+        prefill_end = self._prefill_save_point(request)
         if (
             self.commit_points_only
             and boundary
-            and (
-                boundary == request.shared_prefix_boundary
-                or (self.speculative_state and boundary == request.num_prompt_tokens)
-            )
+            and boundary in (request.shared_prefix_boundary, prefill_end)
             and not self._resumable_at(request, boundary)
         ):
             # The previous chunk stopped where this request diverges from
-            # others, or ended its prefill under speculative decoding; save a
-            # copy of its state before this step advances it.
+            # others, or where its prefill state must be saved; save a copy
+            # of its state before this step advances it.
             node = self._publish(request, boundary)
             if node is not None:
                 self._seal(request, node, boundary, copy=True)
+            if prefill_end > boundary == request.shared_prefix_boundary:
+                # The scheduler stops each prefill chunk at this boundary;
+                # after the divergence, stop next where the prefill ends.
+                request.shared_prefix_boundary = prefill_end
         # Like prefix caching, publish each prompt chunk from the step that
         # computes it: every attention layer writes all tokens' KV before any
         # request in the batch reads it, and a preempted request can resume
@@ -441,7 +481,11 @@ class SessionKVCacheManager(KVCacheManager):
         giving it the recurrent state there: a copy if the request computes
         past it, else the request's own state. A sealed node never changes."""
         request_id = request.request_id
-        if node is not self._own.get(request_id) or node.end != end:
+        if (
+            node is not self._own.get(request_id)
+            or node.end != end
+            or end % self.commit_alignment
+        ):
             return False
         managers = self.coordinator.single_type_managers
         recurrent = [g for g, m in enumerate(managers) if isinstance(m, MambaManager)]

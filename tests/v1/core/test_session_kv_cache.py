@@ -41,6 +41,7 @@ class Harness:
         num_speculative_blocks: int = 0,
         sliding_window: int | None = None,
         ring: bool = False,
+        compress_ratio: int = 1,
         **kwargs,
     ):
         groups = None
@@ -70,7 +71,11 @@ class Harness:
         if hybrid:
             groups = [
                 FullAttentionSpec(
-                    block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
+                    block_size=BLOCK,
+                    num_kv_heads=1,
+                    head_size=1,
+                    dtype=torch.float32,
+                    tokens_per_state=compress_ratio,
                 ),
                 new_mamba_spec(
                     block_size=2048, num_speculative_blocks=num_speculative_blocks
@@ -734,4 +739,21 @@ def test_ring_buffer_is_scratch_and_resume_stays_aligned():
     h.step()
     assert h.cached[second.request_id] == 48
     assert len(ring.req_to_blocks[second.request_id]) == 1
+    h.run(second)
+
+
+def test_hybrid_with_compressed_cache_saves_only_whole_groups():
+    """With a compressed cache (GLM-5.3 / DeepSeek V4.1 style), a group still
+    being compressed lives in per-request scratch, so a hybrid state is saved
+    only at multiples of the ratio: a request stopping mid-group saves where
+    its prefill ends, rounded down, and continuations resume there."""
+    h = Harness(hybrid=True, compress_ratio=4)
+    first = h.add(list(range(41)), max_tokens=3)
+    h.run(first)
+    assert first.num_computed_tokens % 4
+    points = [p for n in h.store.nodes.values() for p in n.commit_points or ()]
+    assert points and all(p % 4 == 0 for p in points)
+    second = h.add(history(first) + list(range(300, 310)))
+    h.step()
+    assert h.cached[second.request_id] == 40
     h.run(second)
