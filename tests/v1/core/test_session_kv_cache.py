@@ -79,10 +79,18 @@ class Harness:
         output = self.sched.schedule()
         for new in output.scheduled_new_reqs:
             self.cached.setdefault(new.req_id, new.num_computed_tokens)
-        for copy in output.kv_cache_block_copies or ():
-            self.slots[copy.dst_block_id] = dict(self.slots.get(copy.src_block_id, {}))
-            if copy.src_block_id in self.states:
-                self.states[copy.dst_block_id] = self.states[copy.src_block_id]
+        # The worker gathers every source before writing any destination.
+        copies = output.kv_cache_block_copies or ()
+        sources = [
+            (dict(self.slots.get(c.src_block_id, {})), self.states.get(c.src_block_id))
+            for c in copies
+        ]
+        for copy, (slots, state) in zip(copies, sources):
+            self.slots[copy.dst_block_id] = slots
+            if state is not None:
+                self.states[copy.dst_block_id] = state
+            else:
+                self.states.pop(copy.dst_block_id, None)
         # Within a step every attention layer writes all tokens' KV before any
         # request reads it; a recurrent state is read before it is updated.
         spans = []

@@ -26,7 +26,7 @@ from typing import Any
 from vllm.config import VllmConfig
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
-from vllm.v1.core.kv_cache_utils import KVCacheBlock
+from vllm.v1.core.kv_cache_utils import KVCacheBlock, KVCacheBlockCopy
 from vllm.v1.core.single_type_kv_cache_manager import (
     FullAttentionManager,
     MambaManager,
@@ -160,6 +160,9 @@ class SessionKVCacheManager(KVCacheManager):
         self._tip: dict[str, tuple[_Node | None, int]] = {}
         # The node each running request publishes and extends as it computes.
         self._own: dict[str, _Node] = {}
+        # Checkpoints whose recurrent state is copied with this step's
+        # batched block copies: not a copy source until the step is sent.
+        self._unsettled: set[int] = set()
 
         self.num_attached_requests = 0
         self.num_attached_tokens = 0
@@ -228,6 +231,12 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return self.create_kv_cache_blocks(blocks), length, checkpoint
 
+    def take_kv_cache_block_copies(
+        self,
+    ) -> tuple[list[KVCacheBlockCopy], list[KVCacheBlock]]:
+        self._unsettled.clear()
+        return super().take_kv_cache_block_copies()
+
     def _checkpoint_position(self, shared: int, resume: int) -> int:
         """Where a hybrid request should stop a prefill chunk and save its
         recurrent state: the end of the prefix it shares with other requests,
@@ -242,7 +251,9 @@ class SessionKVCacheManager(KVCacheManager):
     ) -> tuple[_Node, int] | None:
         # A truncated or partially matching node falls back to its ancestors.
         while node is not None and length > 0:
-            resume = node.resume_length(length, self.resume_alignment)
+            resume = 0
+            if node.node_id not in self._unsettled:
+                resume = node.resume_length(length, self.resume_alignment)
             if resume:
                 return node, resume
             length = min(length, node.start)
@@ -352,6 +363,7 @@ class SessionKVCacheManager(KVCacheManager):
             for m, group in zip(managers, blocks):
                 if isinstance(m, MambaManager):
                     group[:] = [m.copy_block(block) for block in group]
+            self._unsettled.add(self._next_node_id)
         self.block_pool.touch([b for group in blocks for b in group])
         commit_points = (end,) if self.commit_points_only else None
         node = _Node(self._next_node_id, parent, start, end, blocks, commit_points)
@@ -569,6 +581,7 @@ class SessionKVCacheManager(KVCacheManager):
                 self.block_pool.free_blocks(reversed(group))
         self.nodes.clear()
         self._pending = None
+        self._unsettled.clear()
         self._tip.clear()
         self._own.clear()
         self.epoch += 1
