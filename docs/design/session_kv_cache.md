@@ -55,7 +55,7 @@ resumable) and become resumable when *sealed* with a recurrent state at their en
 
 - where the request stops (its own state), or
 - at a **divergence checkpoint**: when the resolver reports that a request shares at least
-  a block more content with some state than it can resume from, the store returns that
+  an attention block (at most 256 tokens) more content with some state than it can resume from, the store returns that
   position as `shared_prefix_boundary`, the scheduler ends a prefill chunk there, and on the
   next step the store copies the state into a new node before the request advances it in
   place. Conversations that share a system prompt therefore resume after the second one.

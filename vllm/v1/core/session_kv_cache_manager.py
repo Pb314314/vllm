@@ -47,6 +47,9 @@ _COMMITTED = (RequestStatus.FINISHED_STOPPED, RequestStatus.FINISHED_LENGTH_CAPP
 # Aborted requests (including stop strings, which the frontend aborts) still
 # computed valid KV; they publish it without advancing their session.
 _PUBLISHED = (*_COMMITTED, RequestStatus.FINISHED_ABORTED)
+# Provisional: the longest shared span a hybrid divergence must have before
+# it is saved, for models whose attention block is larger than this.
+_MAX_CHECKPOINT_GAP = 256
 
 
 def validate_session_cache_config(vllm_config: VllmConfig) -> None:
@@ -145,6 +148,12 @@ class SessionKVCacheManager(KVCacheManager):
             else 0
         )
         self.block_sizes = [m.block_size for m in managers]
+        # A divergence checkpoint costs one recurrent state block. Require the
+        # shared span to cover an attention block (the same memory), capped at
+        # _MAX_CHECKPOINT_GAP so hybrid models with very large blocks still
+        # share common system prompts; shorter spans (such as a chat
+        # template's header) are recomputed.
+        self.min_checkpoint_gap = min(*self.block_sizes, _MAX_CHECKPOINT_GAP)
         # Attention-only models resume at block boundaries and recompute the
         # rest of the block, which is cheaper than copying it. Hybrid models
         # must resume exactly at a commit point, copying the boundary blocks.
@@ -251,9 +260,9 @@ class SessionKVCacheManager(KVCacheManager):
     def _checkpoint_position(self, shared: int, resume: int) -> int:
         """Where a hybrid request should stop a prefill chunk and save its
         recurrent state: the end of the prefix it shares with other requests,
-        when that is at least a block past where it resumes. Attention-only
-        models publish every chunk and need no stop."""
-        if self.commit_points_only and shared - resume >= min(self.block_sizes):
+        when that is far enough past where it resumes to be worth a state.
+        Attention-only models publish every chunk and need no stop."""
+        if self.commit_points_only and shared - resume >= self.min_checkpoint_gap:
             return shared
         return 0
 
