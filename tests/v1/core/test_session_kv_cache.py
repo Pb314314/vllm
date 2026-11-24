@@ -15,6 +15,7 @@ import torch
 
 from vllm.sampling_params import SamplingParams
 from vllm.v1.core.sched.scheduler import Scheduler
+from vllm.v1.core.session_kv_cache_manager import validate_session_request
 from vllm.v1.core.single_type_kv_cache_manager import MambaManager
 from vllm.v1.kv_cache_interface import FullAttentionSpec
 from vllm.v1.outputs import ModelRunnerOutput
@@ -115,10 +116,8 @@ class Harness:
         sampled = []
         for req_id in req_ids:
             request = self.sched.requests[req_id]
-            done = (
-                request.num_computed_tokens + output.num_scheduled_tokens[req_id]
-                >= request.num_tokens
-            )
+            # `schedule()` already advanced `num_computed_tokens`.
+            done = request.num_computed_tokens >= request.num_tokens
             sampled.append([SAMPLED] if done else [])
         self.sched.update_from_output(
             output,
@@ -524,7 +523,7 @@ def test_preempted_request_chunks_are_reclaimable():
     h.step()  # [0, 64) published in its own node
     h.sched.running.remove(writer)
     h.sched._preempt_request(writer, timestamp=0.0)
-    assert h.store._num_reclaimable_blocks(100) == 64 // BLOCK
+    assert h.store._num_reclaimable_blocks() == 64 // BLOCK
     h.run(writer)
     assert writer.num_computed_tokens == 101
 
@@ -604,3 +603,71 @@ def test_hybrid_with_speculative_state_resumes_where_its_prefill_ended():
     h.step()
     assert h.cached[second.request_id] == 40
     h.run(second)
+
+
+def _add_with_priority(h: Harness, tokens: list[int], priority: int) -> Request:
+    params = SamplingParams(max_tokens=2, ignore_eos=True)
+    params.update_from_generation_config({}, EOS_TOKEN_ID)
+    request = Request(f"p{h._next}", tokens, params, None, priority=priority)
+    h._next += 1
+    request.session_binding = h.resolver.resolve(request)
+    h.sched.add_request(request)
+    return request
+
+
+@pytest.mark.parametrize("num_blocks", range(14, 30))
+def test_priority_preemption_unpublishes_the_chunk_it_scheduled(num_blocks: int):
+    """Under the priority policy a request can be preempted after its chunk
+    was scheduled (and published) in the same step; that chunk is never
+    computed, so nobody, including the request itself, may resume from it."""
+    h = Harness(
+        num_blocks=num_blocks,
+        scheduling_policy="priority",
+        long_prefill_token_threshold=32,
+        max_num_batched_tokens=64,
+    )
+    low = _add_with_priority(h, list(range(1000, 1000 + 16 * 12)), priority=1)
+    h.step()
+    high = _add_with_priority(h, list(range(2000, 2000 + 16 * 6)), priority=0)
+    h.run(low, high)
+
+
+def test_hybrid_checkpoint_sharing_a_block_with_its_child_is_reclaimable():
+    """A divergence inside a block leaves that block held by both the
+    checkpoint and its child; evicting both frees it, so an idle cache must
+    still admit what an empty one admits."""
+
+    def admits(h: Harness, num_tokens: int) -> bool:
+        request = h.add(list(range(5000, 5000 + num_tokens)), max_tokens=1)
+        h.step()
+        return request.status != RequestStatus.WAITING
+
+    largest = max(
+        n
+        for n in range(15, 16 * 40, 16)
+        if admits(Harness(num_blocks=40, hybrid=True), n)
+    )
+    h = Harness(num_blocks=40, hybrid=True)
+    system = list(range(1000, 1100))
+    for suffix in (2000, 3000):
+        h.run(h.add(system + list(range(suffix, suffix + 40))))
+    assert any(b.ref_cnt > 1 for n in h.store.nodes.values() for b in n.blocks[0])
+    assert admits(h, largest)
+
+
+def test_streaming_input_is_rejected():
+    params = SamplingParams(max_tokens=2)
+    request = Request("s", [1, 2, 3], params, None, resumable=True)
+    with pytest.raises(ValueError, match="streaming input"):
+        validate_session_request(request)
+
+
+def test_reset_with_running_requests_keeps_states():
+    h = Harness()
+    h.run(h.add(list(range(40))))
+    nodes = dict(h.store.nodes)
+    running = h.add(list(range(500, 540)), max_tokens=20)
+    h.step()
+    assert not h.store.reset_prefix_cache()
+    assert nodes.keys() <= h.store.nodes.keys()
+    h.run(running)

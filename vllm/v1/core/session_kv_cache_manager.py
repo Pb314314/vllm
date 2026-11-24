@@ -19,7 +19,7 @@ Invariants:
 """
 
 import math
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Callable
 from typing import Any
 
@@ -67,6 +67,8 @@ def validate_session_cache_config(vllm_config: VllmConfig) -> None:
 def validate_session_request(request: Request) -> None:
     if request.prompt_embeds is not None or request.mm_features:
         raise ValueError("Session KV cache only supports text token prompts")
+    if request.resumable:
+        raise ValueError("Session KV cache does not support streaming input yet")
 
 
 class _Node:
@@ -167,6 +169,9 @@ class SessionKVCacheManager(KVCacheManager):
         # Checkpoints whose recurrent state is copied with this step's
         # batched block copies: not a copy source until the step is sent.
         self._unsettled: set[int] = set()
+        # Tokens each request had computed before the chunk scheduled this
+        # step, in case it is preempted before the step is sent.
+        self._scheduled_from: dict[str, int] = {}
 
         self.num_attached_requests = 0
         self.num_attached_tokens = 0
@@ -238,7 +243,9 @@ class SessionKVCacheManager(KVCacheManager):
     def take_kv_cache_block_copies(
         self,
     ) -> tuple[list[KVCacheBlockCopy], list[KVCacheBlock]]:
+        # Called once at the end of every scheduling step.
         self._unsettled.clear()
+        self._scheduled_from.clear()
         return super().take_kv_cache_block_copies()
 
     def _checkpoint_position(self, shared: int, resume: int) -> int:
@@ -303,6 +310,8 @@ class SessionKVCacheManager(KVCacheManager):
         if pending is not None:
             _, path, length = pending
             num_scheduled_end += length
+        self._scheduled_from[request.request_id] = num_scheduled_end - num_new_tokens
+        if pending is not None:
             self._tip[request.request_id] = (path[0], length)
             for node in path:
                 self.nodes.move_to_end(node.node_id)
@@ -492,6 +501,13 @@ class SessionKVCacheManager(KVCacheManager):
                 else None
             )
             self._emit(lambda seq: RequestFinished(seq, request_id, node_id))
+        else:
+            own = self._own.get(request_id)
+            computed = self._scheduled_from.get(request_id)
+            if own is not None and computed is not None and own.end > computed:
+                # Preempted in the step that scheduled it (priority policy):
+                # the chunk it just published will never be computed.
+                self._cut(own, computed)
         # A preempted request's chunks stay published but unprotected, as
         # with prefix caching; it re-attaches to them like any new request.
         self._tip.pop(request_id, None)
@@ -504,7 +520,7 @@ class SessionKVCacheManager(KVCacheManager):
         deficit = num_blocks - self.block_pool.get_num_free_blocks()
         if deficit <= 0:
             return True
-        if self._num_reclaimable_blocks(deficit) < deficit:
+        if self._num_reclaimable_blocks() < deficit:
             return False
         while (
             deficit := num_blocks - self.block_pool.get_num_free_blocks()
@@ -521,10 +537,10 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return protected
 
-    def _num_reclaimable_blocks(self, limit: int) -> int:
-        """Count blocks repeated eviction can free, stopping at `limit`: every
-        block only idle states hold, except below where a running or attaching
-        request reads through an ancestor."""
+    def _num_reclaimable_blocks(self) -> int:
+        """Count blocks repeated eviction can free: every block whose
+        references all come from idle states, except below where a running
+        or attaching request reads through an ancestor."""
         protected = self._protected()
         # Per ancestor of a protected node: the highest start it must keep.
         floors: dict[int, int] = {}
@@ -537,19 +553,23 @@ class SessionKVCacheManager(KVCacheManager):
                 if seen:
                     break
                 child, parent = parent, parent.parent
-        count = 0
+        held: Counter[int] = Counter()
+        blocks: dict[int, KVCacheBlock] = {}
         for node in self.nodes.values():
             if node.node_id in protected:
                 continue
             floor = floors.get(node.node_id)
             if floor is None:
-                count += sum(b.ref_cnt == 1 for group in node.blocks for b in group)
+                candidates = [b for group in node.blocks for b in group]
             elif not self._trims_whole_nodes():
                 first = floor // self.block_sizes[0] - node.start // self.block_sizes[0]
-                count += sum(b.ref_cnt == 1 for b in node.blocks[0][first:])
-            if count >= limit:
-                break
-        return count
+                candidates = node.blocks[0][first:]
+            else:
+                continue
+            for block in candidates:
+                held[block.block_id] += 1
+                blocks[block.block_id] = block
+        return sum(blocks[i].ref_cnt == refs for i, refs in held.items())
 
     def _evict(self, num_blocks: int) -> bool:
         """Free up to `num_blocks` from the tail of the least recently used
@@ -604,14 +624,26 @@ class SessionKVCacheManager(KVCacheManager):
             self._remove(node)
             return freed
         block_size = self.block_sizes[0]
-        floor = max((child.start for child in node.children), default=node.start)
-        end = max(floor, min(node.end, (node.start // block_size + keep) * block_size))
-        self.block_pool.free_blocks(reversed(blocks[keep:]))
-        del blocks[keep:]
-        node.end = end
+        self._cut(node, (node.start // block_size + keep) * block_size)
         self.num_evicted_blocks += freed
-        self._emit(lambda seq: NodeTruncated(seq, node.node_id, end, None))
         return freed
+
+    def _cut(self, node: _Node, end: int) -> None:
+        """Shrink `node` to `[start, end)`, never below a child's start."""
+        if end <= node.start and not node.children:
+            self._remove(node)
+            return
+        floor = max((child.start for child in node.children), default=node.start)
+        end = max(floor, min(node.end, end))
+        for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
+            if isinstance(manager, MambaManager):
+                continue
+            keep = cdiv(end, manager.block_size) - node.start // manager.block_size
+            self.block_pool.free_blocks(reversed(blocks[keep:]))
+            del blocks[keep:]
+        node.end = end
+        commit_points = node.commit_points
+        self._emit(lambda seq: NodeTruncated(seq, node.node_id, end, commit_points))
 
     def _remove(self, node: _Node) -> None:
         del self.nodes[node.node_id]
@@ -624,6 +656,9 @@ class SessionKVCacheManager(KVCacheManager):
         self._emit(lambda seq: NodeTruncated(seq, node.node_id, node.start, None))
 
     def reset_prefix_cache(self) -> bool:
+        if any(m.req_to_blocks for m in self.coordinator.single_type_managers):
+            # Like prefix caching, never reset under running requests.
+            return False
         for node in reversed(self.nodes.values()):
             for group in node.blocks:
                 self.block_pool.free_blocks(reversed(group))
