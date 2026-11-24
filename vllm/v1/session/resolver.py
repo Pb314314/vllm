@@ -280,6 +280,10 @@ class SessionResolver:
     def _extend(self, event: NodeExtended) -> None:
         node = self.nodes[event.node_id]
         assert node.end == event.start
+        if event.commit_points is not None:
+            node.commit_points = event.commit_points
+        if event.end == event.start:
+            return
         node.tokens += event.tokens
         node.end = event.end
         path = self._path_tokens(node.parent, node.start) + node.tokens

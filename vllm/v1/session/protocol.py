@@ -52,13 +52,15 @@ class NodePublished:
 @dataclass(frozen=True)
 class NodeExtended:
     """The publishing request computed more tokens: `[start, end)` now follow
-    the node's previous end `start`. Earlier content is unchanged."""
+    the node's previous end `start`. Earlier content is unchanged. A hybrid
+    node becomes resumable when it is sealed with `commit_points`."""
 
     seq: int
     node_id: int
     start: int
     end: int
     tokens: bytes
+    commit_points: tuple[int, ...] | None = None
 
 
 @dataclass(frozen=True)

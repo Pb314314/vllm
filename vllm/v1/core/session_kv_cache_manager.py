@@ -304,34 +304,41 @@ class SessionKVCacheManager(KVCacheManager):
                 self.nodes.move_to_end(node.node_id)
             self.num_attached_requests += 1
             self.num_attached_tokens += length
-        checkpoint = request.shared_prefix_boundary
+        boundary = request.shared_prefix_boundary
         if (
             self.commit_points_only
-            and checkpoint
-            and checkpoint == request.num_computed_tokens
-            and self._tip.get(request.request_id, (None, 0))[1] < checkpoint
+            and boundary
+            and boundary == request.num_computed_tokens
+            and not self._resumable_at(request, boundary)
         ):
             # The previous chunk stopped where this request diverges from
-            # others; copy its state before this chunk advances it.
-            self._publish(request, checkpoint, checkpoint=True)
-        if not self.commit_points_only:
-            # Like prefix caching, share each prompt chunk from the step that
-            # computes it: every attention layer writes all tokens' KV before
-            # any request in the batch reads it, and a preempted request can
-            # resume from its own chunks. Recurrent state is updated in place,
-            # so hybrid models publish only where a request stops.
-            end = min(num_scheduled_end, request.num_prompt_tokens)
-            if end > self._tip.get(request.request_id, (None, 0))[1]:
-                self._publish(request, end)
+            # others; save a copy of its state before this chunk advances it.
+            node = self._publish(request, boundary)
+            if node is not None:
+                self._seal(request, node, boundary, copy=True)
+        # Like prefix caching, publish each prompt chunk from the step that
+        # computes it: every attention layer writes all tokens' KV before any
+        # request in the batch reads it, and a preempted request can resume
+        # from its own chunks. Recurrent state is updated in place, so a
+        # hybrid chunk only lets other requests find where they diverge; it
+        # becomes resumable where the request saves or stops its state.
+        end = min(num_scheduled_end, request.num_prompt_tokens)
+        if end > self._tip.get(request.request_id, (None, 0))[1]:
+            self._publish(request, end)
         return new_blocks
 
-    def _publish(
-        self, request: Request, end: int, checkpoint: bool = False
-    ) -> _Node | None:
-        """Publish the request's KV up to `end`. A checkpoint is a node the
-        request does not write after `end`: its recurrent state is a copy."""
+    def _resumable_at(self, request: Request, position: int) -> bool:
+        node, tip = self._tip.get(request.request_id, (None, 0))
+        return (
+            node is not None
+            and tip == position
+            and node.resume_length(position, self.resume_alignment) == position
+        )
+
+    def _publish(self, request: Request, end: int) -> _Node | None:
+        """Publish the request's KV up to `end` in its own node."""
         own = self._own.get(request.request_id)
-        if not checkpoint and own is not None and self._can_extend(request, own):
+        if own is not None and self._can_extend(request, own):
             return self._extend(request, own, end)
         parent, start = self._tip.get(request.request_id, (None, 0))
         if parent is not None and (
@@ -343,7 +350,9 @@ class SessionKVCacheManager(KVCacheManager):
             return parent if end == start else None
         managers = self.coordinator.single_type_managers
         blocks = tuple(
-            list(
+            []
+            if isinstance(m, MambaManager)
+            else list(
                 m.req_to_blocks[request.request_id][
                     start // m.block_size : cdiv(end, m.block_size)
                 ]
@@ -352,28 +361,16 @@ class SessionKVCacheManager(KVCacheManager):
         )
         if any(block.is_null for group in blocks for block in group):
             return None
-        if checkpoint:
-            recurrent = [
-                group
-                for m, group in zip(managers, blocks)
-                if isinstance(m, MambaManager)
-            ]
-            if not self._ensure_free_blocks(sum(map(len, recurrent))):
-                return None
-            for m, group in zip(managers, blocks):
-                if isinstance(m, MambaManager):
-                    group[:] = [m.copy_block(block) for block in group]
-            self._unsettled.add(self._next_node_id)
         self.block_pool.touch([b for group in blocks for b in group])
-        commit_points = (end,) if self.commit_points_only else None
+        # A hybrid node is resumable only once sealed with a recurrent state.
+        commit_points = () if self.commit_points_only else None
         node = _Node(self._next_node_id, parent, start, end, blocks, commit_points)
         self._next_node_id += 1
         self.nodes[node.node_id] = node
         if parent is not None:
             parent.children.append(node)
         self._tip[request.request_id] = (node, end)
-        if not checkpoint:
-            self._own[request.request_id] = node
+        self._own[request.request_id] = node
         self._publish_seq = self.seq + 1
         tokens = pack_tokens(request.all_token_ids[start:end])
         self._emit(
@@ -390,17 +387,53 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return node
 
+    def _seal(self, request: Request, node: _Node, end: int, copy: bool) -> bool:
+        """Make a hybrid request's own node resumable at its end `end` by
+        giving it the recurrent state there: a copy if the request computes
+        past it, else the request's own state. A sealed node never changes."""
+        request_id = request.request_id
+        if node is not self._own.get(request_id) or node.end != end:
+            return False
+        managers = self.coordinator.single_type_managers
+        recurrent = [g for g, m in enumerate(managers) if isinstance(m, MambaManager)]
+        states = [
+            managers[g].req_to_blocks[request_id][
+                node.start // managers[g].block_size : cdiv(end, managers[g].block_size)
+            ]
+            for g in recurrent
+        ]
+        if any(block.is_null for group in states for block in group):
+            return False
+        if copy:
+            if not self._ensure_free_blocks(sum(map(len, states))):
+                return False
+            states = [
+                [managers[g].copy_block(block) for block in group]
+                for g, group in zip(recurrent, states)
+            ]
+            self._unsettled.add(node.node_id)
+        self.block_pool.touch([b for group in states for b in group])
+        for g, group in zip(recurrent, states):
+            node.blocks[g][:] = group
+        node.commit_points = (end,)
+        del self._own[request_id]
+        self._publish_seq = self.seq + 1
+        self._emit(lambda seq: NodeExtended(seq, node.node_id, end, end, b"", (end,)))
+        return True
+
     def _can_extend(self, request: Request, node: _Node) -> bool:
         """A request may append to its own node only while it is still the
         node's tail writer: same position, and still writing the node's last
         (partial) block rather than a copy made after preemption."""
         if (
-            node.commit_points is not None
+            node.commit_points
             or node.node_id not in self.nodes
             or self._tip.get(request.request_id, (None, 0)) != (node, node.end)
         ):
             return False
         for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
+            if isinstance(manager, MambaManager):
+                continue
             last = (node.end - 1) // manager.block_size
             req_blocks = manager.req_to_blocks[request.request_id]
             if node.end % manager.block_size and (
@@ -413,7 +446,9 @@ class SessionKVCacheManager(KVCacheManager):
         if end <= node.end:
             return node
         new_blocks = [
-            manager.req_to_blocks[request.request_id][
+            []
+            if isinstance(manager, MambaManager)
+            else manager.req_to_blocks[request.request_id][
                 cdiv(node.end, manager.block_size) : cdiv(end, manager.block_size)
             ]
             for manager in self.coordinator.single_type_managers
@@ -438,6 +473,10 @@ class SessionKVCacheManager(KVCacheManager):
             end = min(request.num_computed_tokens, request.num_tokens)
             if request.status in _PUBLISHED and end > 0:
                 committed = self._publish(request, end)
+                if committed is not None and self.commit_points_only:
+                    self._seal(request, committed, end, copy=False)
+                    if end not in committed.commit_points:
+                        committed = None
             node_id = (
                 committed.node_id
                 if committed is not None and request.status in _COMMITTED

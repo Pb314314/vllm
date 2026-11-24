@@ -118,7 +118,9 @@ def test_hybrid_conversations_share_a_system_prompt():
     prompt resumes from that state and matches a cold prefill."""
     llm = _llm("Qwen/Qwen3.5-0.8B")
     tokenizer = llm.get_tokenizer()
-    system = tokenizer.encode("You are a careful assistant. Tell me about rivers. " * 90)
+    system = tokenizer.encode(
+        "You are a careful assistant. Tell me about rivers. " * 90
+    )
     questions = [
         tokenizer.encode(f" Question {i}: name a river in country number {i}.")
         for i in range(3)

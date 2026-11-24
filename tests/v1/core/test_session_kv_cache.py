@@ -566,3 +566,20 @@ def test_eagle_resume_stops_before_the_unshared_next_token():
     h.step()
     assert h.cached[second.request_id] == 32
     h.run(second)
+
+
+def test_hybrid_running_prompt_lets_a_concurrent_request_save_the_divergence():
+    """A hybrid prompt is published for matching while it runs, so a request
+    arriving meanwhile still saves its state where the two diverge."""
+    h = Harness(hybrid=True)
+    system = list(range(1000, 1100))
+    first = h.add(system + list(range(2000, 2040)), max_tokens=30)
+    h.step()
+    second = h.add(system + list(range(3000, 3040)), max_tokens=30)
+    h.step()
+    h.step()
+    third = h.add(system + list(range(4000, 4040)))
+    h.step()
+    assert not first.is_finished()
+    assert h.cached[third.request_id] == len(system)
+    h.run(first, second, third)
