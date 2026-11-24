@@ -122,22 +122,26 @@ class SessionKVCacheManager(KVCacheManager):
                 "Session KV cache supports full attention and Mamba layers only; "
                 f"got {sorted({type(m).__name__ for m in managers})}"
             )
-        if any(
-            isinstance(m, MambaManager) and m.num_speculative_blocks for m in managers
-        ):
-            raise ValueError(
-                "Session KV cache does not support speculative decoding with "
-                "Mamba layers yet"
-            )
-        # EAGLE-style draft KV at a position also depends on the next
-        # `draft_lookahead` tokens, so a resumed prefix must stop that many
-        # tokens before the content it is known to share.
-        self.draft_lookahead = (
-            max(1, kwargs.get("num_prefill_lookahead", 0)) if self.use_eagle else 0
-        )
         # Mamba state is valid only where a request stopped, so hybrid models
         # resume at commit points; attention-only models at any position.
         self.commit_points_only = any(isinstance(m, MambaManager) for m in managers)
+        # With speculative decoding, the state after the last verified token
+        # lives in whichever speculative block the acceptance count selects,
+        # so a hybrid request saves its state where its prefill ends instead
+        # of where it stops.
+        self.speculative_state = any(
+            isinstance(m, MambaManager) and m.num_speculative_blocks for m in managers
+        )
+        # EAGLE-style draft KV at a position also depends on the next
+        # `draft_lookahead` tokens. Resuming without them costs draft
+        # acceptance, never output correctness (the target model verifies);
+        # attention-only models give up the few tokens, as prefix caching does,
+        # while hybrid models resume exactly at their saved states.
+        self.draft_lookahead = (
+            max(1, kwargs.get("num_prefill_lookahead", 0))
+            if self.use_eagle and not self.commit_points_only
+            else 0
+        )
         self.block_sizes = [m.block_size for m in managers]
         # Attention-only models resume at block boundaries and recompute the
         # rest of the block, which is cheaper than copying it. Hybrid models
@@ -304,15 +308,19 @@ class SessionKVCacheManager(KVCacheManager):
                 self.nodes.move_to_end(node.node_id)
             self.num_attached_requests += 1
             self.num_attached_tokens += length
-        boundary = request.shared_prefix_boundary
+        boundary = request.num_computed_tokens
         if (
             self.commit_points_only
             and boundary
-            and boundary == request.num_computed_tokens
+            and (
+                boundary == request.shared_prefix_boundary
+                or (self.speculative_state and boundary == request.num_prompt_tokens)
+            )
             and not self._resumable_at(request, boundary)
         ):
             # The previous chunk stopped where this request diverges from
-            # others; save a copy of its state before this chunk advances it.
+            # others, or ended its prefill under speculative decoding; save a
+            # copy of its state before this step advances it.
             node = self._publish(request, boundary)
             if node is not None:
                 self._seal(request, node, boundary, copy=True)
@@ -474,7 +482,8 @@ class SessionKVCacheManager(KVCacheManager):
             if request.status in _PUBLISHED and end > 0:
                 committed = self._publish(request, end)
                 if committed is not None and self.commit_points_only:
-                    self._seal(request, committed, end, copy=False)
+                    if not self.speculative_state:
+                        self._seal(request, committed, end, copy=False)
                     if end not in committed.commit_points:
                         committed = None
             node_id = (

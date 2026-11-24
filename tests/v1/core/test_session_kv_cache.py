@@ -29,14 +29,22 @@ SAMPLED = 7
 
 
 class Harness:
-    def __init__(self, num_blocks: int = 1000, hybrid: bool = False, **kwargs):
+    def __init__(
+        self,
+        num_blocks: int = 1000,
+        hybrid: bool = False,
+        num_speculative_blocks: int = 0,
+        **kwargs,
+    ):
         groups = None
         if hybrid:
             groups = [
                 FullAttentionSpec(
                     block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
                 ),
-                new_mamba_spec(block_size=2048, num_speculative_blocks=0),
+                new_mamba_spec(
+                    block_size=2048, num_speculative_blocks=num_speculative_blocks
+                ),
             ]
         self.sched: Scheduler = create_scheduler(
             session_cache=True,
@@ -583,3 +591,16 @@ def test_hybrid_running_prompt_lets_a_concurrent_request_save_the_divergence():
     assert not first.is_finished()
     assert h.cached[third.request_id] == len(system)
     h.run(first, second, third)
+
+
+def test_hybrid_with_speculative_state_resumes_where_its_prefill_ended():
+    """Under speculative decoding a hybrid request's final state sits in a
+    speculative block chosen by acceptance, so it saves a copy where its
+    prefill ends and a continuation resumes there."""
+    h = Harness(hybrid=True, num_speculative_blocks=2)
+    first = h.add(list(range(40)), max_tokens=5)
+    h.run(first)
+    second = h.add(history(first) + list(range(300, 310)))
+    h.step()
+    assert h.cached[second.request_id] == 40
+    h.run(second)

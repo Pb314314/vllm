@@ -170,3 +170,35 @@ def test_eagle_reuse_matches_recompute():
     (cold,) = _generate(llm, [prompt], 16)
     assert cold.num_cached_tokens == 0
     assert reused.outputs[0].token_ids[:8] == cold.outputs[0].token_ids[:8]
+
+
+def test_hybrid_mtp_reuse_matches_recompute():
+    """Hybrid with MTP speculative decoding: the state after verified tokens
+    sits in a speculative block chosen by acceptance, so a continuation
+    resumes where the previous prompt's prefill ended."""
+    llm = LLM(
+        "Qwen/Qwen3.5-0.8B",
+        speculative_config={"method": "mtp", "num_speculative_tokens": 2},
+        session_cache=True,
+        max_model_len=4096,
+        gpu_memory_utilization=0.4,
+        enforce_eager=True,
+        seed=0,
+        attention_backend="TRITON_ATTN",
+    )
+    tokenizer = llm.get_tokenizer()
+    first = tokenizer.encode("You are a careful assistant. Tell me about rivers. " * 90)
+    (turn1,) = _generate(llm, [first], 24)
+    history = first + list(turn1.outputs[0].token_ids)
+    prompt = history + tokenizer.encode(" Please continue.")
+    (reused,) = _generate(llm, [prompt], 16)
+    assert reused.num_cached_tokens == len(first)
+    assert llm.reset_prefix_cache()
+    (cold,) = _generate(llm, [prompt], 16)
+    got, want = reused.outputs[0], cold.outputs[0]
+    assert got.token_ids[:8] == want.token_ids[:8]
+    diffs = [
+        abs(g[t].logprob - w[t].logprob)
+        for t, g, w in zip(want.token_ids[:8], got.logprobs, want.logprobs)
+    ]
+    assert max(diffs) < 0.1
