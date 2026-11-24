@@ -911,6 +911,13 @@ class EngineCore:
 
     def shutdown(self):
         logger.debug_once("[shutdown] EngineCore: tearing down local resources")
+        if getattr(self, "session_resolver", None) is not None:
+            store = self.scheduler.kv_cache_manager  # type: ignore[attr-defined]
+            logger.info(
+                "Session KV cache stats: resolver %s, store %s",
+                self.session_resolver.stats(),
+                store.session_stats(),
+            )
         self.structured_output_manager.clear_backend()
         if self.model_executor:
             self.model_executor.shutdown()
