@@ -46,9 +46,7 @@ from vllm.pooling_params import PoolingParams
 from vllm.sampling_params import SamplingParams, StructuredOutputsParams
 from vllm.utils.hashing import sha256
 from vllm.v1.core.encoder_cache_manager import EncoderCacheManager
-from vllm.v1.core.kv_cache_coordinator import HybridKVCacheCoordinator
 from vllm.v1.core.kv_cache_manager import KVCacheManager
-from vllm.v1.core.kv_cache_utils import get_request_block_hasher, init_none_hash
 from vllm.v1.core.sched.diffusion_scheduler import (
     DiffusionAsyncScheduler,
     DiffusionScheduler,
@@ -81,6 +79,19 @@ from vllm.v1.outputs import (
 )
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.structured_output import StructuredOutputGrammar, StructuredOutputManager
+
+
+
+# Removed with automatic prefix caching; tests using these exercise APC.
+class HybridKVCacheCoordinator:
+    pass
+
+
+def get_request_block_hasher(*args, **kwargs):
+    raise NotImplementedError("block hashing was removed with prefix caching")
+
+
+init_none_hash = get_request_block_hasher
 
 from .utils import (
     EOS_TOKEN_ID,
@@ -4459,7 +4470,6 @@ def create_scheduler_with_priority(
         log_stats=True,
         structured_output_manager=StructuredOutputManager(vllm_config),
         block_size=block_size,
-        hash_block_size=block_size,
     )
     return scheduler
 
@@ -4489,12 +4499,6 @@ def create_requests_with_priority(
     else:
         arrival_times = [float(i) for i in range(num_requests)]
 
-    global _none_hash_initialized
-    if not _none_hash_initialized:
-        init_none_hash(sha256)
-        _none_hash_initialized = True
-
-    block_hasher = get_request_block_hasher(block_size, sha256)
     sampling_params = SamplingParams(
         ignore_eos=False,
         max_tokens=max_tokens,
@@ -4565,7 +4569,6 @@ def create_requests_with_priority(
             mm_features=mm_features if mm_features else None,
             arrival_time=arrival_times[i],
             priority=priorities[i],
-            block_hasher=block_hasher,
         )
         requests.append(request)
     return requests
@@ -6921,7 +6924,6 @@ def _create_encoder_decoder_scheduler(
         vllm_config=vllm_config,
         kv_cache_config=kv_cache_config,
         block_size=block_size,
-        hash_block_size=block_size,
         structured_output_manager=StructuredOutputManager(vllm_config),
     )
 
@@ -8295,7 +8297,6 @@ def _create_hybrid_mamba_connector_scheduler(
         kv_cache_config=kv_cache_config,
         structured_output_manager=StructuredOutputManager(vllm_config),
         block_size=block_size,
-        hash_block_size=block_size,
         log_stats=True,
     )
 

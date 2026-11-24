@@ -646,28 +646,32 @@ class VllmConfig:
             return 0
         return speculative_config.speculator_config.num_prefill_lookahead_tokens
 
-    def _resolve_num_hash_lookahead_tokens(self) -> int:
-        """Resolve the hash lookahead after the relevant configs are finalized."""
-        speculative_config = self.speculative_config
-        if (
-            speculative_config is None
-            or not speculative_config.use_eagle_block_drop()
-            or speculative_config.disable_lookahead_block_hashes
-        ):
-            return 0
-        kv_transfer_config = self.kv_transfer_config
-        if kv_transfer_config is not None:
-            from vllm.distributed.kv_transfer.kv_connector.factory import (
-                KVConnectorFactory,
+    def _reject_removed_kv_reuse_features(self) -> None:
+        """Session KV (`--session-cache`) is the only KV reuse mechanism; fail
+        on features that depended on automatic prefix caching."""
+        cache_config = self.cache_config
+        removed = {
+            "--enable-prefix-caching (use --session-cache)": (
+                cache_config.enable_prefix_caching
+            ),
+            "KV connectors (--kv-transfer-config)": self.kv_transfer_config is not None,
+            "aux output connector": self.aux_output_config.enabled,
+            "KV cache events": self.kv_events_config is not None
+            and self.kv_events_config.enable_kv_cache_events,
+            f"mamba_cache_mode={cache_config.mamba_cache_mode!r}": (
+                cache_config.mamba_cache_mode != "none"
+            ),
+            "prefix_cache_retention_interval": (
+                cache_config.prefix_cache_retention_interval != 0
+            ),
+            "prefix_match_unit": cache_config.prefix_match_unit is not None,
+        }
+        found = [name for name, present in removed.items() if present]
+        if found:
+            raise ValueError(
+                "Automatic prefix caching was removed; these features depended "
+                f"on it and are no longer supported: {', '.join(found)}"
             )
-
-            connector_cls = KVConnectorFactory.get_connector_class(kv_transfer_config)
-            if not connector_cls.supports_lookahead_block_hashes(kv_transfer_config):
-                return 0
-        elif not self.cache_config.enable_prefix_caching:
-            return 0
-        # The drafter's KV at a block's last position reads this far ahead.
-        return self.num_prefill_lookahead_tokens
 
     @property
     def uniform_decode_query_len(self) -> int:
@@ -1469,9 +1473,9 @@ class VllmConfig:
             # would check the view's architecture against the parent's deployment
             # (unsafe when it is empty: use_mla resolves the architecture registry)
             # and rewrite configs shared with the parent.
-            self.num_hash_lookahead_tokens = self._resolve_num_hash_lookahead_tokens()
             return
 
+        self._reject_removed_kv_reuse_features()
         self._resolve_mm_encoder_only()
 
         if self.is_mm_encoder_only and self.cache_config.enable_prefix_caching:
@@ -2279,7 +2283,6 @@ class VllmConfig:
                 )
         # Log the custom passes that are enabled
         self.compilation_config.pass_config.log_enabled_passes()
-        self.num_hash_lookahead_tokens = self._resolve_num_hash_lookahead_tokens()
 
     def _set_max_num_scheduled_tokens(self):
         """In most cases, the scheduler may schedule a batch with as many tokens as the

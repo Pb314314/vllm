@@ -265,8 +265,8 @@ class CacheConfig:
     sliding_window: int | None = None
     """Sliding window size for the KV cache. This is primarily set in
     `ModelConfig` and that value should be manually duplicated here."""
-    enable_prefix_caching: bool = True
-    """Whether to enable prefix caching."""
+    enable_prefix_caching: bool = False
+    """Removed; must stay False. Use `session_cache` for KV reuse."""
     session_cache: bool = False
     """Reuse KV through session-owned states instead of prefix caching. A
     resolver matches each request's tokens against committed states and the

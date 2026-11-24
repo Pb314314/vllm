@@ -4,7 +4,7 @@
 import enum
 import time
 from collections import deque
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -30,7 +30,6 @@ from vllm.v1.utils import ConstantList
 
 if TYPE_CHECKING:
     from vllm.lora.request import LoRARequest
-    from vllm.v1.core.kv_cache_utils import BlockHash
     from vllm.v1.session.protocol import SessionBinding
 
 
@@ -77,14 +76,12 @@ class Request:
         cache_salt: str | None = None,
         priority: int = 0,
         trace_headers: Mapping[str, str] | None = None,
-        block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
         session_id: str | None = None,
         reasoning_ended: bool | None = None,
         reasoning_parser_kwargs: dict[str, Any] | None = None,
         abort_immediately: bool = False,
         kv_hints: KvHintsEnvelope | None = None,
-        block_hashes: list["BlockHash"] | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -145,9 +142,6 @@ class Request:
         # prompt_embeds). `None` except when both `prompt_token_ids` and
         # `prompt_embeds` are set and their positions are interleaved.
         self.prompt_is_token_ids = prompt_is_token_ids
-        # Cache per-block prompt-embed hashes to avoid rehashing the same
-        # tensor slices when generating extra keys.
-        self._prompt_embeds_per_block_hashes: dict[tuple[int, int], bytes] = {}
         self.num_prompt_tokens = length_from_prompt_token_ids_or_embeds(
             self.prompt_token_ids, prompt_embeds
         )
@@ -235,16 +229,6 @@ class Request:
         # add_request, then observed each verify step); stays None otherwise.
         self.spec_decode_metrics: RequestSpecDecodeMetrics | None = None
 
-        # Prompt block hashes precomputed by the frontend; the hasher continues
-        # from the first block they don't cover. Hidden from the cyclic GC: it
-        # only holds bytes, one per block.
-        self.block_hashes: list[BlockHash] = gc_untrack(block_hashes or [])
-        # Store the block hasher without binding self to avoid creating a
-        # reference cycle (Request -> partial -> Request) that prevents
-        # immediate garbage collection via reference counting.
-        self._block_hasher: Callable[[Request], list[BlockHash]] | None = block_hasher
-        self.update_block_hashes()
-
         self.prefix_cache_hit_limit = self.get_prefix_cache_hit_limit()
 
         # Used for streaming
@@ -260,8 +244,6 @@ class Request:
     def from_engine_core_request(
         cls,
         request: EngineCoreRequest,
-        block_hasher: Callable[["Request"], list["BlockHash"]] | None,
-        block_hashes: list["BlockHash"] | None = None,
     ) -> "Request":
         return cls(
             request_id=request.request_id,
@@ -277,14 +259,12 @@ class Request:
             cache_salt=request.cache_salt,
             priority=request.priority,
             trace_headers=request.trace_headers,
-            block_hasher=block_hasher,
             resumable=request.resumable,
             session_id=request.session_id,
             kv_hints=request.kv_hints,
             reasoning_ended=request.reasoning_ended,
             reasoning_parser_kwargs=request.reasoning_parser_kwargs,
             abort_immediately=request.abort_immediately,
-            block_hashes=block_hashes,
         )
 
     def append_output_token_ids(
@@ -297,23 +277,6 @@ class Request:
         else:
             self._output_token_ids.extend(token_ids)
             self._all_token_ids.extend(token_ids)
-
-        self.update_block_hashes()
-
-    def update_block_hashes(self) -> None:
-        """Compute block hashes for any new full blocks and append them."""
-        if self._block_hasher is not None:
-            self.block_hashes.extend(self._block_hasher(self))
-
-    def truncate_block_hashes(
-        self, hash_block_size: int, num_hash_lookahead_tokens: int = 0
-    ) -> None:
-        """Discard hashes invalidated by truncating the request's tokens."""
-        num_valid_hashes = (
-            max(0, self.num_tokens - num_hash_lookahead_tokens) // hash_block_size
-        )
-        del self.block_hashes[num_valid_hashes:]
-        self._prompt_embeds_per_block_hashes.clear()
 
     @property
     def use_structured_output(self) -> bool:

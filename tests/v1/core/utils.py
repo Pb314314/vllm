@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from typing import TYPE_CHECKING
+
 import torch
 
-from tests.v1.kv_connector.unit.utils import MockKVConfig
 from vllm.config import (
     CacheConfig,
     DiffusionConfig,
@@ -26,9 +27,7 @@ from vllm.multimodal.inputs import (
     PlaceholderRange,
 )
 from vllm.sampling_params import SamplingParams
-from vllm.utils.hashing import sha256
 from vllm.v1.core import kv_cache_planning
-from vllm.v1.core.kv_cache_utils import get_request_block_hasher, init_none_hash
 from vllm.v1.core.sched.async_scheduler import AsyncScheduler
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.single_type_kv_cache_manager import register_all_kvcache_specs
@@ -45,10 +44,16 @@ from vllm.v1.kv_cache_interface import (
 from vllm.v1.request import Request
 from vllm.v1.structured_output import StructuredOutputManager
 
+if TYPE_CHECKING:
+    from tests.v1.kv_connector.unit.utils import MockKVConfig
+
 EOS_TOKEN_ID = 50256
 
 
 def mock_kv(matched_tokens: int, is_async: bool, num_defers_before_matching: int = 0):
+    # Imported lazily: KV connector test utils depend on removed block hashing.
+    from tests.v1.kv_connector.unit.utils import MockKVConfig
+
     return MockKVConfig(
         matched_tokens=matched_tokens,
         is_async=is_async,
@@ -67,7 +72,7 @@ def create_scheduler(
     long_prefill_token_threshold_adaptive: bool = False,
     disable_chunked_mm_input: bool = False,
     mm_encoder_only: bool = False,
-    use_kv_connector: None | bool | str | MockKVConfig = None,
+    use_kv_connector: "None | bool | str | MockKVConfig" = None,
     kv_role: str = "kv_both",
     num_blocks: int = 10000,
     block_size: int = 16,
@@ -155,7 +160,7 @@ def create_scheduler(
         session_cache=session_cache,
     )
     kv_transfer_config = None
-    if isinstance(use_kv_connector, MockKVConfig):
+    if hasattr(use_kv_connector, "matched_tokens"):
         kv_transfer_config = KVTransferConfig(
             kv_connector="MockKVConnector",
             kv_role=kv_role,
@@ -258,9 +263,6 @@ def create_scheduler(
     return scheduler
 
 
-_none_hash_initialized = False
-
-
 def create_requests(
     num_requests: int,
     num_tokens: int = 10,
@@ -275,12 +277,6 @@ def create_requests(
     req_ids: list[str] | None = None,
     sampling_params: SamplingParams | None = None,
 ) -> list[Request]:
-    global _none_hash_initialized
-    if not _none_hash_initialized:
-        init_none_hash(sha256)
-        _none_hash_initialized = True
-
-    block_hasher = get_request_block_hasher(block_size, sha256)
     if sampling_params is None:
         sampling_params = SamplingParams(
             ignore_eos=ignore_eos,
@@ -346,7 +342,6 @@ def create_requests(
             sampling_params=sampling_params,
             pooling_params=None,
             mm_features=mm_features if mm_features else None,
-            block_hasher=block_hasher,
         )
         requests.append(request)
     return requests

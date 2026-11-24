@@ -112,8 +112,6 @@ class _Node:
 
 class SessionKVCacheManager(KVCacheManager):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if kwargs.get("enable_caching"):
-            raise ValueError("Session KV cache replaces prefix caching")
         super().__init__(*args, **kwargs)
         managers = self.coordinator.single_type_managers
         supported = (FullAttentionManager, MambaManager)
@@ -172,9 +170,6 @@ class SessionKVCacheManager(KVCacheManager):
     # ------------------------------------------------------------------ attach
     def prefix_cache_lookup_enabled(self, request: Request) -> bool:
         return request.prefix_cache_hit_limit != 0
-
-    def get_num_cached_tokens(self, request: Request) -> int:
-        return 0
 
     def get_computed_blocks(
         self, request: Request, max_cache_hit_length: int | None = None

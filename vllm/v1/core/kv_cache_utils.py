@@ -3,7 +3,6 @@
 """KV-Cache Utilities."""
 
 import copy
-import hashlib
 import math
 import os
 import weakref
@@ -16,33 +15,22 @@ from typing import (
     NewType,
     TypeAlias,
     TypeVar,
-    cast,
     overload,
 )
 
 from vllm import envs
 from vllm.config import VllmConfig
 from vllm.logger import init_logger
-from vllm.multimodal.utils import get_mm_features_in_window
 from vllm.utils.hashing import xxhash, xxhash_cbor
 from vllm.utils.math_utils import cdiv
 from vllm.v1.kv_cache_interface import (
     KVCacheConfig,
-    KVCacheGroupSpec,
     KVCacheSpec,
-    MambaSpec,
     UniformTypeKVCacheSpecs,
-    iter_layer_specs,
 )
-from vllm.v1.kv_cache_spec_registry import KVCacheSpecRegistry
-from vllm.v1.request import Request
-from vllm.v1.token_buffer import token_slice
-from vllm.v1.utils import tensor_data
 
 if TYPE_CHECKING:
     from vllm.v1.core.block_pool import BlockPool
-    from vllm.v1.core.single_type_kv_cache_manager import SingleTypeKVCacheManager
-    from vllm.v1.engine import EngineCoreRequest, PrefixHashConfig
 
 
 # BlockHash represents the hash of a single KV-cache block used for
@@ -174,13 +162,6 @@ class KVCacheBlock:
     pool: "weakref.ref[BlockPool] | None" = field(
         default=None, repr=False, compare=False, kw_only=True
     )
-    # The hash key (block hash + group id) of the block, only available
-    # when the block is full and cached.
-    block_hash: BlockHashWithGroupId | None = None
-    # Number of prefix tokens covered by block_hash. For full blocks this is
-    # the full block boundary; partial entries can end inside a cache block.
-    block_hash_num_tokens: int | None = None
-
     # Used to construct a doubly linked list for free blocks.
     # These two attributes should only be manipulated by FreeKVCacheBlockQueue.
     prev_free_block: "KVCacheBlock | None" = None
@@ -188,22 +169,6 @@ class KVCacheBlock:
 
     # Whether the block is a null block that should never be cached.
     is_null: bool = False
-
-    def set_block_hash(
-        self,
-        block_hash: BlockHashWithGroupId,
-        num_tokens: int | None = None,
-    ) -> None:
-        assert self.block_hash is None and self.block_hash_num_tokens is None, (
-            "The block already has a hash. This should not happen."
-        )
-        self.block_hash = block_hash
-        self.block_hash_num_tokens = num_tokens
-
-    def reset_hash(self):
-        """Reset the block hash when the block is evicted."""
-        self.block_hash = None
-        self.block_hash_num_tokens = None
 
     def __repr__(self) -> str:
         # Use block_id instead of KVCacheBlock object to avoid calling __repr__
@@ -213,8 +178,6 @@ class KVCacheBlock:
         return (
             f"KVCacheBlock(block_id={self.block_id}, "
             f"ref_cnt={self.ref_cnt}, "
-            f"block_hash={self.block_hash!r}, "
-            f"block_hash_num_tokens={self.block_hash_num_tokens}, "
             f"prev_free_block={prev_block_id}, "
             f"next_free_block={next_block_id})"
         )
@@ -515,162 +478,6 @@ class FreeKVCacheBlockQueue:
             curr_block = curr_block.next_free_block
 
 
-def _gen_mm_extra_hash_keys(
-    request: Request, start_token_idx: int, end_token_idx: int, start_mm_idx: int
-) -> tuple[list[Any], int]:
-    """Generate extra keys related to MultiModal request for block hash
-    computation. For multi-modal inputs, the extra keys are
-    ("mm", mm_hash, start_offset) tuples that indicate a mm input contained
-    in the block and its starting offset in the block tokens.
-
-    Args:
-        request: The request object.
-        start_token_idx: The start token index of the block.
-        end_token_idx: The end token index of the block.
-        start_mm_idx: The start multi-modal index of the block.
-
-    Returns:
-        A tuple of extra keys and the next multi-modal index.
-
-    """
-    extra_keys: list[Any] = []
-
-    mm_features = request.mm_features
-    if not mm_features:
-        return extra_keys, start_mm_idx
-
-    # Note that we assume mm_features are sorted by mm_position.offset.
-    # We do not need to check all mm inputs if the start token index is out of
-    # range. This usually happens in the late prefill phase and decoding phase.
-    last_pos = mm_features[-1].mm_position
-    if last_pos.offset + last_pos.length <= start_token_idx:
-        return extra_keys, start_mm_idx
-
-    # Support start_mm_idx == -1 to indicate the last mm input.
-    if start_mm_idx < 0:
-        assert -start_mm_idx <= len(mm_features)
-        start_mm_idx = len(mm_features) + start_mm_idx
-
-    curr_mm_idx = start_mm_idx
-    while mm_features and curr_mm_idx < len(mm_features):
-        mm_feature = mm_features[curr_mm_idx]
-        assert mm_feature.identifier is not None
-        offset = mm_feature.mm_position.offset
-        length = mm_feature.mm_position.length
-        if end_token_idx > offset:
-            if start_token_idx >= offset + length:
-                # This block has passed the current mm input.
-                curr_mm_idx += 1
-                continue
-
-            # The block contains the current mm input. Include its offset
-            # relative to the start of the block so prefix-cache keys stay
-            # distinct when the same MM item appears at different positions
-            # within otherwise-identical placeholder blocks.
-            extra_keys.append(("mm", mm_feature.identifier, offset - start_token_idx))
-
-            if end_token_idx >= offset + length:
-                # If this block contains the end of the current mm input,
-                # move to the next mm input as this block may also contain
-                # the next mm input.
-                curr_mm_idx += 1
-            else:
-                # Otherwise this block is done with mm inputs.
-                break
-        else:
-            # This block has not reached the current mm input.
-            break
-    return extra_keys, curr_mm_idx
-
-
-def _gen_lora_extra_hash_keys(request: Request) -> list[tuple[str, str, str]]:
-    """Generate extra keys related to LoRA for block hash computation.
-
-    The adapter path is included so that re-pointing a LoRA name at a different
-    adapter does not reuse KV computed with the previous one.
-
-    Args:
-        request: The request object.
-
-    Returns:
-        Return the LoRA name and path of the request if it is a LoRA request.
-        Return empty list otherwise.
-
-    """
-    lora_request = request.lora_request
-    if not lora_request:
-        return []
-    return [("lora", lora_request.lora_name, lora_request.lora_path)]
-
-
-def _gen_prompt_embeds_extra_hash_keys(
-    request: Request, start_token_idx: int, end_token_idx: int
-) -> list[tuple[str, bytes]]:
-    """Generate extra keys related to prompt embeds for block hash computation.
-
-    Args:
-        request: The request object.
-        start_token_idx: The start token index of the block.
-        end_token_idx: The end token index of the block.
-
-    Returns:
-        Return a stable hash of the block prompt embeddings if prompt embeds
-        are present. Return empty list otherwise.
-
-    """
-    if request.prompt_embeds is None:
-        return []
-    block_range = (start_token_idx, end_token_idx)
-    embeds_hash = request._prompt_embeds_per_block_hashes.get(block_range)
-    if embeds_hash is None:
-        block_prompt_embeds = request.prompt_embeds[start_token_idx:end_token_idx]
-        # Hash prompt embeds once per block and cache on request
-        embeds_hash = hashlib.sha256(tensor_data(block_prompt_embeds)).digest()
-        request._prompt_embeds_per_block_hashes[block_range] = embeds_hash
-    return [("prompt_embeds", embeds_hash)]
-
-
-def generate_block_hash_extra_keys(
-    request: Request, start_token_idx: int, end_token_idx: int, start_mm_idx: int
-) -> tuple[tuple[Any, ...] | None, int]:
-    """Generate extra keys for the block hash. The extra keys can come from
-    the multi-modal inputs, request specific metadata (e.g., LoRA names), and
-    hashed data from prompt embeddings.
-
-    Args:
-        request: The request object.
-        start_token_idx: The start token index of the block.
-        end_token_idx: The end token index of the block.
-        start_mm_idx: The start multi-modal index of the block.
-
-    Returns:
-        A tuple of extra keys and the next multi-modal index.
-
-    """
-    mm_extra_keys: list[Any]
-    mm_extra_keys, new_start_mm_idx = _gen_mm_extra_hash_keys(
-        request, start_token_idx, end_token_idx, start_mm_idx
-    )
-    lora_extra_keys = _gen_lora_extra_hash_keys(request)
-    cache_salt_keys: list[tuple[str, str]] = (
-        [("cache_salt", request.cache_salt)]
-        if (start_token_idx == 0 and request.cache_salt)
-        else []
-    )
-    prompt_embeds_keys = _gen_prompt_embeds_extra_hash_keys(
-        request, start_token_idx, end_token_idx
-    )
-
-    extra_keys: list[Any] = (
-        lora_extra_keys + mm_extra_keys + cache_salt_keys + prompt_embeds_keys
-    )
-
-    if not extra_keys:
-        return None, new_start_mm_idx
-
-    return tuple(extra_keys), new_start_mm_idx
-
-
 def to_event_extra_keys(
     extra_keys: Iterable[tuple[Any, ...] | None] | None,
 ) -> list[tuple[Any, ...] | None] | None:
@@ -700,39 +507,6 @@ def to_event_extra_keys(
     return event_keys or None
 
 
-def hash_block_tokens(
-    hash_function: Callable[[Any], bytes],
-    parent_block_hash: BlockHash | None,
-    curr_block_token_ids: Sequence[int],
-    extra_keys: tuple[Any, ...] | None = None,
-) -> BlockHash:
-    """Computes a hash value corresponding to the contents of a block and
-    the contents of the preceding block(s). The hash value is used for
-    prefix caching. We use LRU cache for this function to avoid recomputing
-    hash values for the same block contents.
-
-    Args:
-        hash_function: The hash function used to compute block hash.
-        parent_block_hash: The hash of the parent block. None
-            if this is the first block.
-        curr_block_token_ids: A list of token ids in the current
-            block. The current block is assumed to be full.
-        extra_keys: Extra keys for the block.
-
-    Returns:
-        The hash value of the block and the token ids in the block.
-        The entire tuple is used as the hash key of the block.
-
-    """
-    if not parent_block_hash:
-        parent_block_hash = NONE_HASH
-
-    curr_block_token_ids_tuple = tuple(curr_block_token_ids)
-    return BlockHash(
-        hash_function((parent_block_hash, curr_block_token_ids_tuple, extra_keys))
-    )
-
-
 def resolve_dcp_kv_block_size(spec: KVCacheSpec, dcp_world_size: int) -> int:
     """Return the token span of a cache block under DCP."""
     return spec.block_size * (dcp_world_size if spec.dcp_sharded else 1)
@@ -755,79 +529,15 @@ def resolve_dcp_kv_cache_spec(spec: KVCacheSpec, dcp_world_size: int) -> KVCache
     return replace(spec, block_size=block_size)
 
 
-def partial_hash_hits_enabled(
-    kv_cache_groups: Sequence[KVCacheGroupSpec],
-    hash_block_size: int,
-    dcp_world_size: int = 1,
-    manager_classes: Sequence[type["SingleTypeKVCacheManager"]] | None = None,
-) -> bool:
-    """Whether aligned Mamba states support sub-block prefix-cache hits.
-
-    If `manager_classes` (one per group) is given, also require every other
-    prefix-cacheable group to support fine-grained lookups.
-    """
-    if not any(
-        isinstance(spec, MambaSpec)
-        and spec.mamba_cache_mode == "align"
-        and (
-            (dcp_world_size == 1 and spec.block_size > hash_block_size)
-            or (dcp_world_size > 1 and spec.block_size >= hash_block_size)
-        )
-        for group in kv_cache_groups
-        for spec in iter_layer_specs(group.kv_cache_spec)
-    ):
-        return False
-    if manager_classes is None:
-        return True
-    unsupported_managers = {
-        manager_cls.__name__
-        for group, manager_cls in zip(kv_cache_groups, manager_classes)
-        if group.kv_cache_spec.prefix_cacheable
-        and not manager_cls.supports_fine_grained_hash_lookup
-        and resolve_dcp_kv_block_size(group.kv_cache_spec, dcp_world_size)
-        != hash_block_size
-    }
-    if unsupported_managers:
-        logger.warning_once(
-            "Disabling fine-grained prefix-cache hits because these KV "
-            "cache managers require block-aligned lookups: %s.",
-            ", ".join(sorted(unsupported_managers)),
-        )
-        return False
-    return True
-
-
-def eagle_proof_margin(
-    block_size: int, hash_block_size: int, fine_grained_lookup: bool
-) -> int:
-    """Tokens an EAGLE group matches past a cache hit before dropping them.
-
-    Fine-grained lookups drop one hash unit; others drop one cache block.
-    """
-    if fine_grained_lookup and block_size > hash_block_size:
-        return hash_block_size
-    return block_size
-
-
 def resolve_kv_cache_block_sizes(
     kv_cache_config: KVCacheConfig,
     vllm_config: VllmConfig,
 ) -> tuple[int, int]:
-    """Resolve (scheduler_block_size, hash_block_size).
-
-    - `scheduler_block_size` is the token-alignment invariant used by the
-      scheduler (e.g. for `num_computed_tokens` rounding). Single group:
-      `cache_config.block_size * dcp`. Multiple groups: LCM of every
-      group's effective block size. Attention groups are scaled by DCP;
-      Mamba groups keep their full per-rank state and are not scaled.
-    - `hash_block_size` is the granularity at which `Request.block_hashes`
-      is computed. Single group: equals scheduler block size, and any other
-      `cache_config.prefix_match_unit` is rejected while block hashing is
-      active. Multiple groups:
-      `cache_config.prefix_match_unit` override if set, else the GCD of
-      group block sizes; every group's block size must be divisible by it.
-      Returns the scheduler block size (i.e. disables finer hashing) if block
-      hashing is inactive or a mamba group is not using cache mode "align".
+    """Resolve the scheduler block size, the token-alignment invariant used by
+    the scheduler. Single group: `cache_config.block_size * dcp`. Multiple
+    groups: LCM of every group's effective block size. Attention groups are
+    scaled by DCP; Mamba groups keep their full per-rank state and are not
+    scaled. Returned twice for callers that still unpack a hash block size.
     """
     cache_config = vllm_config.cache_config
     dcp = vllm_config.parallel_config.decode_context_parallel_size
@@ -837,20 +547,6 @@ def resolve_kv_cache_block_sizes(
         if groups and not groups[0].kv_cache_spec.dcp_sharded:
             dcp = 1
         bs = cache_config.block_size * dcp
-        # Reject a prefix_match_unit that would otherwise be silently ignored.
-        if (
-            cache_config.prefix_match_unit not in (None, bs)
-            and len(groups) == 1
-            and (
-                cache_config.enable_prefix_caching
-                or vllm_config.kv_transfer_config is not None
-            )
-        ):
-            raise ValueError(
-                f"Invalid prefix_match_unit={cache_config.prefix_match_unit}; "
-                "with a single KV cache group, prefix-cache hits land on the "
-                f"block size ({bs}). Unset it or set it to {bs}."
-            )
         return bs, bs
 
     group_block_sizes = [
@@ -860,223 +556,7 @@ def resolve_kv_cache_block_sizes(
 
     logger.info_once("kv cache group sizes %s", tuple(group_block_sizes))
     logger.info_once("kv lcm block sizes %s", scheduler_block_size)
-
-    # Block hashes are only consumed by prefix caching and KV connectors
-    # (P/D, offloading); when neither is active, keep hash_block_size equal
-    # to the scheduler block size.
-    connector_enabled = vllm_config.kv_transfer_config is not None
-    if not (cache_config.enable_prefix_caching or connector_enabled):
-        return scheduler_block_size, scheduler_block_size
-
-    # Mamba groups outside align mode break divisibility; back off to the
-    # scheduler block size. Read the mode from the resolved group spec because
-    # its block size may have been updated independently of cache_config.
-    if any(
-        isinstance(spec, MambaSpec) and spec.mamba_cache_mode != "align"
-        for group in groups
-        for spec in iter_layer_specs(group.kv_cache_spec)
-    ):
-        return scheduler_block_size, scheduler_block_size
-
-    hashing_sizes = [
-        block_size
-        for group, block_size in zip(groups, group_block_sizes)
-        if group.kv_cache_spec.prefix_cacheable
-    ] or group_block_sizes
-    requested = cache_config.prefix_match_unit
-    hash_block_size = requested if requested is not None else math.gcd(*hashing_sizes)
-    if any(bs % hash_block_size != 0 for bs in hashing_sizes):
-        raise ValueError(
-            f"Invalid prefix_match_unit={hash_block_size}; prefix-cacheable "
-            "KV cache group block sizes must be divisible by prefix_match_unit. "
-            f"Got group block sizes={group_block_sizes}, "
-            f"prefix-cacheable={hashing_sizes}."
-        )
-    prefix_alignments = {
-        spec.tokens_per_state
-        for group in groups
-        for spec in iter_layer_specs(group.kv_cache_spec)
-        if spec.prefix_cacheable
-        and isinstance(spec.tokens_per_state, int)
-        and spec.tokens_per_state > 1
-    }
-    cache_hit_alignment = (
-        hash_block_size
-        if partial_hash_hits_enabled(groups, hash_block_size, dcp)
-        else scheduler_block_size
-    )
-    if any(cache_hit_alignment % alignment for alignment in prefix_alignments):
-        raise ValueError(
-            f"Invalid prefix_match_unit={hash_block_size}; prefix-cache boundaries "
-            "must align with each spec's per-state compression. "
-            f"Got alignments={sorted(prefix_alignments)}."
-        )
-    return scheduler_block_size, hash_block_size
-
-
-def resolve_cache_hit_alignment_tokens(
-    kv_cache_config: KVCacheConfig,
-    vllm_config: VllmConfig,
-    scheduler_block_size: int,
-    hash_block_size: int,
-) -> int:
-    """Token granularity at which prefix-cache hits land.
-
-    Mirrors the alignment the hybrid KV cache coordinator pushes to its
-    managers: fine-grained hits land on `hash_block_size`, all others on
-    `scheduler_block_size`.
-    """
-    groups = kv_cache_config.kv_cache_groups
-    if not vllm_config.cache_config.enable_prefix_caching or len(groups) <= 1:
-        return scheduler_block_size
-    manager_classes = []
-    for group in groups:
-        manager_cls = KVCacheSpecRegistry.get_manager_class(
-            group.kv_cache_spec, group.role
-        )
-        assert manager_cls is not None
-        manager_classes.append(manager_cls)
-    if partial_hash_hits_enabled(
-        groups,
-        hash_block_size,
-        vllm_config.parallel_config.decode_context_parallel_size,
-        manager_classes,
-    ):
-        return hash_block_size
-    return scheduler_block_size
-
-
-def get_request_block_hasher(
-    hash_block_size: int,
-    caching_hash_fn: Callable[[Any], bytes],
-    num_hash_lookahead_tokens: int = 0,
-) -> Callable[[Request], list[BlockHash]]:
-    """Returns a function which computes the list of un-computed block hashes
-    of a request.
-
-    Hashes are computed at `hash_block_size` granularity and chained over the
-    full prefix, so each hash uniquely fingerprints the prefix ending at its
-    boundary. Coarser group block sizes and partial-cache boundaries reuse
-    these hashes directly (see `BlockHashListWithBlockSize`).
-
-    With `num_hash_lookahead_tokens` (L) > 0, each hash also covers the L
-    tokens after its block, which the drafter's KV at the block's last position
-    depends on, so it is emitted only once those tokens exist. The block tokens
-    stay the hashed tokens; the extra keys become `(E, *tokens)`, where `E`
-    covers the block and those tokens.
-    """
-
-    def request_block_hasher(request: Request) -> list[BlockHash]:
-        start_token_idx = len(request.block_hashes) * hash_block_size
-        num_tokens = request.num_tokens - num_hash_lookahead_tokens
-
-        if start_token_idx + hash_block_size > num_tokens:
-            # Early stop when there no new full blocks created.
-            return []
-
-        curr_mm_idx = 0
-        mm_features = request.mm_features
-        if start_token_idx > 0 and mm_features:
-            last_mm_pos = mm_features[-1].mm_position
-            if last_mm_pos.offset + last_mm_pos.length > start_token_idx:
-                curr_mm_idx, _ = get_mm_features_in_window(
-                    mm_features,
-                    start_token_idx,
-                    start_token_idx + hash_block_size,
-                )
-
-        prev_block_hash_value = (
-            request.block_hashes[-1] if request.block_hashes else None
-        )
-        new_block_hashes: list[BlockHash] = []
-        while True:
-            end_token_idx = start_token_idx + hash_block_size
-            if end_token_idx > num_tokens:
-                # We only hash full blocks
-                break
-
-            # MM and LoRA requests need extra keys for block-hash computation.
-            if num_hash_lookahead_tokens:
-                hash_end_token_idx = end_token_idx + num_hash_lookahead_tokens
-                extra_keys, curr_mm_idx = generate_lookahead_block_hash_extra_keys(
-                    request,
-                    start_token_idx,
-                    end_token_idx,
-                    hash_end_token_idx,
-                    curr_mm_idx,
-                )
-                if num_hash_lookahead_tokens == 1:
-                    extra_keys = (extra_keys, request.all_token_ids[end_token_idx])
-                else:
-                    extra_keys = (
-                        extra_keys,
-                        *request.all_token_ids[end_token_idx:hash_end_token_idx],
-                    )
-            else:
-                extra_keys, curr_mm_idx = generate_block_hash_extra_keys(
-                    request, start_token_idx, end_token_idx, curr_mm_idx
-                )
-
-            # Compute the hash of the current block.
-            block_tokens = token_slice(
-                request._all_token_ids, start_token_idx, end_token_idx
-            )
-            block_hash = hash_block_tokens(
-                caching_hash_fn, prev_block_hash_value, block_tokens, extra_keys
-            )
-
-            new_block_hashes.append(block_hash)
-            start_token_idx += hash_block_size
-            prev_block_hash_value = block_hash
-
-        return new_block_hashes
-
-    return request_block_hasher
-
-
-def frontend_block_hashes(
-    request: "EngineCoreRequest", prefix_hash_config: "PrefixHashConfig | None"
-) -> list[BlockHash] | None:
-    """Return the frontend's prompt block hashes, unless their count doesn't
-    match the prompt, in which case the engine hashes the prompt itself."""
-    block_hashes = request.block_hashes
-    if block_hashes is None:
-        return None
-    prompt_ids = request.prompt_token_ids
-    prompt_len = len(prompt_ids) if prompt_ids is not None else 0
-    # The engine hashes a block once its lookahead tokens exist too.
-    if prefix_hash_config is None or len(block_hashes) != (
-        max(prompt_len - prefix_hash_config.num_lookahead_tokens, 0)
-        // prefix_hash_config.hash_block_size
-    ):
-        logger.warning_once(
-            "Ignoring frontend-computed prompt block hashes that don't match the "
-            "engine's prefix hash config; hashing prompts in the engine instead."
-        )
-        return None
-    return cast(list[BlockHash], block_hashes)
-
-
-def generate_lookahead_block_hash_extra_keys(
-    request: Request,
-    start_token_idx: int,
-    end_token_idx: int,
-    hash_end_token_idx: int,
-    start_mm_idx: int,
-) -> tuple[tuple[Any, ...] | None, int]:
-    """Generate extra keys for the block and its lookahead tokens.
-
-    Rewind the MM index to retain inputs overlapping the next block.
-    """
-    extra_keys, mm_idx = generate_block_hash_extra_keys(
-        request, start_token_idx, hash_end_token_idx, start_mm_idx
-    )
-    while mm_idx > 0:
-        mm_position = request.mm_features[mm_idx - 1].mm_position
-        if mm_position.offset + mm_position.length <= end_token_idx:
-            break
-        mm_idx -= 1
-    return extra_keys, mm_idx
+    return scheduler_block_size, scheduler_block_size
 
 
 def get_max_concurrency_for_kv_cache_config(

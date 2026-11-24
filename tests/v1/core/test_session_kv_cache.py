@@ -172,7 +172,6 @@ def check_invariants(h: Harness) -> None:
     for block in store.block_pool.blocks:
         if not block.is_null:
             assert block.ref_cnt == expected[block.block_id], block.block_id
-            assert block.block_hash is None
     num_free = sum(
         b.ref_cnt == 0 for b in store.block_pool.blocks if not b.is_null
     )
@@ -182,8 +181,6 @@ def check_invariants(h: Harness) -> None:
     assert h.resolver.nodes.keys() == store.nodes.keys()
     for node_id, node in store.nodes.items():
         assert h.resolver.nodes[node_id].end == node.end
-    for request in h.sched.requests.values():
-        assert not request.block_hashes
 
 
 def prefix_keys(tokens, end: int) -> list[int]:

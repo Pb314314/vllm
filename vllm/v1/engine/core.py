@@ -51,24 +51,17 @@ from vllm.utils.gc_utils import (
     freeze_gc_heap,
     maybe_attach_gc_debug_callback,
 )
-from vllm.utils.hashing import get_hash_fn_by_name
 from vllm.utils.network_utils import make_zmq_socket
 from vllm.utils.system_utils import decorate_logs, set_process_title
 from vllm.utils.watch_dog import get_watch_dog, start_watch_dog
 from vllm.v1.attention.backends.utils import resolve_kv_cache_layout
-from vllm.v1.core import kv_cache_utils
 from vllm.v1.core.kv_cache_planning import (
     finalize_extensible_kv_cache,
     get_global_kv_cache_groups,
     get_kv_cache_configs,
 )
 from vllm.v1.core.kv_cache_utils import (
-    BlockHash,
-    frontend_block_hashes,
     generate_scheduler_kv_cache_config,
-    get_request_block_hasher,
-    init_none_hash,
-    resolve_cache_hit_alignment_tokens,
     resolve_kv_cache_block_sizes,
     update_kv_cache_capacity,
 )
@@ -90,7 +83,6 @@ from vllm.v1.engine import (
     EngineCoreRequestType,
     FinishReason,
     PauseMode,
-    PrefixHashConfig,
     ReconfigureDistributedRequest,
     ReconfigureRankType,
     UtilityOutput,
@@ -117,8 +109,8 @@ from vllm.v1.kv_cache_interface import (
 from vllm.v1.metrics.stats import SchedulerIterationDetails, SchedulerStats
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
-from vllm.v1.session.resolver import SessionResolver
 from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, bytestr
+from vllm.v1.session.resolver import SessionResolver
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.version import __version__ as VLLM_VERSION
 
@@ -191,7 +183,7 @@ class EngineCore:
                 logger.warning("Disabling chunked prefill for model without KVCache")
                 vllm_config.scheduler_config.enable_chunked_prefill = False
 
-        scheduler_block_size, hash_block_size = resolve_kv_cache_block_sizes(
+        scheduler_block_size, _ = resolve_kv_cache_block_sizes(
             kv_cache_config, vllm_config
         )
 
@@ -202,7 +194,6 @@ class EngineCore:
             include_finished_set=include_finished_set,
             log_stats=self.log_stats,
             block_size=scheduler_block_size,
-            hash_block_size=hash_block_size,
         )
         self.session_resolver: SessionResolver | None = None
         if vllm_config.cache_config.session_cache:
@@ -223,7 +214,6 @@ class EngineCore:
 
         self.mm_receiver_cache = engine_receiver_cache_from_config(vllm_config)
 
-        kv_connector = self.scheduler.get_kv_connector()
         self._set_kv_connector_handshake_metadata()
 
         # Setup batch queue for pipeline parallelism.
@@ -240,27 +230,6 @@ class EngineCore:
 
         self.is_mm_encoder_only = vllm_config.is_mm_encoder_only
         self.is_pooling_model = vllm_config.model_config.runner_type == "pooling"
-
-        self.request_block_hasher: Callable[[Request], list[BlockHash]] | None = None
-        # Lets frontends hash prompt blocks; see EngineCoreRequest.block_hashes.
-        self.prefix_hash_config: PrefixHashConfig | None = None
-        if vllm_config.cache_config.enable_prefix_caching or kv_connector is not None:
-            caching_hash_fn = get_hash_fn_by_name(
-                vllm_config.cache_config.prefix_caching_hash_algo
-            )
-            init_none_hash(caching_hash_fn)
-
-            self.request_block_hasher = get_request_block_hasher(
-                hash_block_size,
-                caching_hash_fn,
-                vllm_config.num_hash_lookahead_tokens,
-            )
-            self.prefix_hash_config = PrefixHashConfig(
-                hash_algo=vllm_config.cache_config.prefix_caching_hash_algo,
-                hash_block_size=hash_block_size,
-                none_hash=kv_cache_utils.NONE_HASH,
-                num_lookahead_tokens=vllm_config.num_hash_lookahead_tokens,
-            )
 
         self.step_fn = (
             self.step if self.batch_queue is None else self.step_with_batch_queue
@@ -400,21 +369,13 @@ class EngineCore:
 
         vllm_config.validate_block_size()
 
-        scheduler_block_size, hash_block_size = resolve_kv_cache_block_sizes(
+        scheduler_block_size, _ = resolve_kv_cache_block_sizes(
             scheduler_kv_cache_config, vllm_config
         )
-        cache_hit_alignment_tokens = resolve_cache_hit_alignment_tokens(
-            scheduler_kv_cache_config,
-            vllm_config,
-            scheduler_block_size,
-            hash_block_size,
-        )
-        # The scheduler's config is a deep copy taken before these are resolved,
-        # so set them there too: the KV connector's scheduler side reads the same
-        # fields as its workers.
+        # Workers still read these (Mamba prefill checkpoints).
         for kv_cache_config in (*kv_cache_configs, scheduler_kv_cache_config):
-            kv_cache_config.hash_block_size = hash_block_size
-            kv_cache_config.cache_hit_alignment_tokens = cache_hit_alignment_tokens
+            kv_cache_config.hash_block_size = scheduler_block_size
+            kv_cache_config.cache_hit_alignment_tokens = scheduler_block_size
 
         self.model_executor.initialize_from_config(kv_cache_configs)
         compilation_times = []
@@ -1320,10 +1281,7 @@ class EngineCore:
                 warn_watermarking_override()
             params.watermarking = True
 
-        frontend_hashes = frontend_block_hashes(request, self.prefix_hash_config)
-        req = Request.from_engine_core_request(
-            request, self.request_block_hasher, frontend_hashes
-        )
+        req = Request.from_engine_core_request(request)
         if self.session_resolver is not None:
             validate_session_request(req)
         if req.use_structured_output:
@@ -2197,7 +2155,6 @@ class EngineCoreProc(EngineCore):
                 if envs.VLLM_SERVER_DEV_MODE
                 else None
             ),
-            prefix_hash_config=self.prefix_hash_config,
             cache_config_info=self.vllm_config.cache_config.metrics_info(),
             config_hash=self._config_hash(),
             enable_expert_parallel=parallel_config.enable_expert_parallel,

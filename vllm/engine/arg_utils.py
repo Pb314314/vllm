@@ -3108,7 +3108,6 @@ class EngineArgs:
         self, model_config: ModelConfig
     ) -> None:
         default_chunked_prefill = model_config.is_chunked_prefill_supported
-        default_prefix_caching = model_config.is_prefix_caching_supported
 
         if self.enable_chunked_prefill is None:
             self.enable_chunked_prefill = default_chunked_prefill
@@ -3138,30 +3137,11 @@ class EngineArgs:
                 "or produce incorrect outputs.",
             )
 
-        if self.session_cache:
-            if self.enable_prefix_caching:
-                raise ValueError(
-                    "--session-cache replaces prefix caching; do not also pass "
-                    "--enable-prefix-caching."
-                )
-            self.enable_prefix_caching = False
-        elif self.enable_prefix_caching is None:
-            self.enable_prefix_caching = default_prefix_caching
-
-            logger.debug(
-                "%s prefix caching by default",
-                "Enabling" if default_prefix_caching else "Disabling",
+        if self.enable_prefix_caching:
+            raise ValueError(
+                "Automatic prefix caching was removed; use --session-cache."
             )
-        elif (
-            model_config.runner_type == "pooling"
-            and self.enable_prefix_caching
-            and not default_prefix_caching
-        ):
-            logger.warning_once(
-                "This model does not officially support prefix caching. "
-                "Enabling this manually may cause the engine to crash "
-                "or produce incorrect outputs.",
-            )
+        self.enable_prefix_caching = False
 
         # Disable chunked prefill and prefix caching for:
         # RISCV CPUs in V1
