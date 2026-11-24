@@ -450,3 +450,21 @@ def test_prompt_is_shared_while_it_is_still_prefilling():
     second = h.add(list(range(500, 564)) + [1, 2, 3], max_tokens=2)
     h.run(first, second)
     assert h.cached[second.request_id] == 64
+
+
+def test_preempted_writer_does_not_extend_a_node_it_no_longer_writes():
+    """After preemption a request recomputes into fresh blocks, so it must not
+    append to its old node: that node's partial last block was never filled
+    past the old end."""
+    h = Harness(max_num_batched_tokens=24)
+    prompt = list(range(700, 760))
+    writer = h.add(prompt, max_tokens=2)
+    h.step()  # computes [0, 24): its node ends inside block 1
+    h.sched.running.remove(writer)
+    h.sched._preempt_request(writer, timestamp=0.0)
+    check_invariants(h)
+    for _ in range(3):
+        h.step()  # resumes at 16 and recomputes past 24
+    reader = h.add(prompt[:40] + [1, 2], max_tokens=2)
+    h.run(writer, reader)
+    assert h.cached[reader.request_id] >= 32
