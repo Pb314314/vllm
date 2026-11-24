@@ -10,6 +10,7 @@ import pytest_asyncio
 from tests.utils import RemoteOpenAIServer
 
 MODEL_NAME = "Qwen/Qwen3-0.6B"
+BLOCK_SIZE = 64
 SYSTEM = "You are a terse assistant. " * 40
 
 
@@ -17,6 +18,8 @@ SYSTEM = "You are a terse assistant. " * 40
 def server():
     args = [
         "--session-cache",
+        "--block-size",
+        str(BLOCK_SIZE),
         "--max-model-len",
         "4096",
         "--enforce-eager",
@@ -71,6 +74,7 @@ async def test_full_history_reuses_previous_turn(
         {"role": "user", "content": "Now say goodbye."},
     ]
     _, second = await _turn(client, messages, stream)
-    # At least the whole first prompt is reused; the re-rendered assistant
-    # turn may differ from the generated tokens at its boundary.
-    assert second.prompt_tokens_details.cached_tokens >= first.prompt_tokens - 1
+    # The whole first prompt is reused up to its last block boundary; the
+    # re-rendered assistant turn may differ from the generated tokens.
+    first_prompt = first.prompt_tokens - first.prompt_tokens % BLOCK_SIZE
+    assert second.prompt_tokens_details.cached_tokens >= first_prompt
