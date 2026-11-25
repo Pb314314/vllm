@@ -47,7 +47,7 @@ coexist; one engine instance uses one of them, and prefix caching stays the defa
 | Model | Where a request can resume | Why |
 |---|---|---|
 | Attention only | Any block boundary inside the matched content | Recomputing the rest of the block is cheaper than copying it. |
-| Hybrid (Mamba / GDN) | Exactly at a node's commit point | A recurrent state exists only for the position it was saved at. The boundary attention block and the state are copied (copy-on-write) so nodes never change after sealing. |
+| Hybrid (Mamba / GDN) or sliding window | Exactly at a node's commit point | A recurrent state exists only for the position it was saved at. The boundary attention block and the state are copied (copy-on-write) so nodes never change after sealing. |
 | With EAGLE-style drafting (attention only) | One `num_prefill_lookahead` margin before the shared content ends | Draft KV at a position also reflects the next token. A mismatch would only lower draft acceptance. |
 
 Hybrid nodes are published as *content-only* while the request runs (matchable, not
@@ -114,7 +114,7 @@ only by eviction.
 | Group | What a node holds |
 |---|---|
 | Full attention, MLA, indexer caches | Blocks by token position. Compressed caches (`tokens_per_state > 1`) complete a state only at multiples of the ratio, so hybrid commit points are multiples of every ratio. |
-| Sliding window | Every window block the node covers, as prefix caching keeps freed out-of-window blocks cached. |
+| Sliding window | References to the window's blocks before each commit point (null elsewhere). Like Mamba state, a window moves on as a request computes, so models with sliding windows resume at commit points; unlike Mamba it is written by position, so no copy is needed. |
 | Mamba / GDN / KDA | One state block per commit point. |
 | Ring buffers, windows rebuilt by bounded replay (`prefix_cacheable = False`) | Nothing: per-request scratch; a resumed request starts them fresh, as with prefix caching. |
 

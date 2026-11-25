@@ -14,6 +14,7 @@ import pytest
 import torch
 
 from vllm.sampling_params import SamplingParams
+from vllm.utils.math_utils import cdiv
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.session_kv_cache_manager import validate_session_request
 from vllm.v1.core.single_type_kv_cache_manager import MambaManager
@@ -848,3 +849,20 @@ def test_release_of_a_running_session_waits_for_its_request():
     assert not h.store.nodes
     assert h.store.block_pool.get_num_free_blocks() == free
     assert _release(h, "unknown") == 0
+
+
+def test_sliding_window_state_keeps_only_the_window_before_commit_points():
+    """Like prefix caching, a long conversation must not pin every
+    sliding-window block it ever wrote: a state keeps the window before its
+    commit point, and a continuation resumes exactly there."""
+    h = Harness(sliding_window=32)
+    first = h.add(list(range(100, 400)), max_tokens=3)
+    h.run(first)
+    (node,) = h.store.nodes.values()
+    window = [b for b in node.blocks[1] if not b.is_null]
+    assert len(window) <= 32 // BLOCK + 2
+    assert len(node.blocks[0]) == cdiv(node.end, BLOCK)
+    second = h.add(history(first) + list(range(500, 520)))
+    h.step()
+    assert h.cached[second.request_id] == node.end
+    h.run(second)

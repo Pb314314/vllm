@@ -142,9 +142,11 @@ class SessionKVCacheManager(KVCacheManager):
                 "Mamba layers only; got "
                 f"{sorted({type(m).__name__ for m in managers})}"
             )
-        # Mamba state is valid only where a request stopped, so hybrid models
-        # resume at commit points; attention-only models at any position.
-        self.commit_points_only = any(isinstance(m, MambaManager) for m in managers)
+        # Mamba state and a sliding window are both state that moves on as a
+        # request computes: a node keeps it only at commit points (a copy of
+        # the Mamba state; references to the window's blocks), so these models
+        # resume at commit points, and full-attention-only models anywhere.
+        self.commit_points_only = any(self._stateful(m) for m in managers)
         # With speculative decoding, the state after the last verified token
         # lives in whichever speculative block the acceptance count selects,
         # so a hybrid request saves its state where its prefill ends instead
@@ -163,6 +165,7 @@ class SessionKVCacheManager(KVCacheManager):
             else 0
         )
         self.block_sizes = [m.block_size for m in managers]
+        self._window_groups = [g for g, m in enumerate(managers) if self._windowed(m)]
         positional = [m.block_size for m in managers if self._positional(m)]
         # A divergence checkpoint costs one recurrent state block. Require the
         # shared span to cover an attention block (the same memory), capped at
@@ -348,6 +351,19 @@ class SessionKVCacheManager(KVCacheManager):
         return path
 
     @staticmethod
+    def _windowed(manager: Any) -> bool:
+        """Sliding-window groups whose blocks nodes hold only for the window
+        before each commit point (scratch windows are not positional)."""
+        return (
+            isinstance(manager, SlidingWindowManager)
+            and manager.kv_cache_spec.prefix_cacheable
+        )
+
+    @classmethod
+    def _stateful(cls, manager: Any) -> bool:
+        return isinstance(manager, MambaManager) or cls._windowed(manager)
+
+    @staticmethod
     def _positional(manager: Any) -> bool:
         """Whether nodes hold this group's blocks by token position: not
         per-request scratch. Mamba groups are positional for one block that
@@ -359,18 +375,25 @@ class SessionKVCacheManager(KVCacheManager):
     ) -> list[KVCacheBlock]:
         """Block table for positions `[0, length)`; deeper nodes win where a
         child's first block re-covers its parent's last one."""
-        if not self._positional(self.coordinator.single_type_managers[group]):
+        manager = self.coordinator.single_type_managers[group]
+        if not self._positional(manager):
             return []
         block_size = self.block_sizes[group]
-        upper = cdiv(length, block_size)
-        segments = []
+        table: list[KVCacheBlock | None] = [None] * cdiv(length, block_size)
         for node in path:
-            lower = node.start // block_size
-            if lower < upper:
-                segments.append(node.blocks[group][: upper - lower])
-                upper = lower
-        assert upper == 0, "path does not cover the resumed prefix"
-        return [block for segment in reversed(segments) for block in segment]
+            for index, block in enumerate(
+                node.blocks[group], start=node.start // block_size
+            ):
+                if index < len(table) and table[index] is None and not block.is_null:
+                    table[index] = block
+        if self._windowed(manager):
+            # Positions before the window are never read.
+            null = self.block_pool.null_block
+            return [null if block is None else block for block in table]
+        assert all(block is not None for block in table), (
+            "path does not cover the resumed prefix"
+        )
+        return table  # type: ignore[return-value]
 
     # ------------------------------------------------------------- allocation
     def allocate_slots(
@@ -446,7 +469,7 @@ class SessionKVCacheManager(KVCacheManager):
         managers = self.coordinator.single_type_managers
         blocks = tuple(
             []
-            if isinstance(m, MambaManager) or not self._positional(m)
+            if self._stateful(m) or not self._positional(m)
             else list(
                 m.req_to_blocks[request.request_id][
                     start // m.block_size : cdiv(end, m.block_size)
@@ -504,6 +527,9 @@ class SessionKVCacheManager(KVCacheManager):
         ]
         if any(block.is_null for group in states for block in group):
             return False
+        windows = [self._window(request, node, end, g) for g in self._window_groups]
+        if any(window is None for window in windows):
+            return False
         if copy:
             if not self._ensure_free_blocks(sum(map(len, states))):
                 return False
@@ -515,11 +541,29 @@ class SessionKVCacheManager(KVCacheManager):
         self.block_pool.touch([b for group in states for b in group])
         for g, group in zip(recurrent, states):
             node.blocks[g][:] = group
+        for g, window in zip(self._window_groups, windows):
+            self.block_pool.touch(window)
+            node.blocks[g][:] = window
         node.commit_points = (end,)
         del self._own[request_id]
         self._publish_seq = self.seq + 1
         self._emit(lambda seq: NodeExtended(seq, node.node_id, end, end, b"", (end,)))
         return True
+
+    def _window(
+        self, request: Request, node: _Node, end: int, group: int
+    ) -> list[KVCacheBlock] | None:
+        """The node's blocks of a sliding-window group for a commit point at
+        `end`: the request's blocks for the window before `end`, null before
+        it. None if the request no longer holds the window."""
+        manager = self.coordinator.single_type_managers[group]
+        size = manager.block_size
+        first = node.start // size
+        lower = max(first, (end - manager.kv_cache_spec.sliding_window) // size)
+        held = manager.req_to_blocks[request.request_id][lower : cdiv(end, size)]
+        if len(held) < cdiv(end, size) - lower or any(b.is_null for b in held):
+            return None
+        return [self.block_pool.null_block] * (lower - first) + list(held)
 
     def _can_extend(self, request: Request, node: _Node) -> bool:
         """A request may append to its own node only while it is still the
@@ -532,7 +576,7 @@ class SessionKVCacheManager(KVCacheManager):
         ):
             return False
         for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
-            if isinstance(manager, MambaManager) or not self._positional(manager):
+            if self._stateful(manager) or not self._positional(manager):
                 continue
             last = (node.end - 1) // manager.block_size
             req_blocks = manager.req_to_blocks[request.request_id]
@@ -547,7 +591,7 @@ class SessionKVCacheManager(KVCacheManager):
             return node
         new_blocks = [
             []
-            if isinstance(manager, MambaManager) or not self._positional(manager)
+            if self._stateful(manager) or not self._positional(manager)
             else manager.req_to_blocks[request.request_id][
                 cdiv(node.end, manager.block_size) : cdiv(end, manager.block_size)
             ]
@@ -755,7 +799,7 @@ class SessionKVCacheManager(KVCacheManager):
         floor = max((child.start for child in node.children), default=node.start)
         end = max(floor, min(node.end, end))
         for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
-            if isinstance(manager, MambaManager) or not self._positional(manager):
+            if self._stateful(manager) or not self._positional(manager):
                 continue
             keep = cdiv(end, manager.block_size) - node.start // manager.block_size
             self.block_pool.free_blocks(reversed(blocks[keep:]))
