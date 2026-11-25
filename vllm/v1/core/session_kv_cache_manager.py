@@ -19,6 +19,7 @@ Invariants:
 """
 
 import math
+import secrets
 from collections import Counter, OrderedDict
 from collections.abc import Callable
 from typing import Any
@@ -36,6 +37,7 @@ from vllm.v1.core.single_type_kv_cache_manager import (
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.session.protocol import (
     NodeExtended,
+    NodeId,
     NodePublished,
     NodeTruncated,
     RequestFinished,
@@ -89,7 +91,7 @@ class _Node:
 
     def __init__(
         self,
-        node_id: int,
+        node_id: NodeId,
         parent: "_Node | None",
         start: int,
         end: int,
@@ -201,9 +203,10 @@ class SessionKVCacheManager(KVCacheManager):
         self.epoch = 0
         self.seq = 0
         self._publish_seq = 0
+        self._origin = secrets.randbits(63)
         self._next_node_id = 1
         # Least recently used first.
-        self.nodes: OrderedDict[int, _Node] = OrderedDict()
+        self.nodes: OrderedDict[NodeId, _Node] = OrderedDict()
         self._listeners: list[Callable[[StoreEvent], None]] = []
         self._rebind: Callable[[Request], SessionBinding] | None = None
         # The attach just handed to the scheduler, protected from eviction
@@ -216,7 +219,7 @@ class SessionKVCacheManager(KVCacheManager):
         self._own: dict[str, _Node] = {}
         # Checkpoints whose recurrent state is copied with this step's
         # batched block copies: not a copy source until the step is sent.
-        self._unsettled: set[int] = set()
+        self._unsettled: set[NodeId] = set()
         # Tokens each request had computed before the chunk scheduled this
         # step, in case it is preempted before the step is sent.
         self._scheduled_from: dict[str, int] = {}
@@ -453,7 +456,8 @@ class SessionKVCacheManager(KVCacheManager):
         self.block_pool.touch([b for group in blocks for b in group])
         # A hybrid node is resumable only once sealed with a recurrent state.
         commit_points = () if self.commit_points_only else None
-        node = _Node(self._next_node_id, parent, start, end, blocks, commit_points)
+        node_id = NodeId(self._origin, self._next_node_id)
+        node = _Node(node_id, parent, start, end, blocks, commit_points)
         self._next_node_id += 1
         self.nodes[node.node_id] = node
         if parent is not None:
@@ -747,6 +751,9 @@ class SessionKVCacheManager(KVCacheManager):
         self._tip.clear()
         self._own.clear()
         self.epoch += 1
+        # Ids of dropped states are never handed out again.
+        self._origin = secrets.randbits(63)
+        self._next_node_id = 1
         self._emit(lambda seq: StoreReset(seq, self.epoch))
         return super().reset_prefix_cache()
 

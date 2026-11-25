@@ -757,3 +757,32 @@ def test_hybrid_with_compressed_cache_saves_only_whole_groups():
     h.step()
     assert h.cached[second.request_id] == 40
     h.run(second)
+
+
+def test_node_ids_are_never_reused_across_stores_or_resets():
+    """A node id with a length must name the same tokens wherever it is seen,
+    so ids differ between engines and across resets."""
+    first, second = Harness(), Harness()
+    for h in (first, second):
+        h.run(h.add(list(range(40))))
+    before = set(first.store.nodes)
+    assert before.isdisjoint(second.store.nodes)
+    assert first.store.reset_prefix_cache()
+    first.run(first.add(list(range(40))))
+    assert before.isdisjoint(first.store.nodes)
+
+
+def test_store_events_round_trip_through_msgpack():
+    """Events are plain data so the resolver can run in another process."""
+    import msgspec
+
+    from vllm.v1.session.protocol import NodeId, NodePublished, SessionBinding
+
+    event = NodePublished(3, NodeId(2**62, 7), None, 0, 16, b"\x01" * 64, (16,), "r")
+    decoded = msgspec.msgpack.decode(msgspec.msgpack.encode(event), type=NodePublished)
+    assert decoded == event and isinstance(decoded.node_id, NodeId)
+    h = Harness()
+    h.run(h.add(list(range(40))))
+    binding = h.resolver.resolve(h.add(list(range(40)) + [1]))
+    encoded = msgspec.msgpack.encode(binding)
+    assert msgspec.msgpack.decode(encoded, type=SessionBinding) == binding

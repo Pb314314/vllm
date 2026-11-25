@@ -9,6 +9,18 @@ message is plain data so the resolver can later run in another process.
 """
 
 from dataclasses import dataclass
+from typing import NamedTuple
+
+
+class NodeId(NamedTuple):
+    """Identity of an immutable span of KV content. `origin` is drawn at
+    random whenever a store starts or resets, so an id is never reused across
+    stores, restarts or resets, and a node id with a length always names the
+    same tokens wherever it is seen (another engine, a KV connector, a
+    router's index). `local` counts nodes within one origin."""
+
+    origin: int
+    local: int
 
 
 @dataclass(frozen=True)
@@ -16,7 +28,7 @@ class Candidate:
     """The first `length` tokens of the request equal the path ending in
     `node_id`."""
 
-    node_id: int
+    node_id: NodeId
     length: int
 
 
@@ -35,8 +47,8 @@ class SessionBinding:
 @dataclass(frozen=True)
 class NodePublished:
     seq: int
-    node_id: int
-    parent_id: int | None
+    node_id: NodeId
+    parent_id: NodeId | None
     # The node holds path positions [start, end); `start` is the position on
     # the parent's path where it attaches.
     start: int
@@ -56,7 +68,7 @@ class NodeExtended:
     node becomes resumable when it is sealed with `commit_points`."""
 
     seq: int
-    node_id: int
+    node_id: NodeId
     start: int
     end: int
     tokens: bytes
@@ -66,7 +78,7 @@ class NodeExtended:
 @dataclass(frozen=True)
 class NodeTruncated:
     seq: int
-    node_id: int
+    node_id: NodeId
     # New exclusive end; `end <= start` means the node was removed.
     end: int
     commit_points: tuple[int, ...] | None
@@ -78,7 +90,7 @@ class RequestFinished:
     request_id: str
     # The node ending at the request's final committed position, or None if
     # the request committed nothing (aborted, failed, or preempted for good).
-    node_id: int | None
+    node_id: NodeId | None
 
 
 @dataclass(frozen=True)

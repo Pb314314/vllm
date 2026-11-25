@@ -66,6 +66,17 @@ resumable) and become resumable when *sealed* with a recurrent state at their en
 A checkpoint is not resumable in the step that fills it: the worker applies a step's block
 copies as one gather-then-scatter, so chained copies in one step would read stale data.
 
+## State identity
+
+A node id is `NodeId(origin, local)`: `origin` is drawn at random whenever a store starts
+or resets and `local` counts nodes within it. Nodes only grow at their end or shrink, so a
+node id with a length always names the same tokens, and an id is never reused by another
+engine, after a restart, or after a reset. A reference that went stale (the state was
+evicted, or belongs to another engine) can therefore only fail to resolve; it can never
+resolve to different content. This is what lets bindings, events and future KV connectors
+or routers refer to states across processes without agreeing on content hashes. Events and
+bindings are plain data and round-trip through msgpack.
+
 ## Invariants
 
 1. A request reads only KV computed from its own token prefix (resolver matches content; the

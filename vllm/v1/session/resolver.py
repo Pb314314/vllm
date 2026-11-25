@@ -19,6 +19,7 @@ from vllm.v1.request import Request
 from vllm.v1.session.protocol import (
     Candidate,
     NodeExtended,
+    NodeId,
     NodePublished,
     NodeTruncated,
     RequestFinished,
@@ -68,7 +69,7 @@ class _Vertex:
         self.parent = parent
         self.children: dict[int, _Vertex] = {}
         # Store nodes holding the KV of exactly this span on this path.
-        self.owners: set[int] = set()
+        self.owners: set[NodeId] = set()
 
     @property
     def start(self) -> int:
@@ -77,7 +78,7 @@ class _Vertex:
 
 @dataclass
 class _Node:
-    parent: int | None
+    parent: NodeId | None
     start: int
     end: int
     tokens: bytes
@@ -95,7 +96,7 @@ class SessionState(enum.Enum):
 class Session:
     session_id: int
     namespace: Hashable
-    cursor: int | None = None
+    cursor: NodeId | None = None
     state: SessionState = SessionState.IDLE
     writer: str | None = None
     client_id: str | None = None
@@ -111,9 +112,9 @@ class SessionResolver:
         self.epoch = 0
         self.seq = 0
         self.roots: dict[Hashable, _Vertex] = {}
-        self.nodes: dict[int, _Node] = {}
+        self.nodes: dict[NodeId, _Node] = {}
         self.sessions: dict[int, Session] = {}
-        self.cursor_owner: dict[int, int] = {}
+        self.cursor_owner: dict[NodeId, int] = {}
         self.aliases: dict[tuple[Hashable, str], int] = {}
         self.request_session: dict[str, int] = {}
         self._packed: dict[str, bytes] = {}
@@ -175,7 +176,7 @@ class SessionResolver:
         return path, matched
 
     def _candidates(self, path: list[_Vertex], matched: int) -> tuple[Candidate, ...]:
-        found: dict[int, int] = {}
+        found: dict[NodeId, int] = {}
         for vertex in reversed(path):
             reach = min(vertex.depth, matched)
             for node_id in vertex.owners:
@@ -186,7 +187,7 @@ class SessionResolver:
                     found[node_id] = length
             if len(found) >= MAX_CANDIDATES:
                 break
-        ranked = sorted(found.items(), key=lambda kv: (-kv[1], -kv[0]))
+        ranked = sorted(found.items(), key=lambda kv: (-kv[1], -kv[0].local))
         return tuple(Candidate(n, length) for n, length in ranked[:MAX_CANDIDATES])
 
     @staticmethod
@@ -249,7 +250,7 @@ class SessionResolver:
         elif isinstance(event, StoreReset):
             self._reset(event.epoch)
 
-    def _path_tokens(self, parent: int | None, start: int) -> bytes:
+    def _path_tokens(self, parent: NodeId | None, start: int) -> bytes:
         parts: list[bytes] = []
         while parent is not None and start > 0:
             node = self.nodes[parent]
@@ -289,7 +290,7 @@ class SessionResolver:
         path = self._path_tokens(node.parent, node.start) + node.tokens
         self._add_span(event.node_id, path, event.start)
 
-    def _add_span(self, node_id: int, path: bytes, own_from: int) -> None:
+    def _add_span(self, node_id: NodeId, path: bytes, own_from: int) -> None:
         """Insert `path` and mark `node_id` as holding `[own_from, end)`."""
         node = self.nodes[node_id]
         end = len(path) // _ITEMSIZE
@@ -329,7 +330,7 @@ class SessionResolver:
         return upper
 
     def _truncate(
-        self, node_id: int, end: int, commit_points: tuple[int, ...] | None
+        self, node_id: NodeId, end: int, commit_points: tuple[int, ...] | None
     ) -> None:
         node = self.nodes.get(node_id)
         if node is None:
@@ -365,7 +366,7 @@ class SessionResolver:
             # Nothing left to continue; a new request starts a new session.
             self._drop_session(session)
 
-    def _finish(self, request_id: str, node_id: int | None) -> None:
+    def _finish(self, request_id: str, node_id: NodeId | None) -> None:
         self._packed.pop(request_id, None)
         session_id = self.request_session.pop(request_id, None)
         if session_id is None:
