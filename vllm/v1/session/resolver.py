@@ -116,6 +116,10 @@ class SessionResolver:
         self.sessions: dict[int, Session] = {}
         self.cursor_owner: dict[NodeId, int] = {}
         self.aliases: dict[tuple[Hashable, str], int] = {}
+        # States published for each client session id, so a caller can
+        # release a session it knows has ended.
+        self.client_nodes: dict[str, set[NodeId]] = {}
+        self.node_client: dict[NodeId, str] = {}
         self.request_session: dict[str, int] = {}
         self._packed: dict[str, bytes] = {}
         self._next_session_id = 1
@@ -275,6 +279,14 @@ class SessionResolver:
             namespace,
         )
         self.nodes[event.node_id] = node
+        client_id = (
+            self.sessions[request_session].client_id
+            if request_session is not None
+            else None
+        )
+        if client_id is not None:
+            self.node_client[event.node_id] = client_id
+            self.client_nodes.setdefault(client_id, set()).add(event.node_id)
         path = self._path_tokens(event.parent_id, event.start) + event.tokens
         self._add_span(event.node_id, path, event.start)
 
@@ -350,6 +362,12 @@ class SessionResolver:
         node.tokens = node.tokens[: max(0, end - node.start) * _ITEMSIZE]
         if end <= node.start:
             del self.nodes[node_id]
+            client_id = self.node_client.pop(node_id, None)
+            if client_id is not None:
+                published = self.client_nodes[client_id]
+                published.discard(node_id)
+                if not published:
+                    del self.client_nodes[client_id]
             session_id = self.cursor_owner.pop(node_id, None)
             if session_id is not None:
                 self._retire_cursor(self.sessions[session_id])
@@ -396,10 +414,31 @@ class SessionResolver:
             if self.aliases.get(key) == session.session_id:
                 del self.aliases[key]
 
+    def release(self, client_ids: list[str]) -> list[NodeId]:
+        """Forget the sessions a caller names as ended and return the states
+        they published, deepest first, for the store to free what it can."""
+        released: set[NodeId] = set()
+        for client_id in client_ids:
+            released |= self.client_nodes.pop(client_id, set())
+            for session in list(self.sessions.values()):
+                if session.client_id != client_id:
+                    continue
+                self.aliases.pop((session.namespace, client_id), None)
+                session.client_id = None
+                if session.state == SessionState.IDLE:
+                    if session.cursor is not None:
+                        self.cursor_owner.pop(session.cursor, None)
+                    self._drop_session(session)
+        for node_id in released:
+            self.node_client.pop(node_id, None)
+        return sorted(released, key=lambda n: -self.nodes[n].start)
+
     def _reset(self, epoch: int) -> None:
         self.epoch = epoch
         self.roots.clear()
         self.nodes.clear()
+        self.client_nodes.clear()
+        self.node_client.clear()
         self.cursor_owner.clear()
         for session in list(self.sessions.values()):
             session.cursor = None

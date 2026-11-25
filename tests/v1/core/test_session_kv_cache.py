@@ -786,3 +786,65 @@ def test_store_events_round_trip_through_msgpack():
     binding = h.resolver.resolve(h.add(list(range(40)) + [1]))
     encoded = msgspec.msgpack.encode(binding)
     assert msgspec.msgpack.decode(encoded, type=SessionBinding) == binding
+
+
+def _release(h: Harness, *client_ids: str) -> int:
+    freed = h.store.release(h.resolver.release(list(client_ids)))
+    check_invariants(h)
+    return freed
+
+
+def test_release_frees_an_ended_session():
+    """A caller that knows a session (an RL trajectory) has ended frees all
+    of its states at once instead of waiting for LRU."""
+    h = Harness()
+    free = h.store.block_pool.get_num_free_blocks()
+    turn = h.add(list(range(100, 160)), session_id="traj")
+    h.run(turn)
+    turn = h.add(history(turn) + list(range(300, 340)), session_id="traj")
+    h.run(turn)
+    assert h.store.block_pool.get_num_free_blocks() < free
+    assert _release(h, "traj") > 0
+    assert h.store.block_pool.get_num_free_blocks() == free
+    assert not h.store.nodes
+    again = h.add(history(turn) + [1], session_id="traj")
+    h.step()
+    assert h.cached[again.request_id] == 0
+    h.run(again)
+
+
+def test_release_keeps_a_prompt_other_sessions_share_until_they_end():
+    """GRPO-style rollouts share a prompt: releasing one trajectory frees only
+    what it alone used; the shared prompt goes with the last one."""
+    h = Harness()
+    free = h.store.block_pool.get_num_free_blocks()
+    prompt = list(range(1000, 1064))
+    first = h.add(prompt + list(range(2000, 2030)), session_id="a")
+    h.run(first)
+    second = h.add(prompt + list(range(3000, 3030)), session_id="b")
+    h.run(second)
+    assert h.cached[second.request_id] == 64
+    _release(h, "a")
+    third = h.add(prompt + list(range(4000, 4030)), session_id="c")
+    h.step()
+    assert h.cached[third.request_id] == 64
+    h.run(third)
+    _release(h, "b", "c")
+    assert not h.store.nodes
+    assert h.store.block_pool.get_num_free_blocks() == free
+
+
+def test_release_of_a_running_session_waits_for_its_request():
+    """Releasing a session whose request is still running keeps that
+    request's state until it stops, then frees it."""
+    h = Harness()
+    free = h.store.block_pool.get_num_free_blocks()
+    running = h.add(list(range(500, 560)), max_tokens=20, session_id="s")
+    h.step()
+    own = h.store._own[running.request_id].node_id
+    _release(h, "s")
+    assert own in h.store.nodes
+    h.run(running)
+    assert not h.store.nodes
+    assert h.store.block_pool.get_num_free_blocks() == free
+    assert _release(h, "unknown") == 0

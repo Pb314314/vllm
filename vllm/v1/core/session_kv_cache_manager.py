@@ -220,6 +220,9 @@ class SessionKVCacheManager(KVCacheManager):
         # Checkpoints whose recurrent state is copied with this step's
         # batched block copies: not a copy source until the step is sent.
         self._unsettled: set[NodeId] = set()
+        # States of released sessions still in use (by a running request or
+        # another session's state below them), freed once nothing uses them.
+        self._orphans: set[NodeId] = set()
         # Tokens each request had computed before the chunk scheduled this
         # step, in case it is preempted before the step is sent.
         self._scheduled_from: dict[str, int] = {}
@@ -593,6 +596,39 @@ class SessionKVCacheManager(KVCacheManager):
         self._tip.pop(request_id, None)
         self._own.pop(request_id, None)
         super().free(request)
+        if self._orphans:
+            self._free_orphans()
+
+    # ----------------------------------------------------------------- release
+    def release(self, node_ids: list[NodeId]) -> int:
+        """Free the given states of ended sessions as far as nothing else uses
+        them, and the rest as soon as nothing does. Returns the number of
+        blocks freed now."""
+        num_free = self.block_pool.get_num_free_blocks()
+        self._orphans.update(n for n in node_ids if n in self.nodes)
+        self._free_orphans()
+        return self.block_pool.get_num_free_blocks() - num_free
+
+    def _free_orphans(self) -> None:
+        """Remove released states nothing uses, deepest first, and cut the
+        rest down to what other states below them still read."""
+        protected = self._protected()
+        changed = True
+        while changed:
+            changed = False
+            for node_id in list(self._orphans):
+                node = self.nodes.get(node_id)
+                if node is None:
+                    self._orphans.discard(node_id)
+                elif node_id in protected:
+                    continue
+                elif not node.children:
+                    self._remove(node)
+                    changed = True
+                elif not self._trims_whole_nodes() and node.end > max(
+                    child.start for child in node.children
+                ):
+                    self._cut(node, node.start)
 
     # ---------------------------------------------------------------- eviction
     def _ensure_free_blocks(self, num_blocks: int) -> bool:
@@ -730,6 +766,7 @@ class SessionKVCacheManager(KVCacheManager):
 
     def _remove(self, node: _Node) -> None:
         del self.nodes[node.node_id]
+        self._orphans.discard(node.node_id)
         if node.parent is not None:
             node.parent.children.remove(node)
         freed = sum(b.ref_cnt == 1 for group in node.blocks for b in group)
@@ -748,6 +785,7 @@ class SessionKVCacheManager(KVCacheManager):
         self.nodes.clear()
         self._pending = None
         self._unsettled.clear()
+        self._orphans.clear()
         self._tip.clear()
         self._own.clear()
         self.epoch += 1

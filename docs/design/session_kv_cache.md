@@ -98,6 +98,17 @@ the deficit it trims the least recently used idle nodes from their tails, block 
 like prefix caching's block LRU (hybrid nodes are removed whole). A waiting request's match
 and a preempted request's chunks are not protected, again matching prefix caching.
 
+## Releasing ended sessions
+
+A caller that knows a session has ended (an RL trajectory, a deleted conversation) can free
+it at once instead of waiting for eviction: `EngineCore.release_sessions(session_ids)`
+takes the client `session_id`s the requests carried. The resolver returns every state those
+sessions published and forgets the sessions; the store frees each state nothing else uses,
+cuts states that other sessions' states hang below down to what those still read (a prompt
+shared by a group of rollouts), and frees the rest once their last user stops. The public
+API (`LLM`, OpenAI server) is not defined yet. Requests without a `session_id` are freed
+only by eviction.
+
 ## Group kinds
 
 | Group | What a node holds |

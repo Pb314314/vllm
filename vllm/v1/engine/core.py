@@ -117,8 +117,8 @@ from vllm.v1.kv_cache_interface import (
 from vllm.v1.metrics.stats import SchedulerIterationDetails, SchedulerStats
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
-from vllm.v1.session.resolver import SessionResolver
 from vllm.v1.serial_utils import MsgpackDecoder, MsgpackEncoder, bytestr
+from vllm.v1.session.resolver import SessionResolver
 from vllm.v1.structured_output import StructuredOutputManager
 from vllm.version import __version__ as VLLM_VERSION
 
@@ -971,6 +971,15 @@ class EngineCore:
         return self.scheduler.reset_prefix_cache(
             reset_running_requests, reset_connector
         )
+
+    def release_sessions(self, session_ids: list[str]) -> int:
+        """Free the session KV states of the given client session ids, which
+        the caller knows have ended; states other sessions still use are
+        freed once they stop. Returns the number of blocks freed now."""
+        resolver = getattr(self, "session_resolver", None)
+        if resolver is None:
+            return 0
+        return self.scheduler.kv_cache_manager.release(resolver.release(session_ids))
 
     def reset_encoder_cache(self) -> None:
         """Reset the encoder cache to invalidate all cached encoder outputs.
