@@ -125,11 +125,9 @@ class SessionKVCacheManager(KVCacheManager):
             raise ValueError("Session KV cache replaces prefix caching")
         super().__init__(*args, **kwargs)
         managers = self.coordinator.single_type_managers
-        # A node keeps every sliding-window block it covers, as prefix
-        # caching keeps freed out-of-window blocks cached, so any position a
-        # node covers keeps the window before it. Groups that opt out of
-        # prefix caching (ring buffers, windows rebuilt by bounded replay) are
-        # per-request scratch that nodes never hold, as with prefix caching.
+        # Groups that opt out of prefix caching (windows rebuilt by bounded
+        # replay, and ring buffers outside hybrid models) are per-request
+        # scratch that nodes never hold, as with prefix caching.
         supported = (
             FullAttentionManager,
             SlidingWindowManager,
