@@ -116,7 +116,8 @@ only by eviction.
 | Full attention, MLA, indexer caches | Blocks by token position. Compressed caches (`tokens_per_state > 1`) complete a state only at multiples of the ratio, so hybrid commit points are multiples of every ratio. |
 | Sliding window | References to the window's blocks before each commit point (null elsewhere). Like Mamba state, a window moves on as a request computes, so models with sliding windows resume at commit points; unlike Mamba it is written by position, so no copy is needed. |
 | Mamba / GDN / KDA | One state block per commit point. |
-| Ring buffers, windows rebuilt by bounded replay (`prefix_cacheable = False`) | Nothing: per-request scratch; a resumed request starts them fresh, as with prefix caching. |
+| Ring buffers (the open group of a compressed cache) | In models that resume at commit points: a copy of the ring at each commit point, like Mamba state, so commit points need no compression alignment. In attention-only models: nothing, since block-aligned resumes find the ring empty. |
+| Windows rebuilt by bounded replay | Nothing: per-request scratch, as with prefix caching. |
 
 ## Not supported yet
 

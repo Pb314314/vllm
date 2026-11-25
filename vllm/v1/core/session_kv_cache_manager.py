@@ -146,7 +146,18 @@ class SessionKVCacheManager(KVCacheManager):
         # request computes: a node keeps it only at commit points (a copy of
         # the Mamba state; references to the window's blocks), so these models
         # resume at commit points, and full-attention-only models anywhere.
-        self.commit_points_only = any(self._stateful(m) for m in managers)
+        self.commit_points_only = any(
+            isinstance(m, MambaManager) or self._windowed(m) for m in managers
+        )
+        # In such models a ring buffer (the open group of a compressed cache,
+        # e.g. GLM-5.3-Flash's indexer tail) is state too: saved at commit
+        # points like Mamba state. Attention-only models resume at block
+        # boundaries, where the ring is empty, so it stays per-request scratch.
+        self._ring_groups = [
+            g
+            for g, m in enumerate(managers)
+            if self.commit_points_only and isinstance(m, CircularBufferManager)
+        ]
         # With speculative decoding, the state after the last verified token
         # lives in whichever speculative block the acceptance count selects,
         # so a hybrid request saves its state where its prefill ends instead
@@ -166,7 +177,11 @@ class SessionKVCacheManager(KVCacheManager):
         )
         self.block_sizes = [m.block_size for m in managers]
         self._window_groups = [g for g, m in enumerate(managers) if self._windowed(m)]
-        positional = [m.block_size for m in managers if self._positional(m)]
+        positional = [
+            m.block_size
+            for m in managers
+            if self._positional(m) and not self._stateful(m)
+        ] or [m.block_size for m in managers if self._positional(m)]
         # A divergence checkpoint costs one recurrent state block. Require the
         # shared span to cover an attention block (the same memory), capped at
         # _MAX_CHECKPOINT_GAP so hybrid models with very large blocks still
@@ -186,15 +201,16 @@ class SessionKVCacheManager(KVCacheManager):
         ratios = [
             m.kv_cache_spec.tokens_per_state
             for m in managers
-            if self._positional(m) and not isinstance(m, MambaManager)
+            if self._positional(m) and not self._stateful(m)
         ]
         if any(not isinstance(r, int) for r in ratios):
             raise ValueError("Session KV cache needs whole-token compression ratios")
-        self.commit_alignment = math.lcm(1, *ratios)
+        # A saved ring holds the open group, so states then need no alignment.
+        self.commit_alignment = 1 if self._ring_groups else math.lcm(1, *ratios)
         assert all(
             m.block_size % self.commit_alignment == 0
             for m in managers
-            if self._positional(m) and not isinstance(m, MambaManager)
+            if self._positional(m) and not self._stateful(m)
         )
         # A hybrid request's own final state is unusable when it sits in a
         # speculative block or off the commit alignment, so it also saves a
@@ -359,16 +375,23 @@ class SessionKVCacheManager(KVCacheManager):
             and manager.kv_cache_spec.prefix_cacheable
         )
 
-    @classmethod
-    def _stateful(cls, manager: Any) -> bool:
-        return isinstance(manager, MambaManager) or cls._windowed(manager)
+    def _is_ring(self, manager: Any) -> bool:
+        return isinstance(manager, CircularBufferManager) and bool(self._ring_groups)
 
-    @staticmethod
-    def _positional(manager: Any) -> bool:
-        """Whether nodes hold this group's blocks by token position: not
-        per-request scratch. Mamba groups are positional for one block that
-        holds the state at a node's commit point."""
-        return manager.kv_cache_spec.prefix_cacheable
+    def _stateful(self, manager: Any) -> bool:
+        """Groups whose content moves on as a request computes, so nodes keep
+        it only at commit points."""
+        return (
+            isinstance(manager, MambaManager)
+            or self._windowed(manager)
+            or self._is_ring(manager)
+        )
+
+    def _positional(self, manager: Any) -> bool:
+        """Whether nodes hold this group's blocks at all: not per-request
+        scratch. Mamba groups are positional for one block that holds the
+        state at a node's commit point."""
+        return manager.kv_cache_spec.prefix_cacheable or self._is_ring(manager)
 
     def _assemble(
         self, path: list[_Node], length: int, group: int
@@ -378,6 +401,9 @@ class SessionKVCacheManager(KVCacheManager):
         manager = self.coordinator.single_type_managers[group]
         if not self._positional(manager):
             return []
+        if self._is_ring(manager):
+            # One ring per request: the resumed state's saved ring.
+            return list(path[0].blocks[group][:1])
         block_size = self.block_sizes[group]
         table: list[KVCacheBlock | None] = [None] * cdiv(length, block_size)
         for node in path:
@@ -518,9 +544,15 @@ class SessionKVCacheManager(KVCacheManager):
         ):
             return False
         managers = self.coordinator.single_type_managers
-        recurrent = [g for g, m in enumerate(managers) if isinstance(m, MambaManager)]
+        recurrent = [
+            g
+            for g, m in enumerate(managers)
+            if isinstance(m, MambaManager) or self._is_ring(m)
+        ]
         states = [
-            managers[g].req_to_blocks[request_id][
+            managers[g].req_to_blocks[request_id][:1]
+            if self._is_ring(managers[g])
+            else managers[g].req_to_blocks[request_id][
                 node.start // managers[g].block_size : cdiv(end, managers[g].block_size)
             ]
             for g in recurrent

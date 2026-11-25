@@ -1268,7 +1268,15 @@ class CircularBufferManager(FullAttentionManager):
         num_local_computed_tokens: int,
         num_external_computed_tokens: int,
     ) -> None:
-        return
+        if not new_computed_blocks:
+            return
+        # A saved ring (session KV states of hybrid models) seeds the request's
+        # own ring: copy it in, both retained until the copy has run.
+        (source,) = new_computed_blocks
+        self.block_pool.touch([source])
+        (ring,) = self._claim_ring_block(request_id)
+        ring.ref_cnt += 1
+        self._pending_cow_copies.append((source, ring))
 
     def remove_skipped_blocks(
         self,

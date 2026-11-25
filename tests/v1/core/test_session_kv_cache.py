@@ -17,7 +17,10 @@ from vllm.sampling_params import SamplingParams
 from vllm.utils.math_utils import cdiv
 from vllm.v1.core.sched.scheduler import Scheduler
 from vllm.v1.core.session_kv_cache_manager import validate_session_request
-from vllm.v1.core.single_type_kv_cache_manager import MambaManager
+from vllm.v1.core.single_type_kv_cache_manager import (
+    CircularBufferManager,
+    MambaManager,
+)
 from vllm.v1.kv_cache_interface import (
     CircularBufferSpec,
     FullAttentionSpec,
@@ -47,11 +50,16 @@ class Harness:
         **kwargs,
     ):
         groups = None
+        attention = FullAttentionSpec(
+            block_size=BLOCK,
+            num_kv_heads=1,
+            head_size=1,
+            dtype=torch.float32,
+            tokens_per_state=compress_ratio,
+        )
         if sliding_window is not None:
             groups = [
-                FullAttentionSpec(
-                    block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
-                ),
+                attention,
                 SlidingWindowSpec(
                     block_size=window_block,
                     num_kv_heads=1,
@@ -60,28 +68,20 @@ class Harness:
                     sliding_window=sliding_window,
                 ),
             ]
-        if ring:
-            # A per-request scratch ring (DeepSeek V4.1 compressor state).
-            groups = [
-                FullAttentionSpec(
-                    block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
-                ),
-                CircularBufferSpec(
-                    block_size=8, num_kv_heads=1, head_size=1, dtype=torch.float32
-                ),
-            ]
         if hybrid:
             groups = [
-                FullAttentionSpec(
-                    block_size=BLOCK,
-                    num_kv_heads=1,
-                    head_size=1,
-                    dtype=torch.float32,
-                    tokens_per_state=compress_ratio,
-                ),
+                attention,
                 new_mamba_spec(
                     block_size=2048, num_speculative_blocks=num_speculative_blocks
                 ),
+            ]
+        if ring:
+            # A ring buffer: the open group of a compressed cache (DeepSeek V4.1
+            # compressor state, GLM-5.3-Flash indexer tail).
+            groups = (groups or [attention]) + [
+                CircularBufferSpec(
+                    block_size=8, num_kv_heads=1, head_size=1, dtype=torch.float32
+                )
             ]
         self.sched: Scheduler = create_scheduler(
             session_cache=True,
@@ -165,16 +165,23 @@ class Harness:
         check_invariants(self)
         return output
 
+    def _recurrent(self, manager) -> bool:
+        """Groups holding one state block updated in place: Mamba, and ring
+        buffers where the store saves them as state."""
+        return isinstance(manager, MambaManager) or (
+            isinstance(manager, CircularBufferManager) and bool(self.store._ring_groups)
+        )
+
     def _groups(self, request: Request):
         for manager in self.store.coordinator.single_type_managers:
-            if manager.kv_cache_spec.prefix_cacheable:
+            if manager.kv_cache_spec.prefix_cacheable or self._recurrent(manager):
                 yield manager, manager.req_to_blocks[request.request_id]
 
     def _verify(self, request: Request, end: int, recurrent: bool) -> None:
         """The KV the request reads must come from its own token prefix."""
         keys = prefix_keys(request.all_token_ids, end)
         for manager, blocks in self._groups(request):
-            if isinstance(manager, MambaManager) != recurrent:
+            if self._recurrent(manager) != recurrent:
                 continue
             if recurrent:
                 if end:
@@ -191,7 +198,7 @@ class Harness:
         end = min(end, request.num_tokens)
         keys = prefix_keys(request.all_token_ids, end)
         for manager, blocks in self._groups(request):
-            if isinstance(manager, MambaManager):
+            if self._recurrent(manager):
                 self.states[blocks[0].block_id] = keys[end]
                 continue
             size = manager.block_size
@@ -404,6 +411,7 @@ def test_hybrid_resumes_only_at_commit_points():
         (True, None, False),
         (False, 32, False),
         (False, None, True),
+        (True, None, True),
     ],
 )
 @pytest.mark.parametrize("seed", range(8))
@@ -898,3 +906,19 @@ def test_sliding_window_conversations_share_a_system_prompt():
     h.step()
     assert h.cached[third.request_id] == len(system)
     h.run(third)
+
+
+def test_hybrid_ring_state_needs_no_compression_alignment():
+    """When the open group of a compressed cache lives in a ring buffer
+    (GLM-5.3-Flash), the ring is saved with the recurrent state, so a request
+    stopping mid-group is resumable right where it stopped, with no extra
+    prefill chunk stop at an aligned position."""
+    h = Harness(hybrid=True, compress_ratio=4, ring=True)
+    assert h.store.commit_alignment == 1
+    first = h.add(list(range(41)), max_tokens=3)
+    h.run(first)
+    assert first.num_computed_tokens % 4
+    second = h.add(history(first) + list(range(300, 310)))
+    h.step()
+    assert h.cached[second.request_id] == first.num_computed_tokens
+    h.run(second)
