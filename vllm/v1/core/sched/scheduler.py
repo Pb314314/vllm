@@ -435,10 +435,12 @@ class Scheduler(SchedulerInterface):
             or group.kv_cache_spec.num_prefill_checkpoint_blocks > 0
             for group in kv_cache_config.kv_cache_groups
         )
-        # Session states update recurrent state in place, so a hybrid prefill
-        # chunk must end where the manager wants to save it.
+        # Session states keep recurrent state and sliding windows only where
+        # they were saved, so a prefill chunk must end where the manager wants
+        # to save one.
         self.stop_at_shared_prefix_boundary = (
-            self.cache_config.session_cache and self.has_mamba_layers
+            isinstance(self.kv_cache_manager, SessionKVCacheManager)
+            and self.kv_cache_manager.commit_points_only
         )
         # Fine-grained hits reuse the prompt's hash-aligned Mamba checkpoint.
         # Split there only if the backend cannot save it within the final chunk.

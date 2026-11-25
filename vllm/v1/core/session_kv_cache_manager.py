@@ -559,7 +559,7 @@ class SessionKVCacheManager(KVCacheManager):
         manager = self.coordinator.single_type_managers[group]
         size = manager.block_size
         first = node.start // size
-        lower = max(first, (end - manager.kv_cache_spec.sliding_window) // size)
+        lower = max(first, manager.get_num_skipped_tokens(end) // size)
         held = manager.req_to_blocks[request.request_id][lower : cdiv(end, size)]
         if len(held) < cdiv(end, size) - lower or any(b.is_null for b in held):
             return None

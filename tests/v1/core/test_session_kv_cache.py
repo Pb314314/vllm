@@ -41,6 +41,7 @@ class Harness:
         hybrid: bool = False,
         num_speculative_blocks: int = 0,
         sliding_window: int | None = None,
+        window_block: int = BLOCK,
         ring: bool = False,
         compress_ratio: int = 1,
         **kwargs,
@@ -52,7 +53,7 @@ class Harness:
                     block_size=BLOCK, num_kv_heads=1, head_size=1, dtype=torch.float32
                 ),
                 SlidingWindowSpec(
-                    block_size=BLOCK,
+                    block_size=window_block,
                     num_kv_heads=1,
                     head_size=1,
                     dtype=torch.float32,
@@ -866,3 +867,34 @@ def test_sliding_window_state_keeps_only_the_window_before_commit_points():
     h.step()
     assert h.cached[second.request_id] == node.end
     h.run(second)
+
+
+@pytest.mark.parametrize(
+    "sliding_window,window_block", [(4, 4), (4, 16), (16, 16), (17, 16), (32, 16)]
+)
+def test_sliding_window_states_are_saved_for_any_window_size(
+    sliding_window: int, window_block: int
+):
+    """Windows as short as a block (Inkling's short-conv state: 4 tokens in
+    4-token blocks) must still be saved where requests stop and diverge."""
+    h = Harness(sliding_window=sliding_window, window_block=window_block)
+    first = h.add(list(range(100, 200)), max_tokens=3)
+    h.run(first)
+    assert any(n.commit_points for n in h.store.nodes.values())
+    second = h.add(history(first) + list(range(500, 520)))
+    h.step()
+    assert h.cached[second.request_id] == first.num_computed_tokens
+    h.run(second)
+
+
+def test_sliding_window_conversations_share_a_system_prompt():
+    """Models with sliding windows save the window where conversations
+    diverge, like hybrid models, so a shared system prompt is reused."""
+    h = Harness(sliding_window=32)
+    system = list(range(1000, 1100))
+    for suffix in (2000, 3000):
+        h.run(h.add(system + list(range(suffix, suffix + 40))))
+    third = h.add(system + list(range(4000, 4040)))
+    h.step()
+    assert h.cached[third.request_id] == len(system)
+    h.run(third)
