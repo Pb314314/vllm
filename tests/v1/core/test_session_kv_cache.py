@@ -333,27 +333,30 @@ def test_evicted_candidate_falls_back_to_surviving_shorter_state():
     h = Harness()
     root = h.add(list(range(48)))
     h.run(root)
-    root_node = h.store.nodes[h.session(root).cursor]
-    leaf = h.add(history(root) + list(range(500, 532)))
+    # Branch inside root, so root keeps positions the leaf does not hold.
+    leaf = h.add(history(root)[:32] + list(range(500, 532)))
     h.run(leaf)
     late = h.add(history(leaf) + [9])
     # Evict leaf's state before `late` is scheduled.
     h.store._remove(h.store.nodes[h.session(leaf).cursor])
     h.step()
-    assert h.cached[late.request_id] == root_node.end // BLOCK * BLOCK
+    assert h.cached[late.request_id] == 32
     h.run(late)
 
 
-def test_evicted_state_prefix_is_still_served_by_a_later_state():
-    """Attention-only: a later state of a conversation holds the earlier
-    prefix too, so a request matching only the earlier prefix still resumes
-    after the earlier state is gone."""
+def test_attention_state_covered_by_its_continuation_is_dropped():
+    """Attention-only: a continuation that resumed an earlier state at its
+    last block boundary holds every position that state can be resumed at,
+    so once it finishes the earlier state is dropped; a request matching only
+    the earlier prefix resumes from the continuation's state."""
     h = Harness()
     root = h.add(list(range(48)))
     h.run(root)
+    root_id = h.session(root).cursor
     leaf = h.add(history(root) + list(range(500, 532)))
     h.run(leaf)
-    h.store._remove(h.store.nodes[h.session(root).cursor])
+    assert root_id not in h.store.nodes
+    assert root_id not in h.resolver.nodes
     branch = h.add(history(root) + [9])
     h.step()
     assert h.cached[branch.request_id] == len(history(root)) // BLOCK * BLOCK
@@ -600,17 +603,20 @@ def test_waiting_request_match_does_not_preempt_running_requests():
     assert running.num_preemptions == 0
 
 
-def test_eviction_reclaims_the_unread_tail_of_an_interior_node():
-    """A child re-covers its parent's partial last block, and attention
-    resumes are block aligned, so that block is reclaimable before any
-    session's history."""
+def test_continued_attention_state_frees_its_unread_partial_block():
+    """Attention resumes are block aligned, so a continuation recomputes the
+    earlier state's partial last block; once it finishes, the earlier state
+    is dropped and that block freed without any eviction."""
     h = Harness()
     first = h.add(list(range(40)))
     h.run(first)
+    earlier = h.store.nodes[h.session(first).cursor]
+    partial = earlier.blocks[0][-1]
     second = h.add(history(first) + list(range(300, 340)))
     h.run(second)
-    # Asked for two blocks, eviction takes the parent's unread block first.
-    assert h.store._evict(2)
+    assert earlier.node_id not in h.store.nodes
+    assert partial.ref_cnt == 0
+    assert h.store.num_evicted_blocks == 1
     third = h.add(history(second) + [1])
     h.step()
     assert h.cached[third.request_id] == len(history(second)) // BLOCK * BLOCK

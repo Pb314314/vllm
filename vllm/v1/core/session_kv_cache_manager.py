@@ -472,6 +472,17 @@ class SessionKVCacheManager(KVCacheManager):
         )
         return node
 
+    def _covers(self, node: _Node, length: int) -> bool:
+        """Whether a request that resumed `node` at `length` now holds every
+        position the node can be resumed at: true for an attention-only node
+        resumed at its last block boundary that no request still writes."""
+        return (
+            node.commit_points is None
+            and node.node_id in self.nodes
+            and length == node.resume_length(node.end, self.resume_alignment)
+            and node not in self._own.values()
+        )
+
     def _seal(self, request: Request, node: _Node, end: int, copy: bool) -> bool:
         """Make a hybrid request's own node resumable at its end `end` by
         giving it the recurrent state there: a copy if the request computes
@@ -596,6 +607,15 @@ class SessionKVCacheManager(KVCacheManager):
                 else None
             )
             self._emit(lambda seq: RequestFinished(seq, request_id, node_id))
+            resumed, length = self._resumed.get(request_id, (None, 0))
+            if (
+                node_id is not None
+                and resumed is not None
+                and resumed is not committed
+                and self._covers(resumed, length)
+            ):
+                # The session continues from the request's own state.
+                self._remove(resumed)
         else:
             own = self._own.get(request_id)
             computed = self._scheduled_from.get(request_id)
