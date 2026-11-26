@@ -1,0 +1,811 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""Physical side of session KV reuse: a set of independent committed states.
+
+A node is one state: it holds every block a request needs to resume at path
+positions up to `end`, starting from position 0. Nodes share blocks only by
+reference count, never by structure, so any node can be evicted without
+affecting another, and a node's blocks are directly the block table of a
+request resuming it. The store never compares tokens or hashes blocks: the
+resolver tells it which node a request matches, and the store only checks that
+the node still holds that position.
+
+Invariants:
+  1. Only the store publishes nodes, from the blocks of the request that
+     computed them.
+  2. A published node never changes except by truncating its tail. Only the
+     publishing request may still write its tail block, and only past `end`.
+     A request resuming inside a block gets a private copy of it.
+  3. A block returns to the pool only when its `ref_cnt` reaches 0; each node
+     holds one reference on each of its blocks.
+"""
+
+import math
+import secrets
+from collections import Counter, OrderedDict
+from collections.abc import Callable
+from typing import Any
+
+from vllm.config import VllmConfig
+from vllm.utils.math_utils import cdiv
+from vllm.v1.core.kv_cache_manager import KVCacheBlocks, KVCacheManager
+from vllm.v1.core.kv_cache_utils import KVCacheBlock, KVCacheBlockCopy
+from vllm.v1.core.single_type_kv_cache_manager import (
+    CircularBufferManager,
+    FullAttentionManager,
+    MambaManager,
+    SlidingWindowManager,
+)
+from vllm.v1.request import Request, RequestStatus
+from vllm.v1.session.protocol import (
+    NodeExtended,
+    NodeId,
+    NodePublished,
+    NodeTruncated,
+    RequestFinished,
+    SessionBinding,
+    StoreEvent,
+    StoreReset,
+)
+from vllm.v1.session.resolver import pack_tokens
+
+_COMMITTED = (RequestStatus.FINISHED_STOPPED, RequestStatus.FINISHED_LENGTH_CAPPED)
+# Aborted requests (including stop strings, which the frontend aborts) still
+# computed valid KV; they publish it without advancing their session.
+_PUBLISHED = (*_COMMITTED, RequestStatus.FINISHED_ABORTED)
+# Provisional: the longest shared span a hybrid divergence must have before
+# it is saved, for models whose attention block is larger than this.
+_MAX_CHECKPOINT_GAP = 256
+
+
+def validate_session_cache_config(vllm_config: VllmConfig) -> None:
+    unsupported = {
+        "KV connectors": vllm_config.kv_transfer_config is not None,
+        "EC connectors": vllm_config.ec_transfer_config is not None,
+        "KV cache events": (
+            vllm_config.kv_events_config is not None
+            and vllm_config.kv_events_config.enable_kv_cache_events
+        ),
+        "LoRA": vllm_config.lora_config is not None,
+        "encoder-decoder models": vllm_config.model_config.is_encoder_decoder,
+        "pipeline parallelism": (
+            vllm_config.parallel_config.pipeline_parallel_size > 1
+        ),
+    }
+    found = [name for name, present in unsupported.items() if present]
+    if found:
+        raise ValueError(f"Session KV cache does not support {', '.join(found)} yet")
+
+
+def validate_session_request(request: Request) -> None:
+    if request.prompt_embeds is not None or request.mm_features:
+        raise ValueError("Session KV cache only supports text token prompts")
+    if request.resumable:
+        raise ValueError("Session KV cache does not support streaming input yet")
+
+
+class _Node:
+    __slots__ = ("node_id", "end", "blocks", "commit_points")
+
+    def __init__(
+        self,
+        node_id: NodeId,
+        end: int,
+        blocks: tuple[list[KVCacheBlock], ...],
+        commit_points: tuple[int, ...] | None,
+    ) -> None:
+        self.node_id = node_id
+        self.end = end
+        # Per KV cache group: the block table for positions `[0, end)`, the
+        # saved state (Mamba, ring buffers), or nothing (per-request scratch).
+        self.blocks = blocks
+        self.commit_points = commit_points
+
+    def resume_length(self, length: int, alignment: int) -> int:
+        """Longest position <= `length` a request can resume this node at."""
+        if self.commit_points is None:
+            length = min(length, self.end)
+            return length - length % alignment
+        return max((c for c in self.commit_points if c <= length), default=0)
+
+
+class SessionKVCacheManager(KVCacheManager):
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if kwargs.get("enable_caching"):
+            raise ValueError("Session KV cache replaces prefix caching")
+        super().__init__(*args, **kwargs)
+        managers = self.coordinator.single_type_managers
+        # Groups that opt out of prefix caching (windows rebuilt by bounded
+        # replay, and ring buffers outside hybrid models) are per-request
+        # scratch that nodes never hold, as with prefix caching.
+        supported = (
+            FullAttentionManager,
+            SlidingWindowManager,
+            MambaManager,
+            CircularBufferManager,
+        )
+        if any(type(m) not in supported for m in managers):
+            raise ValueError(
+                "Session KV cache supports full, sliding-window, ring-buffer and "
+                "Mamba layers only; got "
+                f"{sorted({type(m).__name__ for m in managers})}"
+            )
+        # Mamba state and a sliding window are both state that moves on as a
+        # request computes: a node keeps it only at commit points (a copy of
+        # the Mamba state; references to the window's blocks), so these models
+        # resume at commit points, and full-attention-only models anywhere.
+        self.commit_points_only = any(
+            isinstance(m, MambaManager) or self._windowed(m) for m in managers
+        )
+        # In such models a ring buffer (the open group of a compressed cache,
+        # e.g. GLM-5.3-Flash's indexer tail) is state too: saved at commit
+        # points like Mamba state. Attention-only models resume at block
+        # boundaries, where the ring is empty, so it stays per-request scratch.
+        self._ring_groups = [
+            g
+            for g, m in enumerate(managers)
+            if self.commit_points_only and isinstance(m, CircularBufferManager)
+        ]
+        # With speculative decoding, the state after the last verified token
+        # lives in whichever speculative block the acceptance count selects,
+        # so a hybrid request saves its state where its prefill ends instead
+        # of where it stops.
+        self.speculative_state = any(
+            isinstance(m, MambaManager) and m.num_speculative_blocks for m in managers
+        )
+        # EAGLE-style draft KV at a position also depends on the next
+        # `draft_lookahead` tokens. Resuming without them costs draft
+        # acceptance, never output correctness (the target model verifies);
+        # attention-only models give up the few tokens, as prefix caching does,
+        # while hybrid models resume exactly at their saved states.
+        self.draft_lookahead = (
+            0 if self.commit_points_only else kwargs.get("num_hash_lookahead_tokens", 0)
+        )
+        self.block_sizes = [m.block_size for m in managers]
+        self._window_groups = [g for g, m in enumerate(managers) if self._windowed(m)]
+        positional = [
+            m.block_size
+            for m in managers
+            if self._positional(m) and not self._stateful(m)
+        ] or [m.block_size for m in managers if self._positional(m)]
+        # A divergence checkpoint costs one recurrent state block. Require the
+        # shared span to cover an attention block (the same memory), capped at
+        # _MAX_CHECKPOINT_GAP so hybrid models with very large blocks still
+        # share common system prompts; shorter spans (such as a chat
+        # template's header) are recomputed.
+        self.min_checkpoint_gap = min(*positional, _MAX_CHECKPOINT_GAP)
+        # Attention-only models resume at block boundaries and recompute the
+        # rest of the block, which is cheaper than copying it. Hybrid models
+        # must resume exactly at a commit point, copying the boundary blocks.
+        self.resume_alignment = math.lcm(*positional)
+        # Compressed caches (`tokens_per_state > 1`, e.g. DeepSeek V4.1 and
+        # GLM-5.3 indexers) finish a state only at a multiple of the ratio;
+        # the open group lives in per-request scratch. A hybrid state saved
+        # elsewhere could not be resumed, so commit points are multiples of
+        # every ratio. Attention-only resumes are block aligned, which blocks
+        # (whole numbers of states) already satisfy.
+        all_ratios = [
+            spec.tokens_per_state
+            for group, m in zip(self.kv_cache_config.kv_cache_groups, managers)
+            if self._positional(m) and not self._stateful(m)
+            for spec in group.kv_cache_specs.values()
+        ]
+        ratios = [r for r in all_ratios if isinstance(r, int)]
+        if len(ratios) != len(all_ratios):
+            raise ValueError("Session KV cache needs whole-token compression ratios")
+        # A saved ring holds the open group, so states then need no alignment.
+        self.commit_alignment = 1 if self._ring_groups else math.lcm(1, *ratios)
+        assert all(
+            m.block_size % self.commit_alignment == 0
+            for m in managers
+            if self._positional(m) and not self._stateful(m)
+        )
+        # A hybrid request's own final state is unusable when it sits in a
+        # speculative block or off the commit alignment, so it also saves a
+        # state where its prefill ends (rounded down to the alignment).
+        self.save_at_prefill_end = self.commit_points_only and (
+            self.speculative_state or self.commit_alignment > 1
+        )
+
+        self.epoch = 0
+        self.seq = 0
+        self._publish_seq = 0
+        self._origin = secrets.randbits(63)
+        self._next_node_id = 1
+        # Least recently used first.
+        self.nodes: OrderedDict[NodeId, _Node] = OrderedDict()
+        self._listeners: list[Callable[[StoreEvent], None]] = []
+        self._rebind: Callable[[Request], SessionBinding] | None = None
+        # The attach just handed to the scheduler, protected from eviction
+        # only while that request allocates; after that the request holds the
+        # blocks itself. Like prefix caching, a waiting request's match never
+        # keeps running requests from growing.
+        self._pending: tuple[str, _Node, int] | None = None
+        # The node and position each running request resumed at.
+        self._resumed: dict[str, tuple[_Node, int]] = {}
+        # The node each running request publishes and extends as it computes.
+        self._own: dict[str, _Node] = {}
+        # Checkpoints whose recurrent state is copied with this step's
+        # batched block copies: not a copy source until the step is sent.
+        self._unsettled: set[NodeId] = set()
+        # States of released sessions that a running request still writes,
+        # removed once it stops.
+        self._orphans: set[NodeId] = set()
+        # Number of nodes referencing each block.
+        self._held: Counter[int] = Counter()
+        # Tokens each request had computed before the chunk scheduled this
+        # step, in case it is preempted before the step is sent.
+        self._scheduled_from: dict[str, int] = {}
+
+        self.num_attached_requests = 0
+        self.num_attached_tokens = 0
+        self.num_stale_bindings = 0
+        self.num_evicted_blocks = 0
+
+    def connect(
+        self,
+        listener: Callable[[StoreEvent], None],
+        rebind: Callable[[Request], SessionBinding] | None = None,
+    ) -> None:
+        self._listeners.append(listener)
+        self._rebind = rebind
+
+    def _emit(self, make_event: Callable[[int], StoreEvent]) -> None:
+        self.seq += 1
+        event = make_event(self.seq)
+        for listener in self._listeners:
+            listener(event)
+
+    # ------------------------------------------------------------------ attach
+    def prefix_cache_lookup_enabled(self, request: Request) -> bool:
+        return request.prefix_cache_hit_limit != 0
+
+    def get_num_cached_tokens(self, request: Request) -> int:
+        return 0
+
+    def get_computed_blocks(
+        self, request: Request, max_cache_hit_length: int | None = None
+    ) -> tuple[KVCacheBlocks, int, int]:
+        self._pending = None
+        binding = request.session_binding
+        if not self.prefix_cache_lookup_enabled(request) or binding is None:
+            return self.empty_kv_cache_blocks, 0, 0
+        if binding.seq < self._publish_seq and self._rebind is not None:
+            # Only a new node can offer a longer match.
+            binding = request.session_binding = self._rebind(request)
+        if binding.epoch != self.epoch:
+            self.num_stale_bindings += 1
+            return self.empty_kv_cache_blocks, 0, 0
+
+        limit = request.get_max_cache_hit_length(max_cache_hit_length)
+        found = None
+        for candidate in binding.candidates:
+            node = self.nodes.get(candidate.node_id)
+            if node is None or node.node_id in self._unsettled:
+                continue
+            length = node.resume_length(
+                min(candidate.length - self.draft_lookahead, limit),
+                self.resume_alignment,
+            )
+            if length:
+                found = (node, length)
+                break
+        else:
+            if binding.candidates:
+                self.num_stale_bindings += 1
+        checkpoint = self._checkpoint_position(
+            request, min(binding.match_length, limit), found[1] if found else 0
+        )
+        if found is None:
+            return self.empty_kv_cache_blocks, 0, checkpoint
+
+        node, length = found
+        self._pending = (request.request_id, node, length)
+        blocks = tuple(
+            self._table(node, length, group) for group in range(len(self.block_sizes))
+        )
+        return self.create_kv_cache_blocks(blocks), length, checkpoint
+
+    def take_kv_cache_block_copies(
+        self,
+    ) -> tuple[list[KVCacheBlockCopy], list[KVCacheBlock]]:
+        # Called once at the end of every scheduling step.
+        self._unsettled.clear()
+        self._scheduled_from.clear()
+        return super().take_kv_cache_block_copies()
+
+    def _checkpoint_position(self, request: Request, shared: int, resume: int) -> int:
+        """Where a hybrid request should first stop a prefill chunk and save
+        its recurrent state: the end of the prefix it shares with other
+        requests, when that is far enough past where it resumes to be worth a
+        state, else where its prefill state must be saved. Attention-only
+        models publish every chunk and need no stop."""
+        if not self.commit_points_only:
+            return 0
+        shared -= shared % self.commit_alignment
+        if shared - resume >= self.min_checkpoint_gap:
+            return shared
+        prefill_end = self._prefill_save_point(request)
+        return prefill_end if prefill_end > resume else 0
+
+    def _prefill_save_point(self, request: Request) -> int:
+        """Where a hybrid request saves its state at the end of its prefill,
+        when its final state will not be usable; 0 otherwise."""
+        if not self.save_at_prefill_end:
+            return 0
+        end = request.num_prompt_tokens
+        return end - end % self.commit_alignment
+
+    @staticmethod
+    def _windowed(manager: Any) -> bool:
+        """Sliding-window groups whose blocks nodes hold only for the window
+        before each commit point (scratch windows are not positional)."""
+        return isinstance(manager, SlidingWindowManager) and manager.prefix_cacheable(
+            manager.manager_config
+        )
+
+    def _is_ring(self, manager: Any) -> bool:
+        return isinstance(manager, CircularBufferManager) and bool(self._ring_groups)
+
+    def _stateful(self, manager: Any) -> bool:
+        """Groups whose content moves on as a request computes, so nodes keep
+        it only at commit points."""
+        return (
+            isinstance(manager, MambaManager)
+            or self._windowed(manager)
+            or self._is_ring(manager)
+        )
+
+    def _positional(self, manager: Any) -> bool:
+        """Whether nodes hold this group's blocks at all: not per-request
+        scratch. Mamba groups are positional for one block that holds the
+        state at a node's commit point."""
+        return manager.prefix_cacheable(manager.manager_config) or self._is_ring(
+            manager
+        )
+
+    def _table(self, node: _Node, length: int, group: int) -> list[KVCacheBlock]:
+        """Block table of `group` for a request resuming `node` at `length`."""
+        manager = self.coordinator.single_type_managers[group]
+        if not self._positional(manager):
+            return []
+        if self._is_ring(manager):
+            return list(node.blocks[group][:1])
+        return list(node.blocks[group][: cdiv(length, self.block_sizes[group])])
+
+    # ------------------------------------------------------------- allocation
+    def allocate_slots(
+        self, request: Request, num_new_tokens: int, *args: Any, **kwargs: Any
+    ) -> KVCacheBlocks | None:
+        if self._pending is not None and self._pending[0] != request.request_id:
+            self._pending = None
+        new_blocks = super().allocate_slots(request, num_new_tokens, *args, **kwargs)
+        pending, self._pending = self._pending, None
+        if new_blocks is None:
+            return None
+        num_scheduled_end = request.num_computed_tokens + num_new_tokens
+        if pending is not None:
+            _, node, length = pending
+            num_scheduled_end += length
+            self._resumed[request.request_id] = (node, length)
+            self.nodes.move_to_end(node.node_id)
+            self.num_attached_requests += 1
+            self.num_attached_tokens += length
+        self._scheduled_from[request.request_id] = num_scheduled_end - num_new_tokens
+        boundary = request.num_computed_tokens
+        prefill_end = self._prefill_save_point(request)
+        if (
+            self.commit_points_only
+            and boundary
+            and boundary in (request.shared_prefix_boundary, prefill_end)
+            and not self._resumable_at(request, boundary)
+        ):
+            # The previous chunk stopped where this request diverges from
+            # others, or where its prefill state must be saved; save a copy
+            # of its state before this step advances it.
+            checkpoint = self._publish(request, boundary)
+            if checkpoint is not None:
+                self._seal(request, checkpoint, boundary, copy=True)
+            if prefill_end > boundary == request.shared_prefix_boundary:
+                # The scheduler stops each prefill chunk at this boundary;
+                # after the divergence, stop next where the prefill ends.
+                request.shared_prefix_boundary = prefill_end
+        # Like prefix caching, publish each prompt chunk from the step that
+        # computes it: every attention layer writes all tokens' KV before any
+        # request in the batch reads it, and a preempted request can resume
+        # from its own chunks. Recurrent state is updated in place, so a
+        # hybrid chunk only lets other requests find where they diverge; it
+        # becomes resumable where the request saves or stops its state.
+        end = min(num_scheduled_end, request.num_prompt_tokens)
+        if end > self._published_end(request):
+            self._publish(request, end)
+        return new_blocks
+
+    def _published_end(self, request: Request) -> int:
+        """How far a node already holds this request's own path."""
+        own = self._own.get(request.request_id)
+        if own is not None and own.node_id in self.nodes:
+            return own.end
+        node, length = self._resumed.get(request.request_id, (None, 0))
+        return length if node is not None and node.node_id in self.nodes else 0
+
+    def _resumable_at(self, request: Request, position: int) -> bool:
+        if request.request_id in self._own:
+            return False
+        node, length = self._resumed.get(request.request_id, (None, 0))
+        return (
+            node is not None
+            and node.node_id in self.nodes
+            and length == position
+            and node.resume_length(position, self.resume_alignment) == position
+        )
+
+    def _publish(self, request: Request, end: int) -> _Node | None:
+        """Publish the request's KV up to `end` in its own node."""
+        own = self._own.get(request.request_id)
+        if own is not None and self._can_extend(request, own):
+            return self._extend(request, own, end)
+        resumed, length = self._resumed.get(request.request_id, (None, 0))
+        if resumed is not None and end <= length:
+            return resumed if end == length and resumed.node_id in self.nodes else None
+        managers = self.coordinator.single_type_managers
+        blocks = tuple(
+            []
+            if self._stateful(m) or not self._positional(m)
+            else list(m.req_to_blocks[request.request_id][: cdiv(end, m.block_size)])
+            for m in managers
+        )
+        if any(block.is_null for group in blocks for block in group):
+            return None
+        self._hold([b for group in blocks for b in group])
+        # A hybrid node is resumable only once sealed with a recurrent state.
+        commit_points = () if self.commit_points_only else None
+        node_id = NodeId(self._origin, self._next_node_id)
+        node = _Node(node_id, end, blocks, commit_points)
+        self._next_node_id += 1
+        self.nodes[node.node_id] = node
+        self._own[request.request_id] = node
+        self._publish_seq = self.seq + 1
+        tokens = pack_tokens(request.all_token_ids[:end])
+        self._emit(
+            lambda seq: NodePublished(
+                seq, node.node_id, end, tokens, commit_points, request.request_id
+            )
+        )
+        return node
+
+    def _covers(self, node: _Node, length: int) -> bool:
+        """Whether a request that resumed `node` at `length` now holds every
+        position the node can be resumed at: true for an attention-only node
+        resumed at its last block boundary that no request still writes."""
+        return (
+            node.commit_points is None
+            and node.node_id in self.nodes
+            and length == node.resume_length(node.end, self.resume_alignment)
+            and node not in self._own.values()
+        )
+
+    def _seal(self, request: Request, node: _Node, end: int, copy: bool) -> bool:
+        """Make a hybrid request's own node resumable at its end `end` by
+        giving it the recurrent state there: a copy if the request computes
+        past it, else the request's own state. A sealed node never changes."""
+        request_id = request.request_id
+        if (
+            node is not self._own.get(request_id)
+            or node.end != end
+            or end % self.commit_alignment
+        ):
+            return False
+        managers = self.coordinator.single_type_managers
+        recurrent = [
+            g
+            for g, m in enumerate(managers)
+            if isinstance(m, MambaManager) or self._is_ring(m)
+        ]
+        states = [
+            managers[g].req_to_blocks[request_id][
+                : 1 if self._is_ring(managers[g]) else cdiv(end, managers[g].block_size)
+            ]
+            for g in recurrent
+        ]
+        if any(block.is_null for group in states for block in group):
+            return False
+        windows: list[list[KVCacheBlock]] = []
+        for g in self._window_groups:
+            window = self._window(request, end, g)
+            if window is None:
+                return False
+            windows.append(window)
+        if copy:
+            if not self._ensure_free_blocks(sum(map(len, states))):
+                return False
+            states = [
+                [managers[g].copy_block(block) for block in group]
+                for g, group in zip(recurrent, states)
+            ]
+            self._unsettled.add(node.node_id)
+        self._hold([b for group in states for b in group])
+        for g, group in zip(recurrent, states):
+            node.blocks[g][:] = group
+        for g, window in zip(self._window_groups, windows):
+            self._hold(window)
+            node.blocks[g][:] = window
+        node.commit_points = (end,)
+        del self._own[request_id]
+        self._resumed[request_id] = (node, end)
+        self._publish_seq = self.seq + 1
+        self._emit(lambda seq: NodeExtended(seq, node.node_id, end, end, b"", (end,)))
+        return True
+
+    def _window(
+        self, request: Request, end: int, group: int
+    ) -> list[KVCacheBlock] | None:
+        """A node's blocks of a sliding-window group for a commit point at
+        `end`: the request's blocks for the window before `end`, null before
+        it. None if the request no longer holds the window."""
+        manager = self.coordinator.single_type_managers[group]
+        size = manager.block_size
+        lower = manager.get_num_skipped_tokens(end) // size
+        held = manager.req_to_blocks[request.request_id][lower : cdiv(end, size)]
+        if len(held) < cdiv(end, size) - lower or any(b.is_null for b in held):
+            return None
+        return [self.block_pool.null_block] * lower + list(held)
+
+    def _can_extend(self, request: Request, node: _Node) -> bool:
+        """A request may append to its own node only while it is still the
+        node's tail writer: same position, and still writing the node's last
+        (partial) block rather than a copy made after preemption."""
+        if node.commit_points or node.node_id not in self.nodes:
+            return False
+        for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
+            if self._stateful(manager) or not self._positional(manager):
+                continue
+            last = (node.end - 1) // manager.block_size
+            req_blocks = manager.req_to_blocks[request.request_id]
+            if node.end % manager.block_size and (
+                last >= len(req_blocks) or req_blocks[last] is not blocks[-1]
+            ):
+                return False
+        return True
+
+    def _extend(self, request: Request, node: _Node, end: int) -> _Node:
+        if end <= node.end:
+            return node
+        new_blocks = [
+            []
+            if self._stateful(manager) or not self._positional(manager)
+            else manager.req_to_blocks[request.request_id][
+                cdiv(node.end, manager.block_size) : cdiv(end, manager.block_size)
+            ]
+            for manager in self.coordinator.single_type_managers
+        ]
+        self._hold([b for group in new_blocks for b in group])
+        for blocks, added in zip(node.blocks, new_blocks):
+            blocks.extend(added)
+        start, node.end = node.end, end
+        self._publish_seq = self.seq + 1
+        tokens = pack_tokens(request.all_token_ids[start:end])
+        self._emit(lambda seq: NodeExtended(seq, node.node_id, start, end, tokens))
+        return node
+
+    def free(self, request: Request) -> None:
+        request_id = request.request_id
+        if self._pending is not None and self._pending[0] == request_id:
+            self._pending = None
+        if request.is_finished():
+            committed = None
+            # Speculative tokens still in flight may be rejected.
+            end = min(request.num_computed_tokens, request.num_tokens)
+            if request.status in _PUBLISHED and end > 0:
+                committed = self._publish(request, end)
+                if committed is not None and self.commit_points_only:
+                    if not self.speculative_state:
+                        self._seal(request, committed, end, copy=False)
+                    if end not in (committed.commit_points or ()):
+                        committed = None
+            node_id = (
+                committed.node_id
+                if committed is not None and request.status in _COMMITTED
+                else None
+            )
+            self._emit(lambda seq: RequestFinished(seq, request_id, node_id))
+            resumed, length = self._resumed.get(request_id, (None, 0))
+            if (
+                node_id is not None
+                and resumed is not None
+                and resumed is not committed
+                and self._covers(resumed, length)
+            ):
+                # The session continues from the request's own state.
+                self._remove(resumed)
+        else:
+            own = self._own.get(request_id)
+            computed = self._scheduled_from.get(request_id)
+            if own is not None and computed is not None and own.end > computed:
+                # Preempted in the step that scheduled it (priority policy):
+                # the chunk it just published will never be computed.
+                self._cut(own, computed)
+        # A preempted request's chunks stay published but unprotected, as
+        # with prefix caching; it re-attaches to them like any new request.
+        self._resumed.pop(request_id, None)
+        self._own.pop(request_id, None)
+        super().free(request)
+        if self._orphans:
+            self._free_orphans()
+
+    # ----------------------------------------------------------------- release
+    def release(self, node_ids: list[NodeId]) -> int:
+        """Free the given states of ended sessions as far as nothing else uses
+        them, and the rest as soon as nothing does. Returns the number of
+        blocks freed now."""
+        num_free = self.block_pool.get_num_free_blocks()
+        self._orphans.update(n for n in node_ids if n in self.nodes)
+        self._free_orphans()
+        return self.block_pool.get_num_free_blocks() - num_free
+
+    def _free_orphans(self) -> None:
+        """Remove released states that no running request is writing; blocks
+        other states share stay with them."""
+        protected = self._protected()
+        for node_id in list(self._orphans):
+            node = self.nodes.get(node_id)
+            if node is None:
+                self._orphans.discard(node_id)
+            elif node_id not in protected:
+                self._remove(node)
+
+    # ---------------------------------------------------------------- eviction
+    def _ensure_free_blocks(self, num_blocks: int) -> bool:
+        """Evict idle states only if that makes room for `num_blocks`."""
+        deficit = num_blocks - self.block_pool.get_num_free_blocks()
+        if deficit <= 0:
+            return True
+        if self._num_reclaimable_blocks(deficit) < deficit:
+            return False
+        while (
+            deficit := num_blocks - self.block_pool.get_num_free_blocks()
+        ) > 0 and self._evict(deficit):
+            pass
+        return deficit <= 0
+
+    def _hold(self, blocks: list[KVCacheBlock]) -> None:
+        """Take a node's reference on each of `blocks`."""
+        self.block_pool.touch(blocks)
+        self._held.update(b.block_id for b in blocks if not b.is_null)
+
+    def _release(self, blocks: list[KVCacheBlock]) -> None:
+        """Drop a node's reference on each of `blocks`, tail first."""
+        for block in blocks:
+            if not block.is_null:
+                self._held[block.block_id] -= 1
+                if not self._held[block.block_id]:
+                    del self._held[block.block_id]
+        self.block_pool.free_blocks(reversed(blocks))
+
+    def _protected(self) -> set[NodeId]:
+        """Nodes eviction must keep: the attach being allocated, whose blocks
+        the request does not hold yet, and the nodes running requests write."""
+        protected = {node.node_id for node in self._own.values()}
+        if self._pending is not None:
+            protected.add(self._pending[1].node_id)
+        return protected
+
+    def _num_reclaimable_blocks(self, limit: int) -> int:
+        """Count blocks repeated eviction can free, stopping at `limit`: every
+        block only idle nodes reference. Running requests reference their own
+        blocks, so only the attach being allocated needs excluding."""
+        attaching = (
+            {b.block_id for group in self._pending[1].blocks for b in group}
+            if self._pending is not None
+            else set()
+        )
+        blocks = self.block_pool.blocks
+        count = 0
+        for block_id, held in self._held.items():
+            if held == blocks[block_id].ref_cnt and block_id not in attaching:
+                count += 1
+                if count >= limit:
+                    break
+        return count
+
+    def _evict(self, num_blocks: int) -> bool:
+        """Free blocks of the least recently used idle node: its exclusive tail,
+        like prefix caching's block LRU, in attention-only models with one KV
+        cache group; the whole node otherwise."""
+        protected = self._protected()
+        first_idle = None
+        for node in self.nodes.values():
+            if node.node_id in protected:
+                continue
+            if self._trims_whole_nodes():
+                self._remove(node)
+                return True
+            if first_idle is None:
+                first_idle = node
+            if self._trim(node, num_blocks):
+                return True
+        if first_idle is not None:
+            # Every idle node only shares blocks; dropping the least recently
+            # used one leaves them to the others.
+            self._remove(first_idle)
+            return True
+        return False
+
+    def _trims_whole_nodes(self) -> bool:
+        return self.commit_points_only or len(self.block_sizes) > 1
+
+    def _trim(self, node: _Node, num_blocks: int) -> int:
+        """Free up to `num_blocks` of `node`'s exclusive tail."""
+        blocks = node.blocks[0]
+        keep = len(blocks)
+        while (
+            keep and len(blocks) - keep < num_blocks and blocks[keep - 1].ref_cnt == 1
+        ):
+            keep -= 1
+        freed = len(blocks) - keep
+        if not freed:
+            return 0
+        if not keep:
+            self._remove(node)
+            return freed
+        self._cut(node, keep * self.block_sizes[0])
+        self.num_evicted_blocks += freed
+        return freed
+
+    def _cut(self, node: _Node, end: int) -> None:
+        """Shrink `node` to `[0, end)`."""
+        if end <= 0:
+            self._remove(node)
+            return
+        end = min(node.end, end)
+        for manager, blocks in zip(self.coordinator.single_type_managers, node.blocks):
+            if self._stateful(manager) or not self._positional(manager):
+                continue
+            keep = cdiv(end, manager.block_size)
+            self._release(blocks[keep:])
+            del blocks[keep:]
+        node.end = end
+        commit_points = node.commit_points
+        self._emit(lambda seq: NodeTruncated(seq, node.node_id, end, commit_points))
+
+    def _remove(self, node: _Node) -> None:
+        del self.nodes[node.node_id]
+        self._orphans.discard(node.node_id)
+        freed = sum(
+            b.ref_cnt == 1 for group in node.blocks for b in group if not b.is_null
+        )
+        self.num_evicted_blocks += freed
+        for group in node.blocks:
+            self._release(group)
+        self._emit(lambda seq: NodeTruncated(seq, node.node_id, 0, None))
+
+    def reset_prefix_cache(self) -> bool:
+        if any(m.req_to_blocks for m in self.coordinator.single_type_managers):
+            # Like prefix caching, never reset under running requests.
+            return False
+        for node in reversed(self.nodes.values()):
+            for group in node.blocks:
+                self._release(group)
+        self.nodes.clear()
+        self._pending = None
+        self._unsettled.clear()
+        self._orphans.clear()
+        self._resumed.clear()
+        self._own.clear()
+        self.epoch += 1
+        # Ids of dropped states are never handed out again.
+        self._origin = secrets.randbits(63)
+        self._next_node_id = 1
+        self._emit(lambda seq: StoreReset(seq, self.epoch))
+        return super().reset_prefix_cache()
+
+    def session_stats(self) -> dict[str, int]:
+        held = {b.block_id for n in self.nodes.values() for g in n.blocks for b in g}
+        return {
+            "nodes": len(self.nodes),
+            "node_blocks": len(held),
+            "attached_requests": self.num_attached_requests,
+            "attached_tokens": self.num_attached_tokens,
+            "stale_bindings": self.num_stale_bindings,
+            "evicted_blocks": self.num_evicted_blocks,
+        }
