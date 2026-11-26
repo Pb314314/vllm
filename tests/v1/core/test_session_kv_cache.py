@@ -27,8 +27,8 @@ from vllm.v1.core.single_type_kv_cache_manager import (
 from vllm.v1.kv_cache_interface import AttentionSpec
 from vllm.v1.outputs import ModelRunnerOutput
 from vllm.v1.request import Request, RequestStatus
-from vllm.v1.session.protocol import Candidate, SessionBinding
-from vllm.v1.session.resolver import SessionResolver, SessionState
+from vllm.v1.session.protocol import Candidate, NodeId, NodePublished, SessionBinding
+from vllm.v1.session.resolver import SessionResolver, SessionState, pack_tokens
 
 from .utils import (
     EOS_TOKEN_ID,
@@ -229,6 +229,9 @@ def check_invariants(h: Harness) -> None:
         assert node.end > 0
         for group in node.blocks:
             expected.update(b.block_id for b in group)
+    assert store._held == Counter(
+        {i: n for i, n in expected.items() if not store.block_pool.blocks[i].is_null}
+    )
     for manager in store.coordinator.single_type_managers:
         for blocks in manager.req_to_blocks.values():
             expected.update(b.block_id for b in blocks if not b.is_null)
@@ -333,12 +336,12 @@ def test_evicted_candidate_falls_back_to_surviving_shorter_state():
     h = Harness()
     root = h.add(list(range(48)))
     h.run(root)
-    # Branch inside root, so root keeps positions the leaf does not hold.
-    leaf = h.add(history(root)[:32] + list(range(500, 532)))
-    h.run(leaf)
-    late = h.add(history(leaf) + [9])
-    # Evict leaf's state before `late` is scheduled.
-    h.store._remove(h.store.nodes[h.session(leaf).cursor])
+    # Branch inside root, so root's state is not covered by the branch.
+    branch = h.add(history(root)[:32] + list(range(500, 532)))
+    h.run(branch)
+    late = h.add(history(branch) + [9])
+    # Evict the branch's state before `late` is scheduled.
+    h.store._remove(h.store.nodes[h.session(branch).cursor])
     h.step()
     assert h.cached[late.request_id] == 32
     h.run(late)
@@ -353,8 +356,8 @@ def test_attention_state_covered_by_its_continuation_is_dropped():
     root = h.add(list(range(48)))
     h.run(root)
     root_id = h.session(root).cursor
-    leaf = h.add(history(root) + list(range(500, 532)))
-    h.run(leaf)
+    later = h.add(history(root) + list(range(500, 532)))
+    h.run(later)
     assert root_id not in h.store.nodes
     assert root_id not in h.resolver.nodes
     branch = h.add(history(root) + [9])
@@ -384,7 +387,7 @@ def test_intermediate_hybrid_state_is_evicted_without_its_descendant():
     h.run(third)
 
 
-def test_memory_pressure_trims_idle_leaves_not_running_requests():
+def test_memory_pressure_trims_idle_states_not_running_requests():
     h = Harness(num_blocks=24)
     finished = []
     for i in range(4):
@@ -437,7 +440,7 @@ def test_hybrid_resumes_only_at_commit_points():
     # Both the attention tail block and the Mamba state are copied.
     assert len(output.kv_cache_block_copies) == 2
     h.run(second)
-    # Diverging inside first's span has no state to resume from.
+    # Diverging before first's saved state has no state to resume from.
     third = h.add(history(first)[:30] + [8] * 20)
     h.step()
     assert h.cached[third.request_id] == 0
@@ -740,10 +743,10 @@ def test_priority_preemption_unpublishes_the_chunk_it_scheduled(num_blocks: int)
     h.run(low, high)
 
 
-def test_hybrid_checkpoint_sharing_a_block_with_its_child_is_reclaimable():
+def test_hybrid_checkpoint_sharing_a_block_with_a_later_state_is_reclaimable():
     """A divergence inside a block leaves that block held by both the
-    checkpoint and its child; evicting both frees it, so an idle cache must
-    still admit what an empty one admits."""
+    checkpoint and the later state; evicting both frees it, so an idle cache
+    must still admit what an empty one admits."""
 
     def admits(h: Harness, num_tokens: int) -> bool:
         request = h.add(list(range(5000, 5000 + num_tokens)), max_tokens=1)
@@ -979,3 +982,19 @@ def test_hybrid_spec_decode_resume_one_token_before_prefill_end():
     h.step()
     assert h.cached[second.request_id] == 40
     h.run(second)
+
+
+def test_attention_candidates_prefer_states_reaching_the_match():
+    """Newer states holding only a prefix of the match must not crowd out an
+    older state that holds all of it."""
+    resolver = SessionResolver()
+    tokens = list(range(1000))
+    for local, end in enumerate((1000, 100, 200, 300, 400), start=1):
+        resolver.apply(
+            NodePublished(
+                local, NodeId(1, local), end, pack_tokens(tokens[:end]), None, "r"
+            )
+        )
+    path, matched = resolver._match(None, pack_tokens(tokens + [5]), 1000)
+    candidates = resolver._candidates(path, matched)
+    assert candidates[0] == Candidate(NodeId(1, 1), 1000)

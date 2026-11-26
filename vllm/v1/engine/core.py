@@ -989,8 +989,9 @@ class EngineCore:
 
     def release_sessions(self, session_ids: list[str]) -> int:
         """Free the session KV states of the given client session ids, which
-        the caller knows have ended; states other sessions still use are
-        freed once they stop. Returns the number of blocks freed now."""
+        the caller knows have ended. Blocks other states share stay with them,
+        and a state a running request still writes goes once it stops.
+        Returns the number of blocks freed now."""
         if self.session_resolver is None:
             return 0
         store = self.scheduler.kv_cache_manager  # type: ignore[attr-defined]

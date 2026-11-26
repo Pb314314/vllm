@@ -126,6 +126,12 @@ idle nodes:
   block, like prefix caching's block LRU.
 - In other models it removes them whole.
 
+In attention-only models, a request that resumed a state at its last block boundary holds
+every position that state can be resumed at, with the same blocks. Once the request
+finishes and its session moves on, the earlier state is dropped. A conversation therefore
+keeps one state per branch, not one per turn. Hybrid states are kept: each holds the only
+saved state at its position.
+
 Removing a node frees only the blocks no other node holds. An earlier state of a
 conversation therefore frees its saved recurrent state, while later states keep resuming the
 conversation. A waiting request's match and a preempted request's chunks are not protected,

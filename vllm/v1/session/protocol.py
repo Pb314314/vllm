@@ -13,7 +13,7 @@ from typing import NamedTuple
 
 
 class NodeId(NamedTuple):
-    """Identity of an immutable span of KV content. `origin` is drawn at
+    """Identity of a saved state (a store node). `origin` is drawn at
     random whenever a store starts or resets, so an id is never reused across
     stores, restarts or resets, and a node id with a length always names the
     same tokens wherever it is seen (another engine, a KV connector, a
@@ -25,8 +25,7 @@ class NodeId(NamedTuple):
 
 @dataclass(frozen=True)
 class Candidate:
-    """The first `length` tokens of the request equal the path ending in
-    `node_id`."""
+    """The first `length` tokens of the request equal those of `node_id`."""
 
     node_id: NodeId
     length: int

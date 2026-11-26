@@ -122,6 +122,9 @@ class SessionResolver:
         self.request_session: dict[str, int] = {}
         self._packed: dict[str, bytes] = {}
         self._next_session_id = 1
+        # Whether states resume at any position (attention-only models) rather
+        # than only at their commit points.
+        self.resume_anywhere = False
         self.num_resolves = 0
         self.num_continued = 0
         self.resolve_seconds = 0.0
@@ -182,16 +185,22 @@ class SessionResolver:
         found: dict[NodeId, int] = {}
         for vertex in reversed(path):
             reach = min(vertex.depth, matched)
-            # States resumable only at their commit points can serve a request
-            # only where they end; others anywhere on their path, newest first.
-            for owners in (vertex.ends, vertex.owners):
-                for node_id in reversed(owners):
+            if self.resume_anywhere:
+                # Newest first, the states reaching `reach`; only the vertex's
+                # few ending states are skipped on the way.
+                for node_id in reversed(vertex.owners):
                     if len(found) >= MAX_CANDIDATES:
                         break
-                    if node_id not in found:
-                        length = self._resume_length(self.nodes[node_id], reach)
-                        if length:
-                            found[node_id] = length
+                    if node_id not in found and self.nodes[node_id].end >= reach:
+                        found[node_id] = reach
+            # Commit points of other states lie where those end.
+            for node_id in reversed(vertex.ends):
+                if len(found) >= MAX_CANDIDATES:
+                    break
+                if node_id not in found:
+                    length = self._resume_length(self.nodes[node_id], reach)
+                    if length:
+                        found[node_id] = length
             if len(found) >= MAX_CANDIDATES:
                 break
         ranked = sorted(found.items(), key=lambda kv: (-kv[1], -kv[0].local))
@@ -267,6 +276,7 @@ class SessionResolver:
             else None
         )
         self.nodes[event.node_id] = _Node(event.end, event.commit_points, namespace)
+        self.resume_anywhere = event.commit_points is None
         client_id = (
             self.sessions[request_session].client_id
             if request_session is not None
@@ -413,7 +423,7 @@ class SessionResolver:
 
     def release(self, client_ids: list[str]) -> list[NodeId]:
         """Forget the sessions a caller names as ended and return the states
-        they published, deepest first, for the store to free what it can."""
+        they published, for the store to free."""
         released: set[NodeId] = set()
         for client_id in client_ids:
             released |= self.client_nodes.pop(client_id, set())
@@ -428,7 +438,7 @@ class SessionResolver:
                     self._drop_session(session)
         for node_id in released:
             self.node_client.pop(node_id, None)
-        return sorted(released, key=lambda n: -self.nodes[n].end)
+        return list(released)
 
     def _reset(self, epoch: int) -> None:
         self.epoch = epoch

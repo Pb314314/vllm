@@ -228,9 +228,11 @@ class SessionKVCacheManager(KVCacheManager):
         # Checkpoints whose recurrent state is copied with this step's
         # batched block copies: not a copy source until the step is sent.
         self._unsettled: set[NodeId] = set()
-        # States of released sessions still in use (by a running request or
-        # another session's state below them), freed once nothing uses them.
+        # States of released sessions that a running request still writes,
+        # removed once it stops.
         self._orphans: set[NodeId] = set()
+        # Number of nodes referencing each block.
+        self._held: Counter[int] = Counter()
         # Tokens each request had computed before the chunk scheduled this
         # step, in case it is preempted before the step is sent.
         self._scheduled_from: dict[str, int] = {}
@@ -455,7 +457,7 @@ class SessionKVCacheManager(KVCacheManager):
         )
         if any(block.is_null for group in blocks for block in group):
             return None
-        self.block_pool.touch([b for group in blocks for b in group])
+        self._hold([b for group in blocks for b in group])
         # A hybrid node is resumable only once sealed with a recurrent state.
         commit_points = () if self.commit_points_only else None
         node_id = NodeId(self._origin, self._next_node_id)
@@ -522,11 +524,11 @@ class SessionKVCacheManager(KVCacheManager):
                 for g, group in zip(recurrent, states)
             ]
             self._unsettled.add(node.node_id)
-        self.block_pool.touch([b for group in states for b in group])
+        self._hold([b for group in states for b in group])
         for g, group in zip(recurrent, states):
             node.blocks[g][:] = group
         for g, window in zip(self._window_groups, windows):
-            self.block_pool.touch(window)
+            self._hold(window)
             node.blocks[g][:] = window
         node.commit_points = (end,)
         del self._own[request_id]
@@ -577,7 +579,7 @@ class SessionKVCacheManager(KVCacheManager):
             ]
             for manager in self.coordinator.single_type_managers
         ]
-        self.block_pool.touch([b for group in new_blocks for b in group])
+        self._hold([b for group in new_blocks for b in group])
         for blocks, added in zip(node.blocks, new_blocks):
             blocks.extend(added)
         start, node.end = node.end, end
@@ -666,6 +668,20 @@ class SessionKVCacheManager(KVCacheManager):
             pass
         return deficit <= 0
 
+    def _hold(self, blocks: list[KVCacheBlock]) -> None:
+        """Take a node's reference on each of `blocks`."""
+        self.block_pool.touch(blocks)
+        self._held.update(b.block_id for b in blocks if not b.is_null)
+
+    def _release(self, blocks: list[KVCacheBlock]) -> None:
+        """Drop a node's reference on each of `blocks`, tail first."""
+        for block in blocks:
+            if not block.is_null:
+                self._held[block.block_id] -= 1
+                if not self._held[block.block_id]:
+                    del self._held[block.block_id]
+        self.block_pool.free_blocks(reversed(blocks))
+
     def _protected(self) -> set[NodeId]:
         """Nodes eviction must keep: the attach being allocated, whose blocks
         the request does not hold yet, and the nodes running requests write."""
@@ -676,62 +692,59 @@ class SessionKVCacheManager(KVCacheManager):
 
     def _num_reclaimable_blocks(self, limit: int) -> int:
         """Count blocks repeated eviction can free, stopping at `limit`: every
-        block whose references all come from idle nodes."""
-        protected = self._protected()
-        held: Counter[int] = Counter()
+        block only idle nodes reference. Running requests reference their own
+        blocks, so only the attach being allocated needs excluding."""
+        attaching = (
+            {b.block_id for group in self._pending[1].blocks for b in group}
+            if self._pending is not None
+            else set()
+        )
+        blocks = self.block_pool.blocks
         count = 0
-        for node in self.nodes.values():
-            if node.node_id in protected:
-                continue
-            for group in node.blocks:
-                for block in group:
-                    if block.is_null:
-                        continue
-                    held[block.block_id] += 1
-                    if held[block.block_id] == block.ref_cnt:
-                        count += 1
-                        if count >= limit:
-                            return count
+        for block_id, held in self._held.items():
+            if held == blocks[block_id].ref_cnt and block_id not in attaching:
+                count += 1
+                if count >= limit:
+                    break
         return count
 
     def _evict(self, num_blocks: int) -> bool:
-        """Free up to `num_blocks` from the least recently used idle node that
-        has blocks of its own, like prefix caching's LRU."""
+        """Free blocks of the least recently used idle node: its exclusive tail,
+        like prefix caching's block LRU, in attention-only models with one KV
+        cache group; the whole node otherwise."""
         protected = self._protected()
-        idle = [node for node in self.nodes.values() if node.node_id not in protected]
-        for node in idle:
+        first_idle = None
+        for node in self.nodes.values():
+            if node.node_id in protected:
+                continue
+            if self._trims_whole_nodes():
+                self._remove(node)
+                return True
+            if first_idle is None:
+                first_idle = node
             if self._trim(node, num_blocks):
                 return True
-        if idle:
+        if first_idle is not None:
             # Every idle node only shares blocks; dropping the least recently
             # used one leaves them to the others.
-            self._remove(idle[0])
+            self._remove(first_idle)
             return True
         return False
 
     def _trims_whole_nodes(self) -> bool:
         return self.commit_points_only or len(self.block_sizes) > 1
 
-    def _num_trimmable_blocks(self, node: _Node) -> int:
-        if self._trims_whole_nodes():
-            return sum(
-                b.ref_cnt == 1 for group in node.blocks for b in group if not b.is_null
-            )
+    def _trim(self, node: _Node, num_blocks: int) -> int:
+        """Free up to `num_blocks` of `node`'s exclusive tail."""
         blocks = node.blocks[0]
         keep = len(blocks)
-        while keep and blocks[keep - 1].ref_cnt == 1:
+        while (
+            keep and len(blocks) - keep < num_blocks and blocks[keep - 1].ref_cnt == 1
+        ):
             keep -= 1
-        return len(blocks) - keep
-
-    def _trim(self, node: _Node, num_blocks: int) -> int:
-        freed = self._num_trimmable_blocks(node)
+        freed = len(blocks) - keep
         if not freed:
             return 0
-        if self._trims_whole_nodes():
-            self._remove(node)
-            return freed
-        freed = min(freed, num_blocks)
-        keep = len(node.blocks[0]) - freed
         if not keep:
             self._remove(node)
             return freed
@@ -749,7 +762,7 @@ class SessionKVCacheManager(KVCacheManager):
             if self._stateful(manager) or not self._positional(manager):
                 continue
             keep = cdiv(end, manager.block_size)
-            self.block_pool.free_blocks(reversed(blocks[keep:]))
+            self._release(blocks[keep:])
             del blocks[keep:]
         node.end = end
         commit_points = node.commit_points
@@ -763,7 +776,7 @@ class SessionKVCacheManager(KVCacheManager):
         )
         self.num_evicted_blocks += freed
         for group in node.blocks:
-            self.block_pool.free_blocks(reversed(group))
+            self._release(group)
         self._emit(lambda seq: NodeTruncated(seq, node.node_id, 0, None))
 
     def reset_prefix_cache(self) -> bool:
@@ -772,7 +785,7 @@ class SessionKVCacheManager(KVCacheManager):
             return False
         for node in reversed(self.nodes.values()):
             for group in node.blocks:
-                self.block_pool.free_blocks(reversed(group))
+                self._release(group)
         self.nodes.clear()
         self._pending = None
         self._unsettled.clear()
