@@ -20,22 +20,25 @@ coexist; one engine instance uses one of them, and prefix caching stays the defa
   epoch, and the resolver's last applied event `seq`. It also tracks sessions (a sequence of
   turns that extend each other) for bookkeeping; clients may pass `session_id` as a hint but
   never need to.
-- **Store** (`vllm/v1/core/session_kv_cache_manager.py`): owns physical KV as a tree of
-  *nodes*. A node holds, per KV cache group, the blocks covering its token span
-  `[start, end)` on top of its parent. It never hashes or compares tokens: it trusts the
-  resolver for content and enforces only ownership and resumability.
+- **Store** (`vllm/v1/core/session_kv_cache_manager.py`): owns physical KV as a set of
+  independent *nodes*, one per saved state. A node holds, per KV cache group, every block a
+  request needs to resume it, from position 0 to its `end`. Nodes share blocks only by
+  reference count, never by structure, so any node can be evicted without affecting another.
+  The store never hashes or compares tokens: it trusts the resolver for content and enforces
+  only ownership and resumability.
 - **Protocol** (`vllm/v1/session/protocol.py`): plain, serializable messages so the resolver
-  can later move out of the engine process. Store → resolver events: `NodePublished`,
-  `NodeExtended` (also seals a hybrid node with its commit points), `NodeTruncated`,
-  `RequestFinished`, `StoreReset`.
+  can later move out of the engine process. Store → resolver events: `NodePublished` (a new
+  state with its whole token path), `NodeExtended` (also seals a hybrid node with its commit
+  points), `NodeTruncated`, `RequestFinished`, `StoreReset`. In the resolver's radix tree
+  every state owns all vertices on its path, so removing one state never removes the content
+  another still holds.
 
 ## Lifecycle of a request
 
 1. **Resolve** (engine `add_request`): the resolver matches the prompt and attaches a binding.
 2. **Attach** (`get_computed_blocks`): the store re-resolves if anything was published since
-   the binding, then takes the first candidate it can still resume from, falling back to
-   the candidate's ancestors. The block table is assembled along the node path; deeper
-   nodes win where a child re-covers its parent's partial last block.
+   the binding, then takes the first candidate it can still resume from. The block table is
+   the node's own block list, cut to the resume position.
 3. **Publish** (`allocate_slots`): each scheduled prompt chunk is published in the request's
    own node, which it extends chunk by chunk, so other requests can share the prompt from
    the step that computes it (every attention layer writes a step's KV before reading it).
@@ -80,7 +83,7 @@ bindings are plain data and round-trip through msgpack.
 ## Invariants
 
 1. A request reads only KV computed from its own token prefix (resolver matches content; the
-   store resumes only at block boundaries or commit points of nodes on the candidate path).
+   store resumes only at block boundaries or commit points of the candidate node).
 2. A sealed node never changes; only its own running request extends an unsealed node, and
    only while it is still writing that node's last block.
 3. Every block a node holds carries one reference for that node; a block is free exactly when
@@ -92,20 +95,28 @@ bindings are plain data and round-trip through msgpack.
 
 ## Eviction
 
-When an allocation does not fit, the store counts every block that only idle states hold,
-except below where a running or attaching request reads through an ancestor. If that covers
-the deficit it trims the least recently used idle nodes from their tails, block by block,
-like prefix caching's block LRU (nodes of hybrid or multi-group models are removed whole). A waiting request's match
-and a preempted request's chunks are not protected, again matching prefix caching.
+When an allocation does not fit, the store counts every block that only idle nodes hold. A
+running request holds its own blocks, so only the node it is attaching and the nodes running
+requests write are protected. If that covers the deficit, it frees the least recently used
+idle nodes:
+
+- In attention-only models with one KV cache group, it trims their exclusive tails block by
+  block, like prefix caching's block LRU.
+- In other models it removes them whole.
+
+Removing a node frees only the blocks no other node holds. An earlier state of a
+conversation therefore frees its saved recurrent state, while later states keep resuming the
+conversation. A waiting request's match and a preempted request's chunks are not protected,
+again matching prefix caching.
 
 ## Releasing ended sessions
 
 A caller that knows a session has ended (an RL trajectory, a deleted conversation) can free
 it at once instead of waiting for eviction: `EngineCore.release_sessions(session_ids)`
 takes the client `session_id`s the requests carried. The resolver returns every state those
-sessions published and forgets the sessions; the store frees each state nothing else uses,
-cuts states that other sessions' states hang below down to what those still read (a prompt
-shared by a group of rollouts), and frees the rest once their last user stops. The public
+sessions published and forgets the sessions. The store removes those states at once, or
+once the running request writing one stops. Blocks other states share, such as a prompt
+shared by a group of rollouts, stay with them. The public
 API (`LLM`, OpenAI server) is not defined yet. Requests without a `session_id` are freed
 only by eviction.
 
