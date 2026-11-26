@@ -69,6 +69,28 @@ resumable) and become resumable when *sealed* with a recurrent state at their en
 A checkpoint is not resumable in the step that fills it: the worker applies a step's block
 copies as one gather-then-scatter, so chained copies in one step would read stale data.
 
+## Why the resolver matches tokens, not block hashes
+
+Hybrid states resume only at the exact position they were saved at: where a request
+stopped, or where two conversations diverge. Neither is usually a block boundary. A token
+radix tree returns the exact length a request shares with each state, so the resolver can:
+
+- hand the store a request that matches a state saved at position 1037 (64 full blocks of
+  16 tokens and 13 more);
+- report where two conversations diverge, so the scheduler can stop and save a state
+  exactly there.
+
+Block hashes match only whole blocks. They would need a separate path for the partial last
+block, as prefix caching does with its partial-tail hashes, and a token comparison to find
+divergence points. Lookup speed is not the reason: both are cheap at this scale.
+
+Hashes are content addresses that every process computes the same way, which suits
+cross-instance indexes, routers and shared stores such as Mooncake. If those need them,
+the store can compute block hashes at that boundary, for example when exporting a state.
+Matching inside the engine stays exact. The store never sees how the resolver matches:
+bindings carry only `(state, length)`, so the resolver's index can change without touching
+the store or the scheduler.
+
 ## State identity
 
 A node id is `NodeId(origin, local)`: `origin` is drawn at random whenever a store starts
