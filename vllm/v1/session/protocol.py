@@ -46,17 +46,15 @@ class SessionBinding:
 
 @dataclass(frozen=True)
 class NodePublished:
+    """A new state: the KV of path positions `[0, end)`, held on its own."""
+
     seq: int
     node_id: NodeId
-    parent_id: NodeId | None
-    # The node holds path positions [start, end); `start` is the position on
-    # the parent's path where it attaches.
-    start: int
     end: int
-    # Packed int32 tokens [start, end).
+    # Packed int32 tokens [0, end).
     tokens: bytes
-    # Positions a request may resume at. None means any position in
-    # (start, end] (attention-only models).
+    # Positions a request may resume at. None means any position in (0, end]
+    # (attention-only models).
     commit_points: tuple[int, ...] | None
     request_id: str
 
@@ -79,7 +77,7 @@ class NodeExtended:
 class NodeTruncated:
     seq: int
     node_id: NodeId
-    # New exclusive end; `end <= start` means the node was removed.
+    # New exclusive end; 0 means the state was removed.
     end: int
     commit_points: tuple[int, ...] | None
 

@@ -226,10 +226,7 @@ def check_invariants(h: Harness) -> None:
     store = h.store
     expected: Counter[int] = Counter()
     for node in store.nodes.values():
-        assert node.end > node.start
-        if node.parent is not None:
-            assert node.parent.node_id in store.nodes
-            assert node.start <= node.parent.end
+        assert node.end > 0
         for group in node.blocks:
             expected.update(b.block_id for b in group)
     for manager in store.coordinator.single_type_managers:
@@ -332,19 +329,56 @@ def test_namespaces_are_isolated():
     h.run(salted)
 
 
-def test_evicted_candidate_falls_back_to_surviving_ancestor():
+def test_evicted_candidate_falls_back_to_surviving_shorter_state():
+    h = Harness()
+    root = h.add(list(range(48)))
+    h.run(root)
+    root_node = h.store.nodes[h.session(root).cursor]
+    leaf = h.add(history(root) + list(range(500, 532)))
+    h.run(leaf)
+    late = h.add(history(leaf) + [9])
+    # Evict leaf's state before `late` is scheduled.
+    h.store._remove(h.store.nodes[h.session(leaf).cursor])
+    h.step()
+    assert h.cached[late.request_id] == root_node.end // BLOCK * BLOCK
+    h.run(late)
+
+
+def test_evicted_state_prefix_is_still_served_by_a_later_state():
+    """Attention-only: a later state of a conversation holds the earlier
+    prefix too, so a request matching only the earlier prefix still resumes
+    after the earlier state is gone."""
     h = Harness()
     root = h.add(list(range(48)))
     h.run(root)
     leaf = h.add(history(root) + list(range(500, 532)))
     h.run(leaf)
-    late = h.add(history(leaf) + [9])
-    # Evict leaf's own blocks before `late` is scheduled.
-    leaf_node = h.store.nodes[h.session(leaf).cursor]
-    h.store._remove(leaf_node)
+    h.store._remove(h.store.nodes[h.session(root).cursor])
+    branch = h.add(history(root) + [9])
     h.step()
-    assert h.cached[late.request_id] == leaf_node.start // BLOCK * BLOCK
-    h.run(late)
+    assert h.cached[branch.request_id] == len(history(root)) // BLOCK * BLOCK
+    h.run(branch)
+
+
+def test_intermediate_hybrid_state_is_evicted_without_its_descendant():
+    """A state holds every block it needs, so evicting an earlier state of a
+    conversation frees its saved recurrent state while the later state still
+    resumes the whole conversation."""
+    h = Harness(hybrid=True)
+    first = h.add(list(range(40)), max_tokens=3)
+    h.run(first)
+    earlier = h.store.nodes[h.session(first).cursor]
+    second = h.add(history(first) + list(range(300, 310)))
+    h.run(second)
+    later = h.store.nodes[h.session(second).cursor]
+    assert later.end > earlier.end
+    (state,) = earlier.blocks[1]
+    h.store._remove(earlier)
+    assert state.ref_cnt == 0
+    third = h.add(history(second) + [7, 8])
+    h.step()
+    assert h.cached[third.request_id] == later.end
+    h.run(third)
 
 
 def test_memory_pressure_trims_idle_leaves_not_running_requests():
@@ -793,7 +827,7 @@ def test_store_events_round_trip_through_msgpack():
 
     from vllm.v1.session.protocol import NodeId, NodePublished, SessionBinding
 
-    event = NodePublished(3, NodeId(2**62, 7), None, 0, 16, b"\x01" * 64, (16,), "r")
+    event = NodePublished(3, NodeId(2**62, 7), 16, b"\x01" * 64, (16,), "r")
     decoded = msgspec.msgpack.decode(msgspec.msgpack.encode(event), type=NodePublished)
     assert decoded == event and isinstance(decoded.node_id, NodeId)
     h = Harness()

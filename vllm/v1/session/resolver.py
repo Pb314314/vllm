@@ -2,18 +2,20 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Content side of session KV reuse.
 
-The resolver mirrors the token content of every state node the KV store has
+The resolver mirrors the token content of every state the KV store has
 published in a radix tree, assigns each request to a session, and hands the
-store candidate `(node, length)` references whose content it has compared
-token by token. It never sees physical blocks. If it lags behind the store it
-can only be more optimistic (the store rejects dead references), never wrong.
+store candidate `(state, length)` references whose content it has compared
+token by token. Each state owns every vertex on its path, so states come and go
+independently. The resolver never sees physical blocks. If it lags behind the
+store it can only be more optimistic (the store rejects dead references), never
+wrong.
 """
 
 import enum
 import time
 from array import array
 from collections.abc import Hashable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from vllm.v1.request import Request
 from vllm.v1.session.protocol import (
@@ -61,15 +63,17 @@ class _Vertex:
     """A radix edge and the vertex it leads to. Covers path positions
     `[depth - len(label), depth)`."""
 
-    __slots__ = ("label", "depth", "parent", "children", "owners")
+    __slots__ = ("label", "depth", "parent", "children", "owners", "ends")
 
     def __init__(self, label: bytes, depth: int, parent: "_Vertex | None") -> None:
         self.label = label
         self.depth = depth
         self.parent = parent
         self.children: dict[int, _Vertex] = {}
-        # Store nodes holding the KV of exactly this span on this path.
-        self.owners: set[NodeId] = set()
+        # States whose path reaches into this span, oldest first.
+        self.owners: dict[NodeId, None] = {}
+        # Those of them that end inside it.
+        self.ends: dict[NodeId, None] = {}
 
     @property
     def start(self) -> int:
@@ -78,13 +82,11 @@ class _Vertex:
 
 @dataclass
 class _Node:
-    parent: NodeId | None
-    start: int
     end: int
-    tokens: bytes
     commit_points: tuple[int, ...] | None
     namespace: Hashable
-    vertices: list[_Vertex] = field(default_factory=list)
+    # The vertex the state ends in.
+    terminal: _Vertex | None = None
 
 
 class SessionState(enum.Enum):
@@ -180,12 +182,16 @@ class SessionResolver:
         found: dict[NodeId, int] = {}
         for vertex in reversed(path):
             reach = min(vertex.depth, matched)
-            for node_id in vertex.owners:
-                if node_id in found:
-                    continue
-                length = self._resume_length(self.nodes[node_id], reach)
-                if length:
-                    found[node_id] = length
+            # States resumable only at their commit points can serve a request
+            # only where they end; others anywhere on their path, newest first.
+            for owners in (vertex.ends, vertex.owners):
+                for node_id in reversed(owners):
+                    if len(found) >= MAX_CANDIDATES:
+                        break
+                    if node_id not in found:
+                        length = self._resume_length(self.nodes[node_id], reach)
+                        if length:
+                            found[node_id] = length
             if len(found) >= MAX_CANDIDATES:
                 break
         ranked = sorted(found.items(), key=lambda kv: (-kv[1], -kv[0].local))
@@ -194,10 +200,8 @@ class SessionResolver:
     @staticmethod
     def _resume_length(node: _Node, reach: int) -> int:
         if node.commit_points is None:
-            length = min(reach, node.end)
-            return length if length > node.start else 0
-        points = [c for c in node.commit_points if node.start < c <= reach]
-        return max(points, default=0)
+            return min(reach, node.end)
+        return max((c for c in node.commit_points if c <= reach), default=0)
 
     def _assign_session(
         self,
@@ -255,15 +259,6 @@ class SessionResolver:
         elif isinstance(event, StoreReset):
             self._reset(event.epoch)
 
-    def _path_tokens(self, parent: NodeId | None, start: int) -> bytes:
-        parts: list[bytes] = []
-        while parent is not None and start > 0:
-            node = self.nodes[parent]
-            parts.append(node.tokens[: (start - node.start) * _ITEMSIZE])
-            start, parent = node.start, node.parent
-        assert start == 0, "parent chain does not reach the root"
-        return b"".join(reversed(parts))
-
     def _insert(self, event: NodePublished) -> None:
         request_session = self.request_session.get(event.request_id)
         namespace = (
@@ -271,15 +266,7 @@ class SessionResolver:
             if request_session is not None
             else None
         )
-        node = _Node(
-            event.parent_id,
-            event.start,
-            event.end,
-            event.tokens,
-            event.commit_points,
-            namespace,
-        )
-        self.nodes[event.node_id] = node
+        self.nodes[event.node_id] = _Node(event.end, event.commit_points, namespace)
         client_id = (
             self.sessions[request_session].client_id
             if request_session is not None
@@ -288,8 +275,7 @@ class SessionResolver:
         if client_id is not None:
             self.node_client[event.node_id] = client_id
             self.client_nodes.setdefault(client_id, set()).add(event.node_id)
-        path = self._path_tokens(event.parent_id, event.start) + event.tokens
-        self._add_span(event.node_id, path, event.start)
+        self._add_path(event.node_id, event.tokens)
 
     def _extend(self, event: NodeExtended) -> None:
         node = self.nodes[event.node_id]
@@ -298,13 +284,22 @@ class SessionResolver:
             node.commit_points = event.commit_points
         if event.end == event.start:
             return
-        node.tokens += event.tokens
+        # Splits during the insert see the old end: a path that leaves an edge
+        # where the state used to end gives up the rest of that edge.
+        self._add_path(event.node_id, self._node_path(node) + event.tokens)
         node.end = event.end
-        path = self._path_tokens(node.parent, node.start) + node.tokens
-        self._add_span(event.node_id, path, event.start)
 
-    def _add_span(self, node_id: NodeId, path: bytes, own_from: int) -> None:
-        """Insert `path` and mark `node_id` as holding `[own_from, end)`."""
+    @staticmethod
+    def _node_path(node: _Node) -> bytes:
+        parts: list[bytes] = []
+        vertex = node.terminal
+        while vertex is not None:
+            parts.append(vertex.label)
+            vertex = vertex.parent
+        return b"".join(reversed(parts))[: node.end * _ITEMSIZE]
+
+    def _add_path(self, node_id: NodeId, path: bytes) -> None:
+        """Insert `path` and make `node_id` an owner of every vertex on it."""
         node = self.nodes[node_id]
         end = len(path) // _ITEMSIZE
         vertex = self.roots.setdefault(node.namespace, _Vertex(b"", 0, None))
@@ -313,33 +308,36 @@ class SessionResolver:
             first = _token_at(path, depth)
             child = vertex.children.get(first)
             if child is None:
-                assert depth >= own_from, "ancestor content is missing"
                 child = _Vertex(path[depth * _ITEMSIZE :], end, vertex)
                 vertex.children[first] = child
             else:
                 cut = _common_prefix(child.label, path[depth * _ITEMSIZE :])
-                if depth < own_from < depth + cut:
-                    cut = own_from - depth
-                if cut < len(child.label) // _ITEMSIZE:
+                if cut < len(child.label) // _ITEMSIZE and depth + cut < end:
                     child = self._split(child, cut)
-            if child.start >= own_from:
-                child.owners.add(node_id)
-                node.vertices.append(child)
+            child.owners[node_id] = None
             vertex, depth = child, child.depth
+        if node.terminal is not None:
+            node.terminal.ends.pop(node_id, None)
+        node.terminal = vertex
+        vertex.ends[node_id] = None
 
     def _split(self, vertex: _Vertex, cut: int) -> _Vertex:
         """Split `vertex` after `cut` tokens; return the upper half."""
         assert vertex.parent is not None and cut > 0
         upper = _Vertex(vertex.label[: cut * _ITEMSIZE], vertex.start + cut, None)
         upper.parent = vertex.parent
-        upper.owners = set(vertex.owners)
+        upper.owners = dict(vertex.owners)
         vertex.parent.children[_token_at(vertex.label, 0)] = upper
         vertex.label = vertex.label[cut * _ITEMSIZE :]
         vertex.parent = upper
         upper.children[_token_at(vertex.label, 0)] = vertex
-        for node_id in upper.owners:
-            vertices = self.nodes[node_id].vertices
-            vertices.insert(vertices.index(vertex), upper)
+        for node_id in list(vertex.ends):
+            node = self.nodes[node_id]
+            if node.end <= upper.depth:
+                del vertex.ends[node_id]
+                del vertex.owners[node_id]
+                upper.ends[node_id] = None
+                node.terminal = upper
         return upper
 
     def _truncate(
@@ -348,30 +346,30 @@ class SessionResolver:
         node = self.nodes.get(node_id)
         if node is None:
             return
-        kept: list[_Vertex] = []
-        for vertex in list(node.vertices):
-            if vertex.depth <= end:
-                kept.append(vertex)
-                continue
-            if vertex.start < end:
-                kept.append(self._split(vertex, end - vertex.start))
-            vertex.owners.discard(node_id)
+        vertex = node.terminal
+        assert vertex is not None
+        vertex.ends.pop(node_id, None)
+        while vertex.parent is not None and vertex.start >= end:
+            vertex.owners.pop(node_id, None)
+            parent = vertex.parent
             self._prune(vertex)
-        node.vertices = kept
+            vertex = parent
         node.end = min(node.end, end)
         node.commit_points = commit_points
-        node.tokens = node.tokens[: max(0, end - node.start) * _ITEMSIZE]
-        if end <= node.start:
-            del self.nodes[node_id]
-            client_id = self.node_client.pop(node_id, None)
-            if client_id is not None:
-                published = self.client_nodes[client_id]
-                published.discard(node_id)
-                if not published:
-                    del self.client_nodes[client_id]
-            session_id = self.cursor_owner.pop(node_id, None)
-            if session_id is not None:
-                self._retire_cursor(self.sessions[session_id])
+        if end > 0:
+            node.terminal = vertex
+            vertex.ends[node_id] = None
+            return
+        del self.nodes[node_id]
+        client_id = self.node_client.pop(node_id, None)
+        if client_id is not None:
+            published = self.client_nodes[client_id]
+            published.discard(node_id)
+            if not published:
+                del self.client_nodes[client_id]
+        session_id = self.cursor_owner.pop(node_id, None)
+        if session_id is not None:
+            self._retire_cursor(self.sessions[session_id])
 
     def _prune(self, vertex: _Vertex) -> None:
         while vertex.parent is not None and not vertex.owners and not vertex.children:
@@ -430,7 +428,7 @@ class SessionResolver:
                     self._drop_session(session)
         for node_id in released:
             self.node_client.pop(node_id, None)
-        return sorted(released, key=lambda n: -self.nodes[n].start)
+        return sorted(released, key=lambda n: -self.nodes[n].end)
 
     def _reset(self, epoch: int) -> None:
         self.epoch = epoch
